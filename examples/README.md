@@ -4,7 +4,8 @@ Each example is a **standalone npm package** that depends on the published [`@ac
 
 | Example | Runs without an agent installed | What it shows |
 | --- | :---: | --- |
-| [`quick-start/`](./quick-start/) | No | The minimum code path: `createRuntime` → `newSession` → `prompt`. Mirrors the README Quick Start. |
+| [`quick-start/`](./quick-start/) | No | The minimum one-shot path: `runAcpAgent({ profile, cwd, prompt })` returning an async iterable of raw ACP `session/update` notifications. Process is auto-disposed. |
+| [`advanced-multi-session/`](./advanced-multi-session/) | No | `createAcpRuntime` + multiple `await using` sessions over different working directories. |
 | [`mock-runtime/`](./mock-runtime/) | **Yes** | A fully self-contained mock ACP server so you can see the complete event flow (auth retry, permission, tool lifecycle, message / reasoning / usage updates, transcript snapshot) without installing any agent. |
 | [`real-agent-cli/`](./real-agent-cli/) | No | A small CLI that drives a real ACP agent (Copilot CLI, Claude ACP, Codex ACP) with an interactive host adapter for auth and permission prompts. |
 

@@ -58,13 +58,20 @@ export interface AcpConnectionFactory {
 
 export interface RuntimeOptions {
   profile: AgentProfile | BuiltInProfileId;
-  cwd: string;
+  /**
+   * Optional default working directory for sessions created via `newSession()` without an explicit `cwd`.
+   * If omitted, callers MUST provide `cwd` to every `newSession({ cwd })` call.
+   */
+  cwd?: string;
   host: RuntimeHost;
   spawnProcess?: SpawnProcess;
   connectionFactory?: AcpConnectionFactory;
 }
 
 export interface NewSessionOptions {
+  /**
+   * The working directory for this session. Required unless the runtime was created with a default `cwd`.
+   */
   cwd?: string;
   mcpServers?: unknown[];
 }
@@ -76,10 +83,12 @@ interface ProcessMonitor {
 
 export class AcpRuntime {
   private readonly profile: AgentProfile;
-  private readonly cwd: string;
+  private readonly cwd: string | undefined;
   private readonly host: RuntimeHost;
   private readonly spawnProcess: SpawnProcess;
   private readonly connectionFactory: AcpConnectionFactory;
+  private readonly openSessions = new Set<RuntimeSession>();
+  private shutdownStarted = false;
 
   constructor(options: RuntimeOptions) {
     this.profile = resolveAgentProfile(options.profile);
@@ -90,7 +99,15 @@ export class AcpRuntime {
   }
 
   async newSession(options: NewSessionOptions = {}): Promise<RuntimeSession> {
+    if (this.shutdownStarted) {
+      throw new Error('Cannot create a new session: runtime has been shut down.');
+    }
     const cwd = options.cwd || this.cwd;
+    if (!cwd) {
+      throw new Error(
+        'newSession requires a `cwd`. Either pass `{ cwd }` to newSession or provide a default `cwd` to createAcpRuntime.',
+      );
+    }
     const process = this.spawnProcess(this.profile.command, this.profile.args, {
       cwd,
       env: {
@@ -174,7 +191,44 @@ export class AcpRuntime {
       session.handleSessionUpdate(notification);
     };
 
+    this.openSessions.add(session);
+    const originalDispose = session.dispose.bind(session);
+    session.dispose = async () => {
+      try {
+        await originalDispose();
+      } finally {
+        this.openSessions.delete(session);
+      }
+    };
+
     return session;
+  }
+
+  /**
+   * Dispose every session created by this runtime. After shutdown, `newSession()` throws.
+   * Idempotent.
+   */
+  async shutdown(): Promise<void> {
+    if (this.shutdownStarted) return;
+    this.shutdownStarted = true;
+    const errors: unknown[] = [];
+    for (const session of [...this.openSessions]) {
+      try {
+        await session.dispose();
+      } catch (err) {
+        errors.push(err);
+      }
+    }
+    this.openSessions.clear();
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) {
+      throw new AggregateError(errors as Error[], `${errors.length} sessions failed to dispose cleanly.`);
+    }
+  }
+
+  /** ES Explicit Resource Management: enables `await using acp = createAcpRuntime(...)`. */
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.shutdown();
   }
 
   private async createSessionWithAuthRetry(params: {
@@ -241,6 +295,14 @@ export class AcpRuntime {
 }
 
 export function createRuntime(options: RuntimeOptions): AcpRuntime {
+  return new AcpRuntime(options);
+}
+
+/**
+ * Preferred constructor for the ACP Kit runtime.
+ * Equivalent to `createRuntime` (which is kept as an alias for callers that imported the older name).
+ */
+export function createAcpRuntime(options: RuntimeOptions): AcpRuntime {
   return new AcpRuntime(options);
 }
 

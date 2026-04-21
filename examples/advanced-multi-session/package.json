@@ -1,0 +1,14 @@
+{
+  "name": "@acp-kit/example-advanced-multi-session",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Demonstrates createAcpRuntime + multiple sessions over different working directories with await using.",
+  "type": "module",
+  "main": "./index.mjs",
+  "scripts": {
+    "start": "node ./index.mjs"
+  },
+  "dependencies": {
+    "@acp-kit/core": "^0.1.2"
+  }
+}

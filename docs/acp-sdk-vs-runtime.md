@@ -281,17 +281,16 @@ With ACP Kit, the product is still doing the same thing.
 But the repeated runtime work has already been pulled into a shared layer:
 
 ```ts
-import { createRuntime } from '@acp-kit/core'
+import { createAcpRuntime } from '@acp-kit/core'
 
-const runtime = createRuntime({
+await using acp = createAcpRuntime({
   profile: 'copilot',
-  cwd,
   host: {
     requestPermission: async (request) => ui.askPermission(request),
   },
 })
 
-const session = await runtime.newSession()
+await using session = await acp.newSession({ cwd })
 
 session.on('message.delta', (event) => {
   ui.appendAssistantDelta(event.delta)

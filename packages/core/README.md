@@ -41,36 +41,70 @@ Requirements:
 
 ## Quick Start
 
-```ts
-import { createRuntime } from '@acp-kit/core';
+For one-shot prompts, use the `runAcpAgent` helper. It spawns the agent, runs a single prompt, streams raw ACP `session/update` notifications, and disposes everything when the loop ends:
 
-const runtime = createRuntime({
+```ts
+import { runAcpAgent } from '@acp-kit/core';
+
+for await (const notification of runAcpAgent({
   profile: 'copilot',
   cwd: process.cwd(),
+  prompt: 'Write a demo for this repo',
+})) {
+  const update = notification.update;
+  switch (update.sessionUpdate) {
+    case 'agent_message_chunk':
+      process.stdout.write(update.content.text ?? '');
+      break;
+    case 'tool_call':
+      console.log(`\n[tool] ${update.title}`);
+      break;
+    case 'tool_call_update':
+      console.log(`[tool:${update.status}]`);
+      break;
+    default:
+      // plan, agent_thought_chunk, available_commands_update, ...
+      break;
+  }
+}
+```
+
+For multi-session apps, use `createAcpRuntime` directly with `await using` (ES Explicit Resource Management):
+
+```ts
+import { createAcpRuntime } from '@acp-kit/core';
+
+await using acp = createAcpRuntime({
+  profile: 'copilot',
   host: {
     requestPermission: async () => 'allow_once',
+    chooseAuthMethod:  async ({ methods }) => methods[0]?.id ?? null,
   },
 });
 
-const session = await runtime.newSession();
+await using session = await acp.newSession({ cwd: process.cwd() });
 
-session.on('event', (event) => {
-  console.log(event.type, event);
-});
+// Normalized events (dual-track API):
+session.on('event', (event) => console.log(event.type));
 
-await session.prompt('Summarize this repository.');
-await session.dispose();
+// Or iterate raw ACP notifications for a single turn:
+for await (const n of session.prompt('Summarize this repository.')) {
+  if (n.update.sessionUpdate === 'agent_message_chunk') {
+    process.stdout.write(n.update.content.text ?? '');
+  }
+}
 ```
 
-That is the complete shape of an ACP Kit application: pick a profile, attach a host adapter, open a session, listen for normalized events.
+One runtime owns one agent subprocess and can host many sessions over different `cwd`s.
 
 ## Examples
 
-The repository ships with three runnable examples under [`examples/`](examples/). Each one is a standalone npm package that installs the published `@acp-kit/core` from npm:
+The repository ships with four runnable examples under [`examples/`](examples/). Each one is a standalone npm package that installs the published `@acp-kit/core` from npm:
 
 | Example | Runs without an agent installed | What it shows |
 | --- | :---: | --- |
-| [`quick-start/`](examples/quick-start/) | No | Minimum runnable mirror of the snippet above. |
+| [`quick-start/`](examples/quick-start/) | No | `runAcpAgent` one-shot helper. |
+| [`advanced-multi-session/`](examples/advanced-multi-session/) | No | `createAcpRuntime` + multiple `await using` sessions sharing one agent process. |
 | [`mock-runtime/`](examples/mock-runtime/) | **Yes** | Self-contained mock ACP server. Use this to see the full event flow without installing an agent. |
 | [`real-agent-cli/`](examples/real-agent-cli/) | No | Interactive CLI driver for real agents (`copilot`, `claude`, `codex`) with prompts for auth and permission decisions. |
 
@@ -96,21 +130,23 @@ A real ACP client has to do all of this before it can hold a useful conversation
 - turn raw `session/update` traffic into stable message / reasoning / tool / usage events
 - decide when a turn is actually complete
 
-ACP Kit packages all of the above behind a single `createRuntime({...}).newSession()` call.
+ACP Kit packages all of the above behind `createAcpRuntime({...}).newSession({ cwd })` (or the `runAcpAgent` one-shot helper).
 
 ## API Overview
 
+ACP Kit exposes a **dual-track** API: normalized `RuntimeSessionEvent`s for application code, and raw ACP `SessionNotification`s for protocol-faithful integrations.
+
 ```ts
 import {
-  createRuntime,
+  createAcpRuntime,
+  runAcpAgent,
   type RuntimeHost,
   type RuntimeSessionEvent,
   type AgentProfile,
 } from '@acp-kit/core';
 
-const runtime = createRuntime({
+await using acp = createAcpRuntime({
   profile: 'copilot',          // built-in id, or a custom AgentProfile object
-  cwd: '/path/to/workspace',
   host: {
     requestPermission: async (req) => 'allow_once',
     chooseAuthMethod:  async ({ methods }) => methods[0]?.id ?? null,
@@ -123,16 +159,28 @@ const runtime = createRuntime({
   } satisfies RuntimeHost,
 });
 
-const session = await runtime.newSession();
+await using session = await acp.newSession({ cwd: '/path/to/workspace' });
 
+// Track 1: normalized events (message.delta / tool.start / turn.completed / ...)
 session.on('event', (event: RuntimeSessionEvent) => { /* ... */ });
 
-await session.prompt('Refactor utils.ts');
+// Track 2: raw ACP session/update notifications, scoped to a single turn
+const handle = session.prompt('Refactor utils.ts');
+for await (const n of handle) { /* n.update.sessionUpdate === 'agent_message_chunk' | ... */ }
+const result = await handle; // also a Promise<PromptResult>
+
 await session.cancel();        // optional: cancel the in-flight turn
-await session.dispose();       // tears down the ACP connection and child process
+// session and runtime are disposed automatically by `await using`
 ```
 
-The full surface (event types, profile shape, transcript reducer, normalization helpers) is exported from a single entry point: `@acp-kit/core`.
+Alternatives:
+
+- `runAcpAgent({ profile, cwd, prompt })` returns an `AsyncIterable<SessionNotification>` and tears down the runtime when iteration ends. Use it for one-shot scripts.
+- `acp.shutdown()` — explicit teardown if you cannot use `await using`.
+- `session.events()` — `AsyncIterable<SessionNotification>` for the lifetime of the session (across multiple prompts).
+- `session.onRawNotification(fn)` — listener form of the same.
+
+The full surface is exported from a single entry point: `@acp-kit/core`.
 
 ## Built-in Agent Profiles
 
@@ -153,7 +201,7 @@ const myProfile: AgentProfile = {
   env: { /* optional */ },
 };
 
-const runtime = createRuntime({ profile: myProfile, cwd, host });
+await using acp = createAcpRuntime({ profile: myProfile, host });
 ```
 
 ## How It Compares to `@agentclientprotocol/sdk`

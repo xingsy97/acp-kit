@@ -3,7 +3,7 @@
 import { createInterface } from 'node:readline/promises';
 import process from 'node:process';
 
-import { createRuntime } from '@acp-kit/core';
+import { createAcpRuntime } from '@acp-kit/core';
 
 const args = parseArgs(process.argv.slice(2));
 if (!args.profile) {
@@ -20,7 +20,7 @@ const host = createInteractiveHost({
   autoPermission: args.autoPermission,
 });
 
-const runtime = createRuntime({ profile: args.profile, cwd, host });
+const runtime = createAcpRuntime({ profile: args.profile, host });
 
 console.log(`\nACP Kit real-agent-cli demo`);
 console.log(`profile: ${args.profile}`);
@@ -29,7 +29,7 @@ console.log(`prompt: ${promptText}\n`);
 
 let session;
 try {
-  session = await runtime.newSession();
+  session = await runtime.newSession({ cwd });
   console.log(`session created: ${session.sessionId}\n`);
 
   session.on('event', printEvent);
@@ -44,6 +44,7 @@ try {
   process.exitCode = 1;
 } finally {
   await session?.dispose();
+  await runtime.shutdown();
 }
 
 function createInteractiveHost(options) {

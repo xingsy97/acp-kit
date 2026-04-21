@@ -3,9 +3,9 @@
 import { PassThrough } from 'node:stream';
 import process from 'node:process';
 
-import { createRuntime } from '@acp-kit/core';
+import { createAcpRuntime } from '@acp-kit/core';
 
-const runtime = createRuntime({
+const runtime = createAcpRuntime({
   profile: {
     id: 'mock',
     displayName: 'Mock ACP Agent',
@@ -13,7 +13,6 @@ const runtime = createRuntime({
     args: [],
     startupTimeoutMs: 5000,
   },
-  cwd: process.cwd(),
   host: {
     chooseAuthMethod: async ({ methods }) => {
       console.log(`[host] auth requested, auto-selecting: ${methods[0]?.id}`);
@@ -33,7 +32,7 @@ console.log('\nACP Kit mock-runtime demo starting');
 
 let session;
 try {
-  session = await runtime.newSession();
+  session = await runtime.newSession({ cwd: process.cwd() });
   console.log(`session created: ${session.sessionId}`);
 
   session.on('event', printEvent);

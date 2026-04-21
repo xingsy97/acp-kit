@@ -1,0 +1,66 @@
+:root {
+  --vp-c-brand-1: #0d9488;
+  --vp-c-brand-2: #0f766e;
+  --vp-c-brand-3: #134e4a;
+  --vp-c-brand-soft: rgba(13, 148, 136, 0.16);
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(120deg, #0d9488 30%, #ea580c 100%);
+  --vp-home-hero-image-background-image: radial-gradient(circle at 50% 50%, rgba(13, 148, 136, 0.2) 0, rgba(13, 148, 136, 0) 70%);
+}
+
+.VPHero .name {
+  letter-spacing: -0.02em;
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 14px 0 20px;
+}
+
+.feature-card {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  padding: 14px;
+  background: color-mix(in srgb, var(--vp-c-bg-soft) 88%, white 12%);
+}
+
+.feature-card h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.feature-card p {
+  margin: 0;
+  color: var(--vp-c-text-2);
+  font-size: 13px;
+  line-height: 1.62;
+}
+
+@media (max-width: 740px) {
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Force GitHub icon + appearance toggle to stay visible on narrower screens */
+@media (min-width: 640px) {
+  .VPNavBar .VPSocialLinks,
+  .VPNavBar .VPNavBarSocialLinks,
+  .VPNavBar .VPSwitchAppearance,
+  .VPNavBar .VPNavBarAppearance {
+    display: flex !important;
+  }
+  .VPNavBar .VPNavBarMenu {
+    display: flex !important;
+  }
+}
+
+/* Always hide hamburger menu and the "..." extra dropdown */
+.VPNavBarHamburger,
+.VPNavScreen,
+.VPNavBarExtra {
+  display: none !important;
+}

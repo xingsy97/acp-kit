@@ -19,11 +19,15 @@
     "typecheck": "tsc -b packages/core",
     "test": "vitest run",
     "test:watch": "vitest",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs",
     "publish:core": "npm publish -w @acp-kit/core --access public"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",
     "typescript": "^5.8.3",
+    "vitepress": "^1.6.4",
     "vitest": "^3.1.2"
   }
 }

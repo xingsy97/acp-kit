@@ -2,7 +2,7 @@ import { PassThrough } from 'node:stream';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { createRuntime, type AcpConnectionFactory, type SpawnProcess } from '../src/index.js';
+import { createAcpRuntime, runAcpAgent, type AcpConnectionFactory, type SpawnProcess } from '../src/index.js';
 
 function createFakeSpawn(): SpawnProcess {
   return () => ({
@@ -56,7 +56,7 @@ describe('AcpRuntime', () => {
       },
     };
 
-    const runtime = createRuntime({
+    const runtime = createAcpRuntime({
       profile: {
         id: 'test',
         displayName: 'Test Agent',
@@ -117,7 +117,7 @@ describe('AcpRuntime', () => {
     };
 
     const chooseAuthMethod = vi.fn().mockResolvedValue('device');
-    const runtime = createRuntime({
+    const runtime = createAcpRuntime({
       profile: {
         id: 'test',
         displayName: 'Test Agent',
@@ -157,7 +157,7 @@ describe('AcpRuntime', () => {
       },
     };
 
-    const runtime = createRuntime({
+    const runtime = createAcpRuntime({
       profile: {
         id: 'test',
         displayName: 'Test Agent',
@@ -192,5 +192,120 @@ describe('AcpRuntime', () => {
         optionId: 'proceed_always',
       },
     });
+  });
+
+  it('iterates raw ACP notifications via session.prompt() PromptHandle', async () => {
+    let capturedClient: { sessionUpdate(notification: unknown): Promise<void> } | null = null;
+    const connection = {
+      initialize: vi.fn().mockResolvedValue({ authMethods: [] }),
+      newSession: vi.fn().mockResolvedValue({ sessionId: 'session-iter' }),
+      prompt: vi.fn(async () => {
+        await capturedClient?.sessionUpdate({
+          sessionId: 'session-iter',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'hello' },
+          },
+        });
+        await capturedClient?.sessionUpdate({
+          sessionId: 'session-iter',
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 't1',
+            title: 'read_file',
+            status: 'pending',
+          },
+        });
+        return { stopReason: 'end_turn' };
+      }),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const connectionFactory: AcpConnectionFactory = {
+      create({ client }) {
+        capturedClient = client as typeof capturedClient;
+        return connection as never;
+      },
+    };
+
+    await using runtime = createAcpRuntime({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      host: {},
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+
+    await using session = await runtime.newSession({ cwd: 'C:/repo' });
+
+    const seen: string[] = [];
+    for await (const notification of session.prompt('hi')) {
+      const update = (notification as { update?: { sessionUpdate?: string } }).update;
+      if (update?.sessionUpdate) seen.push(update.sessionUpdate);
+    }
+
+    expect(seen).toEqual(['agent_message_chunk', 'tool_call']);
+  });
+
+  it('newSession throws when neither runtime nor call site provides cwd', async () => {
+    const connectionFactory: AcpConnectionFactory = {
+      create() {
+        return {
+          initialize: async () => ({ authMethods: [] }),
+          newSession: async () => ({ sessionId: 'unused' }),
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+        } as never;
+      },
+    };
+
+    const runtime = createAcpRuntime({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      host: {},
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+
+    await expect(runtime.newSession()).rejects.toThrow(/requires a `cwd`/);
+  });
+});
+
+describe('runAcpAgent', () => {
+  it('spawns the runtime, runs one prompt, and disposes after iteration', async () => {
+    let capturedClient: { sessionUpdate(notification: unknown): Promise<void> } | null = null;
+    const connection = {
+      initialize: vi.fn().mockResolvedValue({ authMethods: [] }),
+      newSession: vi.fn().mockResolvedValue({ sessionId: 'one-shot' }),
+      prompt: vi.fn(async () => {
+        await capturedClient?.sessionUpdate({
+          sessionId: 'one-shot',
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hi' } },
+        });
+        return { stopReason: 'end_turn' };
+      }),
+      cancel: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const connectionFactory: AcpConnectionFactory = {
+      create({ client }) {
+        capturedClient = client as typeof capturedClient;
+        return connection as never;
+      },
+    };
+
+    const seen: string[] = [];
+    for await (const notification of runAcpAgent({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      prompt: 'hi',
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    })) {
+      const update = (notification as { update?: { sessionUpdate?: string } }).update;
+      if (update?.sessionUpdate) seen.push(update.sessionUpdate);
+    }
+
+    expect(seen).toEqual(['agent_message_chunk']);
+    expect(connection.dispose).toHaveBeenCalled();
   });
 });

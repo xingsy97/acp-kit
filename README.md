@@ -44,35 +44,28 @@ Requirements:
 For one-shot prompts, use the `runAcpAgent` helper. It spawns the agent, runs a single prompt, streams raw ACP `session/update` notifications, and disposes everything when the loop ends:
 
 ```ts
-import { runAcpAgent } from '@acp-kit/core';
+import { runAcpAgent, onSessionUpdate } from '@acp-kit/core';
 
-for await (const notification of runAcpAgent({
+for await (const n of runAcpAgent({
   profile: 'copilot',
   cwd: process.cwd(),
   prompt: 'Write a demo for this repo',
 })) {
-  const update = notification.update;
-  switch (update.sessionUpdate) {
-    case 'agent_message_chunk':
-      process.stdout.write(update.content.text ?? '');
-      break;
-    case 'tool_call':
-      console.log(`\n[tool] ${update.title}`);
-      break;
-    case 'tool_call_update':
-      console.log(`[tool:${update.status}]`);
-      break;
-    default:
-      // plan, agent_thought_chunk, available_commands_update, ...
-      break;
-  }
+  onSessionUpdate(n.update, {
+    agentMessageChunk: (u) => process.stdout.write(u.content.text ?? ''),
+    toolCall:          (u) => console.log(`\n[tool] ${u.title}`),
+    toolCallUpdate:    (u) => console.log(`[tool:${u.status}]`),
+  });
 }
 ```
+
+No string literals, full type narrowing per handler, only the variants you care about.
+For the full list of variants, see [`SessionUpdateKind`](packages/core/src/session-update.ts).
 
 For multi-session apps, use `createAcpRuntime` directly with `await using` (ES Explicit Resource Management):
 
 ```ts
-import { createAcpRuntime } from '@acp-kit/core';
+import { createAcpRuntime, onSessionUpdate } from '@acp-kit/core';
 
 await using acp = createAcpRuntime({
   profile: 'copilot',
@@ -89,9 +82,9 @@ session.on('event', (event) => console.log(event.type));
 
 // Or iterate raw ACP notifications for a single turn:
 for await (const n of session.prompt('Summarize this repository.')) {
-  if (n.update.sessionUpdate === 'agent_message_chunk') {
-    process.stdout.write(n.update.content.text ?? '');
-  }
+  onSessionUpdate(n.update, {
+    agentMessageChunk: (u) => process.stdout.write(u.content.text ?? ''),
+  });
 }
 ```
 

@@ -57,28 +57,26 @@ const v = (s: string) => `<span class="tk-var">${s}</span>`;
 const p = (s: string) => `<span class="tk-prop">${s}</span>`;
 
 const eventLoop = (indent: string) =>
-  `${indent}${kw('switch')} (${v('event')}.${p('sessionUpdate')}) {
-${indent}  ${kw('case')} ${str('agent_message_chunk')}: ${v('process')}.${p('stdout')}.${fn('write')}(${v('event')}.${p('content')}.${p('text')}); ${kw('break')};
-${indent}  ${kw('case')} ${str('tool_call')}:          ${v('console')}.${fn('log')}(${str('→ tool')}, ${v('event')}.${p('title')}); ${kw('break')};
-${indent}  ${kw('case')} ${str('tool_call_update')}:   ${v('console')}.${fn('log')}(${str('  status')}, ${v('event')}.${p('status')}); ${kw('break')};
-${indent}  ${kw('default')}: <span class="tk-comment">/* plan, agent_thought_chunk, ... */</span> ${kw('break')};
-${indent}}`;
+  `${indent}${fn('onSessionUpdate')}(${v('n')}.${p('update')}, {
+${indent}  ${p('agentMessageChunk')}: (${v('u')}) =&gt; ${v('process')}.${p('stdout')}.${fn('write')}(${v('u')}.${p('content')}.${p('text')}),
+${indent}  ${p('toolCall')}:          (${v('u')}) =&gt; ${v('console')}.${fn('log')}(${str('→ tool')}, ${v('u')}.${p('title')}),
+${indent}  ${p('toolCallUpdate')}:    (${v('u')}) =&gt; ${v('console')}.${fn('log')}(${str('  status')}, ${v('u')}.${p('status')}),
+${indent}});`;
 
 const quickCode = computed(() =>
-  `${kw('import')} { ${fn('runAcpAgent')} } ${kw('from')} ${str('@acp-kit/core')};
+  `${kw('import')} { ${fn('runAcpAgent')}, ${fn('onSessionUpdate')} } ${kw('from')} ${str('@acp-kit/core')};
 
-${kw('for await')} (${kw('const')} ${v('event')} ${kw('of')} ${fn('runAcpAgent')}({
+${kw('for await')} (${kw('const')} ${v('n')} ${kw('of')} ${fn('runAcpAgent')}({
   ${p('profile')}: ${str(selected.value.id)},
   ${p('cwd')}:     ${v('process')}.${fn('cwd')}(),
   ${p('prompt')}:  ${str(selected.value.prompt)}
 })) {
-  <span class="tk-comment">// auto: spawn → prompt → dispose → shutdown</span>
-  ${v('console')}.${fn('log')}(${v('event')});
+${eventLoop('  ')}
 }`
 );
 
 const advancedCode = computed(() =>
-  `${kw('import')} { ${fn('createAcpRuntime')} } ${kw('from')} ${str('@acp-kit/core')};
+  `${kw('import')} { ${fn('createAcpRuntime')}, ${fn('onSessionUpdate')} } ${kw('from')} ${str('@acp-kit/core')};
 
 <span class="tk-comment">// One agent process, many sessions — reuse spawn cost.</span>
 ${kw('await using')} ${v('acp')} = ${fn('createAcpRuntime')}({
@@ -89,7 +87,7 @@ ${kw('await using')} ${v('acp')} = ${fn('createAcpRuntime')}({
 ${kw('await using')} ${v('s1')} = ${kw('await')} ${v('acp')}.${fn('newSession')}({ ${p('cwd')}: ${v('process')}.${fn('cwd')}() });
 ${kw('await using')} ${v('s2')} = ${kw('await')} ${v('acp')}.${fn('newSession')}({ ${p('cwd')}: ${str('./packages/server')} });
 
-${kw('for await')} (${kw('const')} ${v('event')} ${kw('of')} ${v('s1')}.${fn('prompt')}(${str(selected.value.prompt)})) {
+${kw('for await')} (${kw('const')} ${v('n')} ${kw('of')} ${v('s1')}.${fn('prompt')}(${str(selected.value.prompt)})) {
 ${eventLoop('  ')}
 }
 

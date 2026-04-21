@@ -12,7 +12,7 @@
  */
 
 import process from 'node:process';
-import { runAcpAgent } from '@acp-kit/core';
+import { runAcpAgent, onSessionUpdate } from '@acp-kit/core';
 
 const profile = process.argv[2] || 'claude';
 const prompt = process.argv[3] || 'Write a demo for this repo';
@@ -26,26 +26,13 @@ try {
     cwd: process.cwd(),
     prompt,
   })) {
-    const update = notification.update;
-    if (!update) continue;
-    switch (update.sessionUpdate) {
-      case 'agent_message_chunk':
-        process.stdout.write(update.content?.text ?? '');
-        break;
-      case 'agent_thought_chunk':
-        // surface thinking on stderr so it doesn't mix with the answer
-        process.stderr.write(`\u001b[2m${update.content?.text ?? ''}\u001b[0m`);
-        break;
-      case 'tool_call':
-        console.log(`\n\u2192 tool: ${update.title ?? update.toolName ?? 'tool'}`);
-        break;
-      case 'tool_call_update':
-        console.log(`  status: ${update.status}`);
-        break;
-      default:
-        // plan, available_commands_update, current_mode_update, usage_update, ...
-        break;
-    }
+    onSessionUpdate(notification.update, {
+      agentMessageChunk: (u) => process.stdout.write(u.content?.text ?? ''),
+      agentThoughtChunk: (u) =>
+        process.stderr.write(`\u001b[2m${u.content?.text ?? ''}\u001b[0m`),
+      toolCall:       (u) => console.log(`\n\u2192 tool: ${u.title ?? 'tool'}`),
+      toolCallUpdate: (u) => console.log(`  status: ${u.status}`),
+    });
   }
   console.log('\n\u2713 done');
 } catch (error) {

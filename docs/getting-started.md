@@ -18,16 +18,16 @@ npm install @acp-kit/core
 For a one-shot prompt, use `runAcpAgent`:
 
 ```ts
-import { runAcpAgent } from '@acp-kit/core';
+import { runAcpAgent, onSessionUpdate } from '@acp-kit/core';
 
 for await (const n of runAcpAgent({
   profile: 'copilot',
   cwd: process.cwd(),
   prompt: 'Explain what this repository does.',
 })) {
-  if (n.update.sessionUpdate === 'agent_message_chunk') {
-    process.stdout.write(n.update.content.text ?? '');
-  }
+  onSessionUpdate(n.update, {
+    agentMessageChunk: (u) => process.stdout.write(u.content.text ?? ''),
+  });
 }
 ```
 

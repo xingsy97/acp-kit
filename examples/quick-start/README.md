@@ -5,7 +5,7 @@ The minimum code needed to run a single ACP prompt through ACP Kit. Uses the one
 ## What it shows
 
 - Call `runAcpAgent({ profile, cwd, prompt })` and iterate the returned async iterable.
-- Switch on `notification.update.sessionUpdate` to handle ACP discriminator variants like `agent_message_chunk`, `tool_call`, `tool_call_update`, etc.
+- Use `onSessionUpdate(notification.update, { ... })` to dispatch by camelCase variant name &mdash; no string literals, full type narrowing per handler.
 - No manual `dispose` / `shutdown` needed.
 
 ## Run

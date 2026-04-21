@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per the SemVer 0.x convention). Patch versions remain backward compatible.
 
+## [0.3.0] - 2026-04-22
+
+Minor release. No breaking changes &mdash; only new opt-in exports under `@acp-kit/core/node`.
+
+### Added
+
+- `createLocalFileSystemHost({ root, onAccess?, followSymlinksOutsideRoot? })` &mdash; reference implementation of ACP's `fs/read_text_file` and `fs/write_text_file` for hosts that serve a single local workspace root. Sandboxed by lexical resolution + `realpath` check; rejects `..` traversal and (by default) symlinks pointing outside `root`. Supports the `line` / `limit` slicing parameters and auto-creates parent directories on write.
+- `createLocalTerminalHost({ resolveCwd?, env?, defaultOutputByteLimit? })` &mdash; reference implementation of ACP's terminal capability via `node:child_process.spawn`. Bounded ring buffer for output, exit code + signal capture, optional `waitForTerminalExit` timeout. `releaseTerminal` releases host bookkeeping but does **not** kill the underlying process (matches ACP spec semantics; previous in-house copies in user codebases often killed on release &mdash; review your call sites if you migrate).
+- Both helpers exported from `@acp-kit/core/node` (they pull in `node:fs` / `node:child_process`, so they stay off the main entry).
+
+### Why
+
+The `RuntimeHost` interface is intentionally minimal &mdash; permission policy, UI bridging, and audit logging belong in the host. But the local-disk implementation of fs and terminal capabilities is roughly the same in every daemon-shaped host, and writing it from scratch per project (with subtle path-escape and output-bounding bugs) is exactly the boilerplate ACP Kit exists to delete. These are explicit `import`s, not defaults &mdash; hosts that need their own implementation (VS Code's terminal API, remote agents, container sandboxes) ignore them.
+
+### Migration
+
+Existing hosts continue to work unchanged. To opt in:
+
+```ts
+import { createAcpRuntime } from '@acp-kit/core';
+import { createLocalFileSystemHost, createLocalTerminalHost } from '@acp-kit/core/node';
+
+const fsHost = createLocalFileSystemHost({ root: workingDirectory });
+const termHost = createLocalTerminalHost({ resolveCwd: (cwd) => resolveSessionPath(workingDirectory, cwd) });
+
+const runtime = createAcpRuntime({
+  profile,
+  host: { ...fsHost, ...termHost, requestPermission, onAgentExit },
+});
+```
+
 ## [0.2.2] - 2026-04-22
 
 Patch release. Non-breaking.

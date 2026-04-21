@@ -18,3 +18,5 @@ export {
   type SpawnProcess,
   type AcpConnectionFactory,
 } from './transports/node.js';
+
+export * from './hosts/index.js';

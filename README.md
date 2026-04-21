@@ -83,30 +83,6 @@ session.on('message.delta', (e) => process.stdout.write(e.delta));   // e: Messa
 the listener parameter to the matching event variant. Passing `'event'` subscribes
 to every event with the full `RuntimeSessionEvent` union.
 
-### One-shot scripts
-
-For throw-away scripts, `runOneShotPrompt` spawns the agent, runs one prompt, and
-disposes everything when iteration ends. It yields **raw** ACP notifications:
-
-```ts
-import { runOneShotPrompt, onRawSessionUpdate } from '@acp-kit/core';
-
-for await (const n of runOneShotPrompt({
-  profile: 'copilot',
-  cwd: process.cwd(),
-  prompt: 'Write a demo for this repo',
-})) {
-  onRawSessionUpdate(n.update, {
-    agentMessageChunk: (u) => process.stdout.write(u.content.text ?? ''),
-    toolCall:          (u) => console.log(`\n[tool ${u.toolCallId}] ${u.title}`),
-    toolCallUpdate:    (u) => console.log(`[tool ${u.toolCallId}:${u.status}]`),
-  });
-}
-```
-
-`onRawSessionUpdate` is the raw-layer counterpart of `onRuntimeEvent`: it dispatches
-the protocol-level `SessionUpdate` variants from `@agentclientprotocol/sdk`.
-
 One runtime owns one agent subprocess and can host many sessions over different
 `cwd`s &mdash; see [`examples/advanced-multi-session/`](examples/advanced-multi-session/).
 
@@ -116,7 +92,7 @@ The repository ships with four runnable examples under [`examples/`](examples/).
 
 | Example | Runs without an agent installed | What it shows |
 | --- | :---: | --- |
-| [`quick-start/`](examples/quick-start/) | No | `runOneShotPrompt` one-shot helper. |
+| [`quick-start/`](examples/quick-start/) | No | Minimal single-prompt script. |
 | [`advanced-multi-session/`](examples/advanced-multi-session/) | No | `createAcpRuntime` + multiple `await using` sessions sharing one agent process. |
 | [`mock-runtime/`](examples/mock-runtime/) | **Yes** | Self-contained mock ACP server. Use this to see the full event flow without installing an agent. |
 | [`real-agent-cli/`](examples/real-agent-cli/) | No | Interactive CLI driver for real agents (`copilot`, `claude`, `codex`) with prompts for auth and permission decisions. |
@@ -143,18 +119,18 @@ A real ACP client has to do all of this before it can hold a useful conversation
 - turn raw `session/update` traffic into stable message / reasoning / tool / usage events
 - decide when a turn is actually complete
 
-ACP Kit packages all of the above behind `createAcpRuntime({...}).newSession({ cwd })` (or the `runOneShotPrompt` one-shot helper).
+ACP Kit packages all of the above behind `createAcpRuntime({...}).newSession({ cwd })`.
 
 ## API Overview
 
-ACP Kit exposes a **dual-track** API: normalized `RuntimeSessionEvent`s for application code, and raw ACP `SessionNotification`s for protocol-faithful integrations.
+The primary surface is `createAcpRuntime` + `RuntimeSession`, with normalized
+`RuntimeSessionEvent`s as the event model.
 
 ```ts
 import {
   createAcpRuntime,
-  runOneShotPrompt,
+  onRuntimeEvent,
   type RuntimeHost,
-  type RuntimeSessionEvent,
   type AgentProfile,
 } from '@acp-kit/core';
 
@@ -174,24 +150,24 @@ await using acp = createAcpRuntime({
 
 await using session = await acp.newSession({ cwd: '/path/to/workspace' });
 
-// Track 1: normalized events (message.delta / tool.start / turn.completed / ...)
-session.on('event', (event: RuntimeSessionEvent) => { /* ... */ });
+session.on('event', (event) => onRuntimeEvent(event, {
+  messageDelta: (e) => process.stdout.write(e.delta),
+  toolStart:    (e) => console.log(`[tool ${e.toolCallId}] ${e.title ?? e.name}`),
+  toolEnd:      (e) => console.log(`[tool ${e.toolCallId}] ${e.status}`),
+}));
 
-// Track 2: raw ACP session/update notifications, scoped to a single turn
-const handle = session.prompt('Refactor utils.ts');
-for await (const n of handle) { /* n.update.sessionUpdate === 'agent_message_chunk' | ... */ }
-const result = await handle; // also a Promise<PromptResult>
-
-await session.cancel();        // optional: cancel the in-flight turn
+const result = await session.prompt('Refactor utils.ts'); // PromptResult
+await session.cancel();        // optional: cancel an in-flight turn
 // session and runtime are disposed automatically by `await using`
 ```
 
-Alternatives:
+Lifecycle helpers:
 
-- `runOneShotPrompt({ profile, cwd, prompt })` returns an `AsyncIterable<SessionNotification>` and tears down the runtime when iteration ends. Use it for one-shot scripts.
-- `acp.shutdown()` — explicit teardown if you cannot use `await using`.
-- `session.events()` — `AsyncIterable<SessionNotification>` for the lifetime of the session (across multiple prompts).
-- `session.onRawNotification(fn)` — listener form of the same.
+- `acp.shutdown()` &mdash; explicit teardown if you cannot use `await using`.
+- `acp.reconnect()` &mdash; drop the current agent process and reconnect without
+  losing application-level state.
+- `session.setMode(modeId)` / `session.setModel(modelId)` &mdash; switch agent mode
+  or model mid-session when the agent advertises options.
 
 The full surface is exported from a single entry point: `@acp-kit/core`.
 
@@ -285,9 +261,9 @@ Implemented today:
 - ACP connection bootstrap on top of `@agentclientprotocol/sdk`
 - Auth retry when `session/new` returns `auth_required`
 - Host adapters for permission, file system, and terminal (advertised by capability)
-- Dual-track event surface: normalized `RuntimeSessionEvent` and raw ACP `SessionNotification` (via `session.events()`, `session.onRawNotification()`, and the `PromptHandle` returned by `session.prompt()`)
+- Normalized `RuntimeSessionEvent` surface (`message.*`, `reasoning.*`, `tool.*`, `turn.*`, `session.*`) with stable correlation ids
 - Multiple sessions per runtime over different `cwd`s, each with `Symbol.asyncDispose` (`await using`)
-- Idempotent `acp.shutdown()` and `runOneShotPrompt()` one-shot helper
+- Idempotent `acp.shutdown()` and `acp.reconnect()`
 - Transcript reducer with pending-stream completion flushing
 
 Not implemented yet:

@@ -41,12 +41,12 @@ Requirements:
 
 ## Quick Start
 
-For one-shot prompts, use the `runAcpAgent` helper. It spawns the agent, runs a single prompt, streams raw ACP `session/update` notifications, and disposes everything when the loop ends:
+For one-shot prompts, use the `runOneShotPrompt` helper. It spawns the agent, runs a single prompt, streams raw ACP `session/update` notifications, and disposes everything when the loop ends:
 
 ```ts
-import { runAcpAgent, onSessionUpdate } from '@acp-kit/core';
+import { runOneShotPrompt, onSessionUpdate } from '@acp-kit/core';
 
-for await (const n of runAcpAgent({
+for await (const n of runOneShotPrompt({
   profile: 'copilot',
   cwd: process.cwd(),
   prompt: 'Write a demo for this repo',
@@ -96,7 +96,7 @@ The repository ships with four runnable examples under [`examples/`](examples/).
 
 | Example | Runs without an agent installed | What it shows |
 | --- | :---: | --- |
-| [`quick-start/`](examples/quick-start/) | No | `runAcpAgent` one-shot helper. |
+| [`quick-start/`](examples/quick-start/) | No | `runOneShotPrompt` one-shot helper. |
 | [`advanced-multi-session/`](examples/advanced-multi-session/) | No | `createAcpRuntime` + multiple `await using` sessions sharing one agent process. |
 | [`mock-runtime/`](examples/mock-runtime/) | **Yes** | Self-contained mock ACP server. Use this to see the full event flow without installing an agent. |
 | [`real-agent-cli/`](examples/real-agent-cli/) | No | Interactive CLI driver for real agents (`copilot`, `claude`, `codex`) with prompts for auth and permission decisions. |
@@ -123,7 +123,7 @@ A real ACP client has to do all of this before it can hold a useful conversation
 - turn raw `session/update` traffic into stable message / reasoning / tool / usage events
 - decide when a turn is actually complete
 
-ACP Kit packages all of the above behind `createAcpRuntime({...}).newSession({ cwd })` (or the `runAcpAgent` one-shot helper).
+ACP Kit packages all of the above behind `createAcpRuntime({...}).newSession({ cwd })` (or the `runOneShotPrompt` one-shot helper).
 
 ## API Overview
 
@@ -132,7 +132,7 @@ ACP Kit exposes a **dual-track** API: normalized `RuntimeSessionEvent`s for appl
 ```ts
 import {
   createAcpRuntime,
-  runAcpAgent,
+  runOneShotPrompt,
   type RuntimeHost,
   type RuntimeSessionEvent,
   type AgentProfile,
@@ -168,7 +168,7 @@ await session.cancel();        // optional: cancel the in-flight turn
 
 Alternatives:
 
-- `runAcpAgent({ profile, cwd, prompt })` returns an `AsyncIterable<SessionNotification>` and tears down the runtime when iteration ends. Use it for one-shot scripts.
+- `runOneShotPrompt({ profile, cwd, prompt })` returns an `AsyncIterable<SessionNotification>` and tears down the runtime when iteration ends. Use it for one-shot scripts.
 - `acp.shutdown()` — explicit teardown if you cannot use `await using`.
 - `session.events()` — `AsyncIterable<SessionNotification>` for the lifetime of the session (across multiple prompts).
 - `session.onRawNotification(fn)` — listener form of the same.
@@ -267,7 +267,7 @@ Implemented today:
 - Host adapters for permission, file system, and terminal (advertised by capability)
 - Dual-track event surface: normalized `RuntimeSessionEvent` and raw ACP `SessionNotification` (via `session.events()`, `session.onRawNotification()`, and the `PromptHandle` returned by `session.prompt()`)
 - Multiple sessions per runtime over different `cwd`s, each with `Symbol.asyncDispose` (`await using`)
-- Idempotent `acp.shutdown()` and `runAcpAgent()` one-shot helper
+- Idempotent `acp.shutdown()` and `runOneShotPrompt()` one-shot helper
 - Transcript reducer with pending-stream completion flushing
 
 Not implemented yet:

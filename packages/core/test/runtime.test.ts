@@ -2,7 +2,7 @@ import { PassThrough } from 'node:stream';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { createAcpRuntime, runAcpAgent, type AcpConnectionFactory, type SpawnProcess } from '../src/index.js';
+import { createAcpRuntime, runOneShotPrompt, type AcpConnectionFactory, type SpawnProcess } from '../src/index.js';
 
 function createFakeSpawn(): SpawnProcess {
   return () => ({
@@ -426,7 +426,7 @@ describe('AcpRuntime', () => {
   });
 });
 
-describe('runAcpAgent', () => {
+describe('runOneShotPrompt', () => {
   it('spawns the runtime, runs one prompt, and disposes after iteration', async () => {
     let capturedClient: { sessionUpdate(notification: unknown): Promise<void> } | null = null;
     const connection = {
@@ -451,7 +451,7 @@ describe('runAcpAgent', () => {
     };
 
     const seen: string[] = [];
-    for await (const notification of runAcpAgent({
+    for await (const notification of runOneShotPrompt({
       profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
       cwd: 'C:/repo',
       prompt: 'hi',

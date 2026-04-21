@@ -15,12 +15,12 @@ npm install @acp-kit/core
 
 ## First session
 
-For a one-shot prompt, use `runAcpAgent`:
+For a one-shot prompt, use `runOneShotPrompt`:
 
 ```ts
-import { runAcpAgent, onSessionUpdate } from '@acp-kit/core';
+import { runOneShotPrompt, onSessionUpdate } from '@acp-kit/core';
 
-for await (const n of runAcpAgent({
+for await (const n of runOneShotPrompt({
   profile: 'copilot',
   cwd: process.cwd(),
   prompt: 'Explain what this repository does.',

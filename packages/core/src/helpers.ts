@@ -4,7 +4,7 @@ import type { RuntimeHost } from './host.js';
 import type { AgentProfile, BuiltInProfileId } from './profiles.js';
 import { createAcpRuntime, type SpawnProcess, type AcpConnectionFactory } from './runtime.js';
 
-export interface RunAcpAgentOptions {
+export interface RunOneShotPromptOptions {
   profile: AgentProfile | BuiltInProfileId;
   cwd: string;
   prompt: string;
@@ -27,7 +27,7 @@ export interface RunAcpAgentOptions {
  *
  * For multi-turn, multi-session, or long-lived hosts use `createAcpRuntime` directly.
  */
-export function runAcpAgent(options: RunAcpAgentOptions): AsyncIterableIterator<SessionNotification> {
+export function runOneShotPrompt(options: RunOneShotPromptOptions): AsyncIterableIterator<SessionNotification> {
   const host: RuntimeHost = options.host ?? {
     requestPermission: async () => 'allow_once',
     chooseAuthMethod: async ({ methods }) => methods[0]?.id ?? null,

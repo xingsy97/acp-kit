@@ -12,7 +12,7 @@
  */
 
 import process from 'node:process';
-import { runAcpAgent, onSessionUpdate } from '@acp-kit/core';
+import { runOneShotPrompt, onSessionUpdate } from '@acp-kit/core';
 
 const profile = process.argv[2] || 'claude';
 const prompt = process.argv[3] || 'Write a demo for this repo';
@@ -21,7 +21,7 @@ console.log(`profile: ${profile}`);
 console.log(`prompt:  ${prompt}\n`);
 
 try {
-  for await (const notification of runAcpAgent({
+  for await (const notification of runOneShotPrompt({
     profile,
     cwd: process.cwd(),
     prompt,

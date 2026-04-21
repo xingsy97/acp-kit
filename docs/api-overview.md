@@ -5,7 +5,7 @@
 ```ts
 import {
   createAcpRuntime,
-  runAcpAgent,
+  runOneShotPrompt,
   type RuntimeHost,
   type RuntimeSessionEvent,
   type AgentProfile
@@ -47,7 +47,7 @@ await session.cancel(); // optional
 ## One-shot helper
 
 ```ts
-for await (const n of runAcpAgent({ profile: 'copilot', cwd, prompt: 'Hi' })) {
+for await (const n of runOneShotPrompt({ profile: 'copilot', cwd, prompt: 'Hi' })) {
   // raw ACP SessionNotification
 }
 ```

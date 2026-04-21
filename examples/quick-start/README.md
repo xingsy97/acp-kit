@@ -1,10 +1,10 @@
 # Quick Start
 
-The minimum code needed to run a single ACP prompt through ACP Kit. Uses the one-shot `runAcpAgent` helper, which spawns the agent, runs one prompt, streams raw ACP `session/update` notifications, and disposes everything when iteration completes.
+The minimum code needed to run a single ACP prompt through ACP Kit. Uses the one-shot `runOneShotPrompt` helper, which spawns the agent, runs one prompt, streams raw ACP `session/update` notifications, and disposes everything when iteration completes.
 
 ## What it shows
 
-- Call `runAcpAgent({ profile, cwd, prompt })` and iterate the returned async iterable.
+- Call `runOneShotPrompt({ profile, cwd, prompt })` and iterate the returned async iterable.
 - Use `onSessionUpdate(notification.update, { ... })` to dispatch by camelCase variant name &mdash; no string literals, full type narrowing per handler.
 - No manual `dispose` / `shutdown` needed.
 

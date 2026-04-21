@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per the SemVer 0.x convention). Patch versions remain backward compatible.
 
+## [0.1.4] - 2026-04-23
+
+Patch release. Naming-only change: the one-shot helper is renamed to better describe what it does.
+
+### Changed (breaking)
+
+- `runAcpAgent(...)` and the `RunAcpAgentOptions` interface are renamed to **`runOneShotPrompt(...)`** / **`RunOneShotPromptOptions`**. The shape, behavior, and return type are unchanged. The old name returned an async iterable that spawned an agent, ran a single prompt, and disposed everything on completion — but "agent" referred to the *remote* process, not the helper itself, and "run" suggested a long-lived thing. The new name describes the actual lifecycle: **one prompt, then teardown**. Migration is a single find-and-replace.
+
 ## [0.1.3] - 2026-04-23
 
 Patch release. No breaking changes — existing `createAcpRuntime` / `runAcpAgent` / `session.prompt(...)` code keeps working unchanged.
@@ -38,7 +46,7 @@ This release reshapes the public API around two ergonomic entry points and align
 ### Added
 
 - `createAcpRuntime(options)` — primary entry point. Returns an `AcpRuntime` that owns one agent subprocess and can host multiple sessions.
-- `runAcpAgent({ profile, cwd, prompt, host?, ... })` — one-shot helper that returns `AsyncIterable<SessionNotification>` and tears down the runtime when iteration ends.
+- `runAcpAgent({ profile, cwd, prompt, host?, ... })` — one-shot helper that returns `AsyncIterable<SessionNotification>` and tears down the runtime when iteration ends. *(Renamed to `runOneShotPrompt` in 0.1.4.)*
 - `Symbol.asyncDispose` on both `AcpRuntime` and `RuntimeSession`. Use `await using acp = createAcpRuntime(...)` and `await using session = await acp.newSession({ cwd })` to get automatic cleanup. Requires Node ≥ 20.11 (or TypeScript 5.2+ down-leveling).
 - `acp.shutdown()` — explicit, idempotent runtime teardown when `await using` is not available.
 - `session.prompt(text)` now returns a `PromptHandle` that is **both** a `Promise<PromptResult>` **and** an `AsyncIterable<SessionNotification>` for the turn. Iterate it to consume raw ACP notifications, or `await` it for the final result.

@@ -64,9 +64,9 @@ ${indent}  ${p('toolCallUpdate')}:    (${v('u')}) =&gt; ${v('console')}.${fn('lo
 ${indent}});`;
 
 const quickCode = computed(() =>
-  `${kw('import')} { ${fn('runAcpAgent')}, ${fn('onSessionUpdate')} } ${kw('from')} ${str('@acp-kit/core')};
+  `${kw('import')} { ${fn('runOneShotPrompt')}, ${fn('onSessionUpdate')} } ${kw('from')} ${str('@acp-kit/core')};
 
-${kw('for await')} (${kw('const')} ${v('n')} ${kw('of')} ${fn('runAcpAgent')}({
+${kw('for await')} (${kw('const')} ${v('n')} ${kw('of')} ${fn('runOneShotPrompt')}({
   ${p('profile')}: ${str(selected.value.id)},
   ${p('cwd')}:     ${v('process')}.${fn('cwd')}(),
   ${p('prompt')}:  ${str(selected.value.prompt)}

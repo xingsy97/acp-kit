@@ -55,8 +55,7 @@ try {
     const reply = await turn(round, 'REVIEWER', reviewer, reviewerSettings.prompt({ round, feedback }));
 
     feedback = reply.trim();
-    const lastLine = feedback.split('\n').map(l => l.trim()).filter(Boolean).pop() ?? '';
-    approved = /^APPROVED\.?$/i.test(lastLine);
+    approved = feedback.split('\n').some((l) => /^APPROVED\.?$/i.test(l.trim()));
   }
 
   console.log('\n' + '='.repeat(64));

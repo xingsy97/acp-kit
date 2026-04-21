@@ -41,7 +41,7 @@
     "provenance": true
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20.11"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.18.0"

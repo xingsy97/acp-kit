@@ -4,7 +4,7 @@
 [![npm version](https://img.shields.io/npm/v/%40acp-kit%2Fcore.svg?label=%40acp-kit%2Fcore)](https://www.npmjs.com/package/@acp-kit/core)
 [![npm downloads](https://img.shields.io/npm/dm/%40acp-kit%2Fcore.svg)](https://www.npmjs.com/package/@acp-kit/core)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
+[![Node](https://img.shields.io/badge/node-%3E%3D20.11-brightgreen.svg)](https://nodejs.org)
 [![Status](https://img.shields.io/badge/status-experimental-orange.svg)](#status)
 
 **ACP Kit is a runtime for building applications on top of the [Agent Client Protocol](https://agentclientprotocol.com/).**
@@ -36,7 +36,7 @@ npm install @acp-kit/core
 
 Requirements:
 
-- Node.js **>= 18**
+- Node.js **>= 20.11** (required for `await using` / `Symbol.asyncDispose` used in the examples below; if you cannot upgrade, call `acp.shutdown()` and `session.dispose()` explicitly and Node 18 still works)
 - A reachable ACP agent CLI (for example Copilot CLI, Claude ACP, Codex ACP) installed on the machine running the runtime
 
 ## Quick Start
@@ -238,7 +238,7 @@ The protocol layer underneath stays exactly `@agentclientprotocol/sdk`. ACP Kit 
 ┌───────────────────────────────┴──────────────────────────────────┐
 │                    @agentclientprotocol/sdk                      │
 │  ClientSideConnection · ndJsonStream · JSON-RPC framing          │
-│  initialize / session.new / session.prompt · session/update      │
+│  initialize · session/new · session/prompt · session/update      │
 └───────────────────────────────▲──────────────────────────────────┘
                                 │  bytes over a transport
                                 │  (this repo: child-process stdio)
@@ -255,7 +255,8 @@ For a deeper walkthrough see [`docs/acp-sdk-vs-runtime.md`](docs/acp-sdk-vs-runt
 | Dependency | Version |
 | --- | --- |
 | `@agentclientprotocol/sdk` | `^0.18` |
-| Node.js | `>= 18` |
+| Node.js | `>= 20.11` recommended (for `await using`); `>= 18` works if you dispose manually |
+| TypeScript (consumers) | `>= 5.2` (for `using` / `await using` syntax) |
 | OS | Windows, macOS, Linux |
 
 ACP Kit aims to track the latest stable `@agentclientprotocol/sdk` minor release. Breaking changes in the SDK will be matched by a minor or major bump in `@acp-kit/core` while v0.x is in effect.
@@ -266,19 +267,20 @@ ACP Kit is **experimental (v0.x)**. The public API may change between minor vers
 
 Implemented today:
 
-- Built-in agent profiles for Copilot, Claude, Codex
+- Built-in agent profiles for Copilot, Claude, Codex; custom profiles via plain objects
 - Cross-platform process spawn with startup timeout, stderr capture, and exit diagnostics
 - ACP connection bootstrap on top of `@agentclientprotocol/sdk`
 - Auth retry when `session/new` returns `auth_required`
-- Host adapters for permission, file system, and terminal
-- Prompt and cancel lifecycle with normalized turn events
+- Host adapters for permission, file system, and terminal (advertised by capability)
+- Dual-track event surface: normalized `RuntimeSessionEvent` and raw ACP `SessionNotification` (via `session.events()`, `session.onRawNotification()`, and the `PromptHandle` returned by `session.prompt()`)
+- Multiple sessions per runtime over different `cwd`s, each with `Symbol.asyncDispose` (`await using`)
+- Idempotent `acp.shutdown()` and `runAcpAgent()` one-shot helper
 - Transcript reducer with pending-stream completion flushing
 
 Not implemented yet:
 
 - `session/load` resume flows
-- Raw traffic taps for debugging
-- Higher-level collaboration semantics (delegation, subagents)
+- Higher-level collaboration semantics (delegation, sub-agents)
 
 See [`docs/migration-plan.md`](docs/migration-plan.md) for how downstream products can adopt the runtime incrementally.
 

@@ -1,4 +1,4 @@
-import type { SessionNotification } from '@agentclientprotocol/sdk';
+import type { McpServer, SessionNotification } from '@agentclientprotocol/sdk';
 
 import type { RuntimeHost } from './host.js';
 import type { AgentProfile, BuiltInProfileId } from './profiles.js';
@@ -13,7 +13,7 @@ export interface RunAcpAgentOptions {
    * first available auth method. Provide your own for production use.
    */
   host?: RuntimeHost;
-  mcpServers?: unknown[];
+  mcpServers?: McpServer[];
   spawnProcess?: SpawnProcess;
   connectionFactory?: AcpConnectionFactory;
 }

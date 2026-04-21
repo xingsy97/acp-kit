@@ -177,7 +177,9 @@ export class RuntimeSession {
     if (this.status === 'disposed') {
       return;
     }
-    await this.connection.dispose?.();
+    // Note: connection lifecycle is owned by AcpRuntime (one process per runtime,
+    // many sessions per process). Disposing a session releases its slot in the
+    // runtime's session router but does not close the underlying ACP connection.
     this.resetTurnState();
     this.setStatus('disposed');
     this.rawListeners.clear();

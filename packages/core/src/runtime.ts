@@ -5,11 +5,12 @@ import {
   ClientSideConnection,
   PROTOCOL_VERSION,
   ndJsonStream,
+  type AgentCapabilities,
   type AuthMethod,
   type Client,
+  type Implementation,
   type InitializeResponse,
-  type KillTerminalRequest,
-  type KillTerminalResponse,
+  type McpServer,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionModelState,
@@ -52,6 +53,11 @@ export interface AcpConnectionFactory {
       modes?: unknown;
       models?: unknown;
     }>;
+    loadSession?(params: Record<string, unknown>): Promise<{
+      configOptions?: unknown[];
+      modes?: unknown;
+      models?: unknown;
+    } | undefined>;
     authenticate?(params: { methodId: string }): Promise<unknown>;
   };
 }
@@ -73,12 +79,31 @@ export interface NewSessionOptions {
    * The working directory for this session. Required unless the runtime was created with a default `cwd`.
    */
   cwd?: string;
-  mcpServers?: unknown[];
+  /** MCP servers to advertise to the agent for this session. */
+  mcpServers?: McpServer[];
+}
+
+export interface LoadSessionOptions {
+  /** The ACP session id previously returned by `acp.newSession(...).sessionId`. */
+  sessionId: string;
+  /** The working directory for the resumed session. Required unless the runtime has a default `cwd`. */
+  cwd?: string;
+  /** MCP servers to advertise to the agent for this session. */
+  mcpServers?: McpServer[];
 }
 
 interface ProcessMonitor {
   getStderr(): string;
   getExitSummary(): string | null;
+}
+
+interface ConnectionState {
+  process: SpawnedProcess;
+  monitor: ProcessMonitor;
+  connection: ReturnType<AcpConnectionFactory['create']>;
+  initResponse: InitializeResponse;
+  sessionsById: Map<string, RuntimeSession>;
+  sessionUpdateRouter: (notification: SessionNotification) => void;
 }
 
 export class AcpRuntime {
@@ -87,7 +112,8 @@ export class AcpRuntime {
   private readonly host: RuntimeHost;
   private readonly spawnProcess: SpawnProcess;
   private readonly connectionFactory: AcpConnectionFactory;
-  private readonly openSessions = new Set<RuntimeSession>();
+  private connectPromise: Promise<ConnectionState> | null = null;
+  private connectionState: ConnectionState | null = null;
   private shutdownStarted = false;
 
   constructor(options: RuntimeOptions) {
@@ -98,37 +124,229 @@ export class AcpRuntime {
     this.connectionFactory = options.connectionFactory || createSdkConnectionFactory();
   }
 
+  /** Information reported by the agent during `initialize`. `null` until the first session is created. */
+  get agentInfo(): Implementation | null {
+    return this.connectionState?.initResponse.agentInfo ?? null;
+  }
+
+  /** Authentication methods advertised by the agent. Empty array until the first session is created. */
+  get authMethods(): readonly AuthMethod[] {
+    return this.connectionState?.initResponse.authMethods ?? [];
+  }
+
+  /** Capabilities advertised by the agent (e.g. `loadSession`). `null` until the first session is created. */
+  get agentCapabilities(): AgentCapabilities | null {
+    return this.connectionState?.initResponse.agentCapabilities ?? null;
+  }
+
+  /** Protocol version negotiated with the agent. `null` until the first session is created. */
+  get protocolVersion(): number | null {
+    const v = this.connectionState?.initResponse.protocolVersion;
+    return typeof v === 'number' ? v : null;
+  }
+
+  /** True once the agent process has been spawned and `initialize` completed. */
+  get isReady(): boolean {
+    return this.connectionState !== null;
+  }
+
+  /**
+   * Spawn the agent process and complete the ACP `initialize` handshake. Idempotent.
+   * Most users do not need to call this directly; `newSession` / `loadSession` will call it for you.
+   */
+  async ready(): Promise<void> {
+    await this.connect();
+  }
+
   async newSession(options: NewSessionOptions = {}): Promise<RuntimeSession> {
-    if (this.shutdownStarted) {
-      throw new Error('Cannot create a new session: runtime has been shut down.');
+    const cwd = this.requireCwd(options.cwd, 'newSession');
+    const state = await this.connect();
+    const startupTimeoutMs = this.profile.startupTimeoutMs || 30000;
+
+    const sessionResponse = await withAuthRetry({
+      operation: () => withStartupDiagnostics(
+        withTimeout(
+          state.connection.newSession({
+            cwd,
+            mcpServers: options.mcpServers || [],
+          }),
+          startupTimeoutMs,
+          'ACP session/new',
+        ),
+        state.monitor,
+        this.profile,
+        'ACP session/new',
+      ),
+      authMethods: state.initResponse.authMethods || [],
+      authenticate: state.connection.authenticate?.bind(state.connection),
+      host: this.host,
+      monitor: state.monitor,
+      profile: this.profile,
+      timeoutMs: startupTimeoutMs,
+    });
+
+    const session = this.adoptSession({
+      state,
+      sessionId: sessionResponse.sessionId,
+      modes: sessionResponse.modes,
+      models: sessionResponse.models,
+      configOptions: sessionResponse.configOptions,
+    });
+
+    return session;
+  }
+
+  /**
+   * Resume a previously created ACP session by id. Requires the agent to advertise the
+   * `loadSession` capability (see `acp.agentCapabilities`).
+   */
+  async loadSession(options: LoadSessionOptions): Promise<RuntimeSession> {
+    if (!options.sessionId) {
+      throw new Error('loadSession requires a `sessionId`.');
     }
-    const cwd = options.cwd || this.cwd;
-    if (!cwd) {
+    const cwd = this.requireCwd(options.cwd, 'loadSession');
+    const state = await this.connect();
+    if (typeof state.connection.loadSession !== 'function') {
+      throw new Error('The ACP connection does not support loadSession.');
+    }
+    if (!state.initResponse.agentCapabilities?.loadSession) {
       throw new Error(
-        'newSession requires a `cwd`. Either pass `{ cwd }` to newSession or provide a default `cwd` to createAcpRuntime.',
+        `Agent "${this.profile.id}" does not advertise the loadSession capability. `
+        + 'Inspect `acp.agentCapabilities.loadSession` before calling loadSession().',
       );
     }
-    const process = this.spawnProcess(this.profile.command, this.profile.args, {
-      cwd,
+    const startupTimeoutMs = this.profile.startupTimeoutMs || 30000;
+
+    const loadResponse = await withAuthRetry({
+      operation: () => withStartupDiagnostics(
+        withTimeout(
+          (state.connection.loadSession as NonNullable<typeof state.connection.loadSession>)({
+            sessionId: options.sessionId,
+            cwd,
+            mcpServers: options.mcpServers || [],
+          }),
+          startupTimeoutMs,
+          'ACP session/load',
+        ),
+        state.monitor,
+        this.profile,
+        'ACP session/load',
+      ),
+      authMethods: state.initResponse.authMethods || [],
+      authenticate: state.connection.authenticate?.bind(state.connection),
+      host: this.host,
+      monitor: state.monitor,
+      profile: this.profile,
+      timeoutMs: startupTimeoutMs,
+    });
+
+    const session = this.adoptSession({
+      state,
+      sessionId: options.sessionId,
+      modes: loadResponse?.modes,
+      models: loadResponse?.models,
+      configOptions: loadResponse?.configOptions,
+    });
+
+    return session;
+  }
+
+  /**
+   * Dispose every session created by this runtime, then close the agent process. Idempotent.
+   * After shutdown, `newSession` and `loadSession` throw.
+   */
+  async shutdown(): Promise<void> {
+    if (this.shutdownStarted) return;
+    this.shutdownStarted = true;
+    const errors: unknown[] = [];
+
+    if (this.connectionState) {
+      const sessions = [...this.connectionState.sessionsById.values()];
+      for (const session of sessions) {
+        try {
+          await session.dispose();
+        } catch (err) {
+          errors.push(err);
+        }
+      }
+      this.connectionState.sessionsById.clear();
+      try {
+        await this.connectionState.connection.dispose?.();
+      } catch (err) {
+        errors.push(err);
+      }
+      try {
+        this.connectionState.process.kill();
+      } catch {
+        /* process may already be gone */
+      }
+      this.connectionState = null;
+    }
+    this.connectPromise = null;
+
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) {
+      throw new AggregateError(errors as Error[], `${errors.length} resources failed to dispose cleanly.`);
+    }
+  }
+
+  /** ES Explicit Resource Management: enables `await using acp = createAcpRuntime(...)`. */
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.shutdown();
+  }
+
+  private requireCwd(cwd: string | undefined, methodName: string): string {
+    if (this.shutdownStarted) {
+      throw new Error(`Cannot call ${methodName}: runtime has been shut down.`);
+    }
+    const resolved = cwd || this.cwd;
+    if (!resolved) {
+      throw new Error(
+        `${methodName} requires a \`cwd\`. Either pass \`{ cwd }\` or provide a default \`cwd\` to createAcpRuntime.`,
+      );
+    }
+    return resolved;
+  }
+
+  private async connect(): Promise<ConnectionState> {
+    if (this.shutdownStarted) {
+      throw new Error('Cannot connect: runtime has been shut down.');
+    }
+    if (this.connectionState) return this.connectionState;
+    if (!this.connectPromise) {
+      this.connectPromise = this.doConnect().catch((err) => {
+        this.connectPromise = null;
+        throw err;
+      });
+    }
+    return this.connectPromise;
+  }
+
+  private async doConnect(): Promise<ConnectionState> {
+    const sessionsById = new Map<string, RuntimeSession>();
+    const sessionUpdateRouter = (notification: SessionNotification) => {
+      const sessionId = (notification as { sessionId?: string }).sessionId;
+      if (!sessionId) return;
+      sessionsById.get(sessionId)?.handleSessionUpdate(notification);
+    };
+
+    const child = this.spawnProcess(this.profile.command, this.profile.args, {
+      cwd: this.cwd || process.cwd(),
       env: {
         ...processEnv(),
         ...this.profile.env,
       },
     });
-    const monitor = monitorProcess(process, this.host);
-
-    let updateHandler: ((notification: SessionNotification) => void) | null = null;
-    let sessionIdForCallbacks = 'pending';
+    const monitor = monitorProcess(child, this.host);
 
     const client = createClientBridge({
       host: this.host,
-      getSessionId: () => sessionIdForCallbacks,
-      onSessionUpdate: (notification) => updateHandler?.(notification),
+      onSessionUpdate: sessionUpdateRouter,
     });
 
     const connection = this.connectionFactory.create({
       client,
-      process,
+      process: child,
       profile: this.profile,
     });
 
@@ -139,7 +357,7 @@ export class AcpRuntime {
           protocolVersion: PROTOCOL_VERSION,
           clientInfo: {
             name: '@acp-kit/core',
-            version: '0.1.0',
+            version: '0.1.3',
           },
           clientCapabilities: {
             fs: {
@@ -163,134 +381,91 @@ export class AcpRuntime {
       'ACP initialize',
     );
 
-    const sessionResponse = await this.createSessionWithAuthRetry({
+    const state: ConnectionState = {
+      process: child,
+      monitor,
       connection,
       initResponse,
-      cwd,
-      mcpServers: options.mcpServers || [],
-      timeoutMs: startupTimeoutMs,
-      monitor,
-    });
+      sessionsById,
+      sessionUpdateRouter,
+    };
+    this.connectionState = state;
+    return state;
+  }
 
-    sessionIdForCallbacks = sessionResponse.sessionId;
+  private adoptSession(params: {
+    state: ConnectionState;
+    sessionId: string;
+    modes: unknown;
+    models: unknown;
+    configOptions: unknown;
+  }): RuntimeSession {
     const initialEvents = createInitialSessionEvents({
-      sessionId: sessionResponse.sessionId,
-      configOptions: Array.isArray(sessionResponse.configOptions) ? sessionResponse.configOptions as never : undefined,
-      modes: looksLikeModeState(sessionResponse.modes) ? sessionResponse.modes : undefined,
-      models: looksLikeModelState(sessionResponse.models) ? sessionResponse.models : undefined,
+      sessionId: params.sessionId,
+      configOptions: Array.isArray(params.configOptions) ? params.configOptions as never : undefined,
+      modes: looksLikeModeState(params.modes) ? params.modes : undefined,
+      models: looksLikeModelState(params.models) ? params.models : undefined,
     });
 
     const session = new RuntimeSession({
-      sessionId: sessionResponse.sessionId,
+      sessionId: params.sessionId,
       profile: this.profile,
       host: this.host,
-      connection,
+      connection: params.state.connection,
       initialEvents,
     });
-    updateHandler = (notification) => {
-      session.handleSessionUpdate(notification);
-    };
 
-    this.openSessions.add(session);
+    params.state.sessionsById.set(params.sessionId, session);
     const originalDispose = session.dispose.bind(session);
     session.dispose = async () => {
       try {
         await originalDispose();
       } finally {
-        this.openSessions.delete(session);
+        params.state.sessionsById.delete(params.sessionId);
       }
     };
 
     return session;
   }
+}
 
-  /**
-   * Dispose every session created by this runtime. After shutdown, `newSession()` throws.
-   * Idempotent.
-   */
-  async shutdown(): Promise<void> {
-    if (this.shutdownStarted) return;
-    this.shutdownStarted = true;
-    const errors: unknown[] = [];
-    for (const session of [...this.openSessions]) {
-      try {
-        await session.dispose();
-      } catch (err) {
-        errors.push(err);
-      }
+interface AuthRetryParams<T> {
+  operation: () => Promise<T>;
+  authMethods: readonly AuthMethod[];
+  authenticate: ((params: { methodId: string }) => Promise<unknown>) | undefined;
+  host: RuntimeHost;
+  monitor: ProcessMonitor;
+  profile: AgentProfile;
+  timeoutMs: number;
+}
+
+/** Run `operation`; if it fails with `auth_required`, run the chosen auth method, then retry once. */
+async function withAuthRetry<T>(params: AuthRetryParams<T>): Promise<T> {
+  try {
+    return await params.operation();
+  } catch (error) {
+    if (!isAuthRequiredError(error)) throw error;
+
+    const methodId = await chooseAuthMethod(params.host, [...params.authMethods]);
+    if (!methodId) {
+      throw new Error('Authentication was required but no auth method was selected.');
     }
-    this.openSessions.clear();
-    if (errors.length === 1) throw errors[0];
-    if (errors.length > 1) {
-      throw new AggregateError(errors as Error[], `${errors.length} sessions failed to dispose cleanly.`);
+    if (typeof params.authenticate !== 'function') {
+      throw new Error('Authentication is required, but the ACP connection does not support authenticate().');
     }
-  }
 
-  /** ES Explicit Resource Management: enables `await using acp = createAcpRuntime(...)`. */
-  async [Symbol.asyncDispose](): Promise<void> {
-    await this.shutdown();
-  }
-
-  private async createSessionWithAuthRetry(params: {
-    connection: AcpConnectionFactory['create'] extends (...args: never[]) => infer T ? T : never;
-    initResponse: InitializeResponse;
-    cwd: string;
-    mcpServers: unknown[];
-    timeoutMs: number;
-    monitor: ProcessMonitor;
-  }) {
-    try {
-      return await withStartupDiagnostics(
-        withTimeout(
-          params.connection.newSession({
-            cwd: params.cwd,
-            mcpServers: params.mcpServers,
-          }),
-          params.timeoutMs,
-          'ACP session/new',
-        ),
-        params.monitor,
-        this.profile,
-        'ACP session/new',
-      );
-    } catch (error) {
-      if (!isAuthRequiredError(error)) {
-        throw error;
-      }
-
-      const methodId = await chooseAuthMethod(this.host, params.initResponse.authMethods || []);
-      if (!methodId) {
-        throw new Error('Authentication was required but no auth method was selected.');
-      }
-      if (typeof params.connection.authenticate !== 'function') {
-        throw new Error('Authentication is required, but the ACP connection does not support authenticate().');
-      }
-
-      await withStartupDiagnostics(
-        withTimeout(
-          params.connection.authenticate({ methodId }),
-          params.timeoutMs,
-          'ACP authenticate',
-        ),
-        params.monitor,
-        this.profile,
+    await withStartupDiagnostics(
+      withTimeout(
+        params.authenticate({ methodId }),
+        params.timeoutMs,
         'ACP authenticate',
-      );
+      ),
+      params.monitor,
+      params.profile,
+      'ACP authenticate',
+    );
 
-      return withStartupDiagnostics(
-        withTimeout(
-          params.connection.newSession({
-            cwd: params.cwd,
-            mcpServers: params.mcpServers,
-          }),
-          params.timeoutMs,
-          'ACP session/new (after auth)',
-        ),
-        params.monitor,
-        this.profile,
-        'ACP session/new (after auth)',
-      );
-    }
+    return params.operation();
   }
 }
 
@@ -484,14 +659,17 @@ function resolveLaunch(command: string, args: string[]) {
 
 function createClientBridge(params: {
   host: RuntimeHost;
-  getSessionId: () => string;
   onSessionUpdate: (notification: SessionNotification) => void;
 }): Client {
   return {
     sessionUpdate: async (notification) => {
       params.onSessionUpdate(notification);
     },
-    requestPermission: async (request) => handlePermissionRequest(params.host, params.getSessionId(), request),
+    requestPermission: async (request) => handlePermissionRequest(
+      params.host,
+      (request as { sessionId?: string }).sessionId || '',
+      request,
+    ),
     readTextFile: async (request) => delegateOrThrow(params.host.readTextFile, request, 'readTextFile'),
     writeTextFile: async (request) => delegateOrThrow(params.host.writeTextFile, request, 'writeTextFile'),
     createTerminal: async (request) => delegateOrThrow(params.host.createTerminal, request, 'createTerminal'),

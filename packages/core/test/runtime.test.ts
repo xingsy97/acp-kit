@@ -267,6 +267,163 @@ describe('AcpRuntime', () => {
 
     await expect(runtime.newSession()).rejects.toThrow(/requires a `cwd`/);
   });
+
+  it('shares one agent process across multiple sessions and exposes initialize metadata', async () => {
+    const initialize = vi.fn().mockResolvedValue({
+      protocolVersion: 1,
+      agentInfo: { name: 'fake-agent', version: '9.9.9' },
+      authMethods: [{ id: 'device', name: 'Device' }],
+      agentCapabilities: { loadSession: true, promptCapabilities: {} },
+    });
+    const newSession = vi
+      .fn()
+      .mockResolvedValueOnce({ sessionId: 's-1' })
+      .mockResolvedValueOnce({ sessionId: 's-2' });
+
+    const connectionFactory: AcpConnectionFactory = {
+      create() {
+        return {
+          initialize,
+          newSession,
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+        } as never;
+      },
+    };
+
+    const spawn = vi.fn(createFakeSpawn());
+    const runtime = createAcpRuntime({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess: spawn,
+      connectionFactory,
+    });
+
+    expect(runtime.isReady).toBe(false);
+    const a = await runtime.newSession();
+    const b = await runtime.newSession();
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(initialize).toHaveBeenCalledTimes(1);
+    expect(a.sessionId).toBe('s-1');
+    expect(b.sessionId).toBe('s-2');
+    expect(runtime.isReady).toBe(true);
+    expect(runtime.agentInfo?.name).toBe('fake-agent');
+    expect(runtime.protocolVersion).toBe(1);
+    expect(runtime.agentCapabilities?.loadSession).toBe(true);
+    expect(runtime.authMethods).toHaveLength(1);
+
+    await runtime.shutdown();
+  });
+
+  it('routes session/update notifications to the matching session by sessionId', async () => {
+    let capturedClient: { sessionUpdate(notification: unknown): Promise<void> } | null = null;
+    const connectionFactory: AcpConnectionFactory = {
+      create({ client }) {
+        capturedClient = client as typeof capturedClient;
+        return {
+          initialize: async () => ({ authMethods: [] }),
+          newSession: vi
+            .fn()
+            .mockResolvedValueOnce({ sessionId: 'session-A' })
+            .mockResolvedValueOnce({ sessionId: 'session-B' }),
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+        } as never;
+      },
+    };
+
+    const runtime = createAcpRuntime({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+
+    const a = await runtime.newSession();
+    const b = await runtime.newSession();
+
+    const seenA: unknown[] = [];
+    const seenB: unknown[] = [];
+    a.onRawNotification((n) => seenA.push(n));
+    b.onRawNotification((n) => seenB.push(n));
+
+    await capturedClient?.sessionUpdate({
+      sessionId: 'session-A',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'for A' } },
+    });
+    await capturedClient?.sessionUpdate({
+      sessionId: 'session-B',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'for B' } },
+    });
+
+    expect(seenA).toHaveLength(1);
+    expect(seenB).toHaveLength(1);
+
+    await runtime.shutdown();
+  });
+
+  it('loadSession resumes a session through connection.loadSession', async () => {
+    const loadSession = vi.fn().mockResolvedValue({ modes: undefined, models: undefined });
+    const connectionFactory: AcpConnectionFactory = {
+      create() {
+        return {
+          initialize: async () => ({
+            authMethods: [],
+            agentCapabilities: { loadSession: true, promptCapabilities: {} },
+          }),
+          newSession: async () => ({ sessionId: 'unused' }),
+          loadSession,
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+        } as never;
+      },
+    };
+
+    const runtime = createAcpRuntime({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+
+    const session = await runtime.loadSession({ sessionId: 'resumed-1' });
+    expect(session.sessionId).toBe('resumed-1');
+    expect(loadSession).toHaveBeenCalledWith({
+      sessionId: 'resumed-1',
+      cwd: 'C:/repo',
+      mcpServers: [],
+    });
+
+    await runtime.shutdown();
+  });
+
+  it('loadSession throws when the agent does not advertise loadSession capability', async () => {
+    const connectionFactory: AcpConnectionFactory = {
+      create() {
+        return {
+          initialize: async () => ({ authMethods: [], agentCapabilities: { promptCapabilities: {} } }),
+          newSession: async () => ({ sessionId: 'unused' }),
+          loadSession: async () => undefined,
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+        } as never;
+      },
+    };
+
+    const runtime = createAcpRuntime({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+
+    await expect(runtime.loadSession({ sessionId: 'x' })).rejects.toThrow(/loadSession capability/);
+  });
 });
 
 describe('runAcpAgent', () => {

@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per the SemVer 0.x convention). Patch versions remain backward compatible.
 
+## [0.1.3] - 2026-04-23
+
+Patch release. No breaking changes — existing `createAcpRuntime` / `runAcpAgent` / `session.prompt(...)` code keeps working unchanged.
+
+This release makes `AcpRuntime` actually behave the way the README promised: **one runtime owns one agent subprocess, and that subprocess hosts as many ACP sessions as you create**. Previously, every call to `acp.newSession(...)` spawned a fresh process and ran a full `initialize` handshake. Now `initialize` happens once on the first `newSession` / `loadSession` / `ready()` call, and every subsequent session reuses the same connection.
+
+### Added
+
+- `acp.loadSession({ sessionId, cwd?, mcpServers? })` — resume a previously created ACP session by id. Throws if the agent does not advertise the `loadSession` capability.
+- `acp.ready()` — explicitly spawn the agent process and complete `initialize` without creating a session yet. Useful for warming up or for inspecting `agentInfo` / `authMethods` before deciding what to do.
+- `acp.isReady` — boolean getter, `true` once the agent has been initialized.
+- `acp.agentInfo`, `acp.authMethods`, `acp.agentCapabilities`, `acp.protocolVersion` — agent metadata returned by `initialize`. `null` / empty until the runtime has connected.
+- `NewSessionOptions.mcpServers?: McpServer[]` and `LoadSessionOptions.mcpServers?: McpServer[]` — properly typed (was `unknown[]`). Forwarded to ACP `session/new` and `session/load` respectively.
+- `AcpConnectionFactory.create(...).loadSession?(...)` — optional capability used by `acp.loadSession`.
+
+### Changed (non-breaking)
+
+- One agent subprocess per `AcpRuntime` (was: one per session). `acp.shutdown()` still tears everything down the same way; `session.dispose()` no longer closes the underlying process — the runtime owns its lifecycle.
+- The `auth_required` retry path is now a shared internal helper used by both `newSession` and `loadSession`.
+- ACP `session/update` notifications are now routed to the matching session via the notification's own `sessionId`, instead of being assumed to belong to a single session.
+
+### Tests
+
+- Added coverage for: shared-process behavior across multiple sessions, `agentInfo` / `authMethods` / `agentCapabilities` exposure, `session/update` routing across two concurrent sessions, `loadSession` happy path, and the `loadSession` capability check.
+
 ## [0.1.2] - 2026-04-22
 
 This release reshapes the public API around two ergonomic entry points and aligns the streaming surface with raw ACP. `createRuntime` from 0.1.x stays exported as an alias for `createAcpRuntime`; everything else listed under "breaking" below is a hard change.

@@ -15,27 +15,27 @@ npm install @acp-kit/core
 
 ## First session
 
-For a one-shot prompt, use `runOneShotPrompt` (yields **raw** ACP notifications):
+For a one-shot prompt, use `runOneShotPrompt` (yields normalized `RuntimeSessionEvent`s):
 
 ```ts
-import { runOneShotPrompt, onRawSessionUpdate } from '@acp-kit/core';
+import { runOneShotPrompt, onRuntimeEvent } from '@acp-kit/core';
 
-for await (const n of runOneShotPrompt({
+for await (const event of runOneShotPrompt({
   profile: 'copilot',
   cwd: process.cwd(),
   prompt: 'Explain what this repository does.',
 })) {
-  onRawSessionUpdate(n.update, {
-    agentMessageChunk: (u) => process.stdout.write(u.content.text ?? ''),
+  onRuntimeEvent(event, {
+    messageDelta: (e) => process.stdout.write(e.delta),
   });
 }
 ```
 
-For multi-session apps, use `createAcpRuntime` with `await using` and the
-**normalized** event surface:
+For multi-session apps, use `createAcpRuntime` with `await using` and pass a
+handler map directly to `session.on(...)`:
 
 ```ts
-import { createAcpRuntime, onRuntimeEvent } from '@acp-kit/core';
+import { createAcpRuntime } from '@acp-kit/core';
 
 await using acp = createAcpRuntime({
   profile: 'copilot',
@@ -44,11 +44,11 @@ await using acp = createAcpRuntime({
 
 await using session = await acp.newSession({ cwd: process.cwd() });
 
-session.on('event', (event) => onRuntimeEvent(event, {
+session.on({
   messageDelta: (e) => process.stdout.write(e.delta),
   toolStart:    (e) => console.log(`\n[tool ${e.toolCallId}] ${e.title ?? e.name}`),
   toolEnd:      (e) => console.log(`[tool ${e.toolCallId}] ${e.status}`),
-}));
+});
 
 await session.prompt('Explain what this repository does.');
 ```

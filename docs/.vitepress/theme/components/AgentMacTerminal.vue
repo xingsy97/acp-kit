@@ -57,16 +57,16 @@ const v = (s: string) => `<span class="tk-var">${s}</span>`;
 const p = (s: string) => `<span class="tk-prop">${s}</span>`;
 
 const eventLoop = (indent: string) =>
-  `${indent}${fn('onSessionUpdate')}(${v('n')}.${p('update')}, {
-${indent}  ${p('agentMessageChunk')}: (${v('u')}) =&gt; ${v('process')}.${p('stdout')}.${fn('write')}(${v('u')}.${p('content')}.${p('text')}),
-${indent}  ${p('toolCall')}:          (${v('u')}) =&gt; ${v('console')}.${fn('log')}(${str('→ tool')}, ${v('u')}.${p('title')}),
-${indent}  ${p('toolCallUpdate')}:    (${v('u')}) =&gt; ${v('console')}.${fn('log')}(${str('  status')}, ${v('u')}.${p('status')}),
+  `${indent}${fn('onRuntimeEvent')}(${v('event')}, {
+${indent}  ${p('messageDelta')}: (${v('e')}) =&gt; ${v('process')}.${p('stdout')}.${fn('write')}(${v('e')}.${p('delta')}),
+${indent}  ${p('toolStart')}:    (${v('e')}) =&gt; ${v('console')}.${fn('log')}(${str('→ tool')}, ${v('e')}.${p('title')}),
+${indent}  ${p('toolEnd')}:      (${v('e')}) =&gt; ${v('console')}.${fn('log')}(${str('  status')}, ${v('e')}.${p('status')}),
 ${indent}});`;
 
 const quickCode = computed(() =>
-  `${kw('import')} { ${fn('runOneShotPrompt')}, ${fn('onSessionUpdate')} } ${kw('from')} ${str('@acp-kit/core')};
+  `${kw('import')} { ${fn('runOneShotPrompt')}, ${fn('onRuntimeEvent')} } ${kw('from')} ${str('@acp-kit/core')};
 
-${kw('for await')} (${kw('const')} ${v('n')} ${kw('of')} ${fn('runOneShotPrompt')}({
+${kw('for await')} (${kw('const')} ${v('event')} ${kw('of')} ${fn('runOneShotPrompt')}({
   ${p('profile')}: ${str(selected.value.id)},
   ${p('cwd')}:     ${v('process')}.${fn('cwd')}(),
   ${p('prompt')}:  ${str(selected.value.prompt)}
@@ -76,7 +76,7 @@ ${eventLoop('  ')}
 );
 
 const advancedCode = computed(() =>
-  `${kw('import')} { ${fn('createAcpRuntime')}, ${fn('onSessionUpdate')} } ${kw('from')} ${str('@acp-kit/core')};
+  `${kw('import')} { ${fn('createAcpRuntime')} } ${kw('from')} ${str('@acp-kit/core')};
 
 <span class="tk-comment">// One agent process, many sessions — reuse spawn cost.</span>
 ${kw('await using')} ${v('acp')} = ${fn('createAcpRuntime')}({
@@ -87,10 +87,12 @@ ${kw('await using')} ${v('acp')} = ${fn('createAcpRuntime')}({
 ${kw('await using')} ${v('s1')} = ${kw('await')} ${v('acp')}.${fn('newSession')}({ ${p('cwd')}: ${v('process')}.${fn('cwd')}() });
 ${kw('await using')} ${v('s2')} = ${kw('await')} ${v('acp')}.${fn('newSession')}({ ${p('cwd')}: ${str('./packages/server')} });
 
-${kw('for await')} (${kw('const')} ${v('n')} ${kw('of')} ${v('s1')}.${fn('prompt')}(${str(selected.value.prompt)})) {
-${eventLoop('  ')}
-}
+${v('s1')}.${fn('on')}({
+  ${p('messageDelta')}: (${v('e')}) =&gt; ${v('process')}.${p('stdout')}.${fn('write')}(${v('e')}.${p('delta')}),
+  ${p('toolStart')}:    (${v('e')}) =&gt; ${v('console')}.${fn('log')}(${str('→ tool')}, ${v('e')}.${p('title')}),
+});
 
+${kw('await')} ${v('s1')}.${fn('prompt')}(${str(selected.value.prompt)});
 ${kw('await')} ${v('s2')}.${fn('prompt')}(${str('Cross-check the changes against existing tests.')});`
 );
 

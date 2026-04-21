@@ -40,6 +40,6 @@ hero:
 ## Examples
 
 - [quick-start](https://github.com/xingsy97/acp-kit/tree/main/examples/quick-start)
-- [advanced-multi-session](https://github.com/xingsy97/acp-kit/tree/main/examples/advanced-multi-session)
+- [pair-programming](https://github.com/xingsy97/acp-kit/tree/main/examples/pair-programming)
 - [mock-runtime](https://github.com/xingsy97/acp-kit/tree/main/examples/mock-runtime)
 - [real-agent-cli](https://github.com/xingsy97/acp-kit/tree/main/examples/real-agent-cli)

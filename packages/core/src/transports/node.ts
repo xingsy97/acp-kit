@@ -99,22 +99,26 @@ export function nodeChildProcessTransport(
         process: child,
         profile,
         host,
-      });
+      }) as AcpTransportConnection;
 
-      const connection: AcpTransportConnection = {
-        ...baseConnection,
-        async dispose() {
+      // NB: do NOT spread `baseConnection` &mdash; it is a class instance
+      // (`ClientSideConnection`) whose methods live on the prototype, so a
+      // spread silently strips `initialize` / `prompt` / etc. Wrap `dispose`
+      // by assigning onto the instance instead.
+      const originalDispose = (baseConnection as { dispose?: () => Promise<void> }).dispose
+        ?.bind(baseConnection);
+      (baseConnection as { dispose: () => Promise<void> }).dispose = async () => {
+        try {
+          await originalDispose?.();
+        } finally {
           try {
-            await baseConnection.dispose?.();
-          } finally {
-            try {
-              child.kill();
-            } catch {
-              /* process may already be gone */
-            }
+            child.kill();
+          } catch {
+            /* process may already be gone */
           }
-        },
+        }
       };
+      const connection = baseConnection;
 
       const session: AcpTransportSession = {
         connection,

@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per the SemVer 0.x convention). Patch versions remain backward compatible.
 
+## [0.2.0] - 2026-04-21
+
+Minor release with **breaking changes** (allowed in 0.x). The dual normalized / raw event surface is collapsed into a single normalized track, and the helper is reshaped into an idiomatic handler-map dispatch.
+
+### Changed (breaking)
+
+- **Removed the raw session-update track.** `session.onRawNotification`, `session.events()`, `onRawSessionUpdate`, `SessionUpdateKind`, and `packages/core/src/session-update.ts` are gone. All consumers now go through the normalized `RuntimeSessionEvent` stream (`message.delta`, `tool.start` / `tool.update` / `tool.end`, `turn.completed`, ...). For unfiltered raw access, attach a wire middleware via `createAcpRuntime({ wireMiddleware })`.
+- **`session.prompt(text)` returns `Promise<PromptResult>` only.** It no longer doubles as an `AsyncIterable` of `PromptHandle` notifications. Subscribe to events via `session.on(...)` *before* calling `prompt(...)`.
+- **Added `session.on(handlers)` overload** that takes a camelCase handler map (`{ messageDelta, toolStart, toolEnd, turnCompleted, ... }`) covering every `RuntimeSessionEvent`. The single-event-type and `'event'` overloads remain.
+- **`runOneShotPrompt(...)` now yields normalized `RuntimeSessionEvent`s** instead of raw `PromptHandle` notifications. Same name, same one-shot lifecycle, new payload type.
+- **Fixed prototype-strip bug in `transports/node.ts`.** The default node transport was spreading the underlying `ClientSideConnection` into a new object, which silently dropped class-prototype methods like `initialize` and `prompt`. The transport now mutates `dispose` in place to keep the original instance intact.
+
+### Examples
+
+- New **`examples/pair-programming/`** &mdash; two ACP agents (AUTHOR + REVIEWER) collaborating on the same `cwd` until the reviewer says `APPROVED`. Demonstrates per-role profile + model + prompt settings, parallel agent launch, and handler-map event dispatch.
+- Removed `examples/advanced-multi-session/` (superseded by `pair-programming/`, which is a stronger multi-session demo).
+- `examples/quick-start/` and all docs migrated to `runOneShotPrompt` + `session.on({ ... })` handler-map style.
+
 ## [0.1.4] - 2026-04-23
 
 Patch release. Naming-only change: the one-shot helper is renamed to better describe what it does.

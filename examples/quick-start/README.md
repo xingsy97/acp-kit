@@ -1,11 +1,11 @@
 # Quick Start
 
-The minimum code needed to run a single ACP prompt through ACP Kit. Uses the one-shot `runOneShotPrompt` helper, which spawns the agent, runs one prompt, streams raw ACP `session/update` notifications, and disposes everything when iteration completes.
+The minimum code needed to run a single ACP prompt through ACP Kit. Uses the one-shot `runOneShotPrompt` helper, which spawns the agent, runs one prompt, streams normalized session events, and disposes everything when iteration completes.
 
 ## What it shows
 
-- Call `runOneShotPrompt({ profile, cwd, prompt })` and iterate the returned async iterable.
-- Use `onRawSessionUpdate(notification.update, { ... })` to dispatch the raw ACP `session/update` variants by camelCase name &mdash; no string literals, full type narrowing per handler.
+- Call `runOneShotPrompt({ profile, cwd, prompt })` and iterate the returned async iterable of `RuntimeSessionEvent`s.
+- Use `onRuntimeEvent(event, { ... })` to dispatch by camelCase name (`messageDelta`, `toolStart`, ...) &mdash; no string literals, full type narrowing per handler.
 - No manual `dispose` / `shutdown` needed.
 
 ## Run
@@ -20,8 +20,7 @@ npm start -- copilot "Summarize this"    # custom profile + prompt
 
 ## When to graduate to `createAcpRuntime`
 
-Use [`../advanced-multi-session/`](../advanced-multi-session/) once you need:
+Use [`../pair-programming/`](../pair-programming/) once you need:
 
 - More than one prompt per agent process,
 - Multiple sessions with different working directories,
-- Or explicit lifecycle control via `await using`.

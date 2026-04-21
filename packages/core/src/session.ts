@@ -13,6 +13,7 @@ import {
   type SessionModelsUpdatedEvent,
   type TranscriptState,
 } from './session-data.js';
+import { onRuntimeEvent, type RuntimeEventHandlers } from './runtime-event.js';
 
 import type { RuntimeHost } from './host.js';
 import type { AgentProfile } from './profiles.js';
@@ -86,18 +87,7 @@ export interface PromptResult {
   stopReason: string | null;
 }
 
-/**
- * Returned by `session.prompt(text)`. It is both:
- *   - awaitable: `await session.prompt("...")` resolves to `PromptResult` when the turn ends.
- *   - async-iterable: `for await (const ev of session.prompt("..."))` yields raw
- *     ACP `SessionNotification`s scoped to this turn (use `ev.sessionUpdate` discriminator).
- *
- * Iteration completes naturally when the turn finishes; if the turn fails, iteration throws.
- */
-export interface PromptHandle extends Promise<PromptResult>, AsyncIterable<SessionNotification> {}
-
 type Listener = (event: RuntimeSessionEvent) => void;
-type RawListener = (notification: SessionNotification) => void;
 
 interface RuntimeSessionOptions {
   sessionId: string;
@@ -114,7 +104,6 @@ export class RuntimeSession {
   private readonly host: RuntimeHost;
   private readonly connection: AcpConnectionLike;
   private readonly listeners = new Map<string, Set<Listener>>();
-  private readonly rawListeners = new Set<RawListener>();
   private readonly transcript = createTranscriptState();
 
   private status: SessionStatus = 'idle';
@@ -135,21 +124,47 @@ export class RuntimeSession {
   }
 
   /**
-   * Subscribe to a specific normalized event type. The listener parameter is
-   * narrowed to the matching event variant (e.g. `'tool.start'` →
-   * `ToolStartEvent`), so fields like `e.toolCallId` / `e.delta` are typed.
+   * Subscribe to events using a per-variant handler map. Handlers are keyed by
+   * the camelCase form of the event type (`message.delta` → `messageDelta`,
+   * `tool.start` → `toolStart`, `turn.completed` → `turnCompleted`, ...).
+   * Each handler receives the matching event variant with full type narrowing.
+   *
+   * ```ts
+   * session.on({
+   *   messageDelta:  (e) => process.stdout.write(e.delta),
+   *   toolStart:     (e) => console.log(`[${e.toolCallId}] ${e.title}`),
+   *   turnCompleted: (e) => console.log(`done: ${e.stopReason}`),
+   * });
+   * ```
+   */
+  on(handlers: RuntimeEventHandlers<RuntimeSessionEvent>): () => void;
+  /**
+   * Subscribe to a specific event type. The listener parameter is narrowed to
+   * the matching event variant (e.g. `'tool.start'` → `ToolStartEvent`), so
+   * fields like `e.toolCallId` / `e.delta` are typed.
    */
   on<K extends RuntimeSessionEvent['type']>(
     type: K,
     listener: (event: Extract<RuntimeSessionEvent, { type: K }>) => void,
   ): () => void;
   /**
-   * Subscribe to every normalized event. The listener receives the full
-   * `RuntimeSessionEvent` union; use `onRuntimeEvent(event, { ... })` or a
-   * `switch (event.type)` for per-variant dispatch.
+   * Subscribe to every event with the full `RuntimeSessionEvent` union.
    */
   on(type: 'event', listener: (event: RuntimeSessionEvent) => void): () => void;
-  on(type: RuntimeSessionEvent['type'] | 'event', listener: Listener): () => void {
+  on(
+    typeOrHandlers: RuntimeSessionEvent['type'] | 'event' | RuntimeEventHandlers<RuntimeSessionEvent>,
+    listener?: Listener,
+  ): () => void {
+    if (typeof typeOrHandlers === 'object' && typeOrHandlers !== null) {
+      const handlers = typeOrHandlers;
+      return this.subscribe('event', (event) => {
+        onRuntimeEvent(event, handlers);
+      });
+    }
+    return this.subscribe(typeOrHandlers, listener as Listener);
+  }
+
+  private subscribe(type: string, listener: Listener): () => void {
     const listeners = this.listeners.get(type) || new Set<Listener>();
     listeners.add(listener);
     this.listeners.set(type, listeners);
@@ -161,110 +176,11 @@ export class RuntimeSession {
     };
   }
 
-  /**
-   * Subscribe to raw ACP `session/update` notifications for this session.
-   * Returns an unsubscribe function. Use `events()` for an async-iterable form.
-   */
-  onRawNotification(listener: RawListener): () => void {
-    this.rawListeners.add(listener);
-    return () => {
-      this.rawListeners.delete(listener);
-    };
-  }
-
-  /**
-   * Async iterable of raw ACP `session/update` notifications until the session is disposed.
-   */
-  events(): AsyncIterableIterator<SessionNotification> {
-    return createNotificationStream(this, () => this.status === 'disposed');
-  }
-
   getSnapshot(): TranscriptState {
     return cloneTranscriptState(this.transcript);
   }
 
-  prompt(text: string): PromptHandle {
-    return createPromptHandle(this, text);
-  }
-
-  async cancel(): Promise<void> {
-    if (!this.currentTurnId) {
-      return;
-    }
-    this.cancelling = true;
-    this.setStatus('cancelling');
-    await this.connection.cancel({ sessionId: this.sessionId });
-  }
-
-  /**
-   * Switch the active mode for this session via ACP `session/set_mode`. Throws
-   * if the connected agent does not implement the request.
-   */
-  async setMode(modeId: string): Promise<void> {
-    if (this.status === 'disposed') {
-      throw new Error('Session has already been disposed.');
-    }
-    if (typeof this.connection.setSessionMode !== 'function') {
-      throw new Error('The ACP connection does not support session/set_mode.');
-    }
-    await this.connection.setSessionMode({ sessionId: this.sessionId, modeId });
-  }
-
-  /**
-   * Switch the active model for this session via ACP `session/set_model`
-   * (currently exposed by the SDK as `unstable_setSessionModel`). Throws if
-   * the connected agent does not implement the request.
-   */
-  async setModel(modelId: string): Promise<void> {
-    if (this.status === 'disposed') {
-      throw new Error('Session has already been disposed.');
-    }
-    if (typeof this.connection.unstable_setSessionModel !== 'function') {
-      throw new Error('The ACP connection does not support session/set_model.');
-    }
-    await this.connection.unstable_setSessionModel({ sessionId: this.sessionId, modelId });
-  }
-
-  async dispose(): Promise<void> {
-    if (this.status === 'disposed') {
-      return;
-    }
-    // Note: connection lifecycle is owned by AcpRuntime (one process per runtime,
-    // many sessions per process). Disposing a session releases its slot in the
-    // runtime's session router but does not close the underlying ACP connection.
-    this.resetTurnState();
-    this.setStatus('disposed');
-    this.rawListeners.clear();
-  }
-
-  /** ES Explicit Resource Management: enables `await using session = await acp.newSession(...)`. */
-  async [Symbol.asyncDispose](): Promise<void> {
-    await this.dispose();
-  }
-
-  handleSessionUpdate(notification: SessionNotification): void {
-    for (const listener of this.rawListeners) {
-      try {
-        listener(notification);
-      } catch {
-        /* raw listener errors must not break normalization */
-      }
-    }
-    const turnId = this.currentTurnId || undefined;
-    const events = normalizeAcpUpdate(notification, {
-      sessionId: this.sessionId,
-      turnId,
-      messageId: this.ensureMessageId(),
-      reasoningId: this.ensureReasoningId(),
-    });
-
-    for (const event of events) {
-      this.emitRuntimeEvent(event);
-    }
-  }
-
-  /** @internal Used by `prompt()` PromptHandle to drive the underlying connection. */
-  async _runPromptTurn(text: string): Promise<PromptResult> {
+  async prompt(text: string): Promise<PromptResult> {
     if (this.status === 'disposed') {
       throw new Error('Session has already been disposed.');
     }
@@ -333,6 +249,76 @@ export class RuntimeSession {
     }
   }
 
+  async cancel(): Promise<void> {
+    if (!this.currentTurnId) {
+      return;
+    }
+    this.cancelling = true;
+    this.setStatus('cancelling');
+    await this.connection.cancel({ sessionId: this.sessionId });
+  }
+
+  /**
+   * Switch the active mode for this session via ACP `session/set_mode`. Throws
+   * if the connected agent does not implement the request.
+   */
+  async setMode(modeId: string): Promise<void> {
+    if (this.status === 'disposed') {
+      throw new Error('Session has already been disposed.');
+    }
+    if (typeof this.connection.setSessionMode !== 'function') {
+      throw new Error('The ACP connection does not support session/set_mode.');
+    }
+    await this.connection.setSessionMode({ sessionId: this.sessionId, modeId });
+  }
+
+  /**
+   * Switch the active model for this session via ACP `session/set_model`
+   * (currently exposed by the SDK as `unstable_setSessionModel`). Throws if
+   * the connected agent does not implement the request.
+   */
+  async setModel(modelId: string): Promise<void> {
+    if (this.status === 'disposed') {
+      throw new Error('Session has already been disposed.');
+    }
+    if (typeof this.connection.unstable_setSessionModel !== 'function') {
+      throw new Error('The ACP connection does not support session/set_model.');
+    }
+    await this.connection.unstable_setSessionModel({ sessionId: this.sessionId, modelId });
+  }
+
+  async dispose(): Promise<void> {
+    if (this.status === 'disposed') {
+      return;
+    }
+    // Note: connection lifecycle is owned by AcpRuntime (one process per runtime,
+    // many sessions per process). Disposing a session releases its slot in the
+    // runtime's session router but does not close the underlying ACP connection.
+    this.resetTurnState();
+    this.setStatus('disposed');
+    this.listeners.clear();
+  }
+
+  /** ES Explicit Resource Management: enables `await using session = await acp.newSession(...)`. */
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.dispose();
+  }
+
+  /** @internal Called by the runtime to deliver an incoming ACP `session/update`. */
+  handleSessionUpdate(notification: SessionNotification): void {
+    const turnId = this.currentTurnId || undefined;
+    const events = normalizeAcpUpdate(notification, {
+      sessionId: this.sessionId,
+      turnId,
+      messageId: this.ensureMessageId(),
+      reasoningId: this.ensureReasoningId(),
+    });
+
+    for (const event of events) {
+      this.emitRuntimeEvent(event);
+    }
+  }
+
   hydrateInitialState(initialEvents: RuntimeEvent[]): void {
     for (const event of initialEvents) {
       applyRuntimeEvent(this.transcript, event);
@@ -397,141 +383,6 @@ export class RuntimeSession {
       previousStatus,
     });
   }
-}
-
-/* ------------------------------------------------------------------------- */
-/* PromptHandle and event-stream helpers                                     */
-/* ------------------------------------------------------------------------- */
-
-function createPromptHandle(session: RuntimeSession, text: string): PromptHandle {
-  let promptStarted = false;
-  const queue: SessionNotification[] = [];
-  const waiters: Array<(value: IteratorResult<SessionNotification>) => void> = [];
-  let done = false;
-  let error: unknown = null;
-
-  const unsubscribe = session.onRawNotification((notification) => {
-    if (done) return;
-    const waiter = waiters.shift();
-    if (waiter) {
-      waiter({ value: notification, done: false });
-    } else {
-      queue.push(notification);
-    }
-  });
-
-  const startPrompt = (): Promise<PromptResult> => {
-    if (!promptStarted) {
-      promptStarted = true;
-    }
-    return session._runPromptTurn(text);
-  };
-
-  const promise: Promise<PromptResult> = startPrompt().then(
-    (result) => {
-      done = true;
-      unsubscribe();
-      while (waiters.length) {
-        const waiter = waiters.shift();
-        waiter?.({ value: undefined as unknown as SessionNotification, done: true });
-      }
-      return result;
-    },
-    (err) => {
-      done = true;
-      error = err;
-      unsubscribe();
-      while (waiters.length) {
-        const waiter = waiters.shift();
-        waiter?.({ value: undefined as unknown as SessionNotification, done: true });
-      }
-      throw err;
-    },
-  );
-
-  const iterator: AsyncIterator<SessionNotification> = {
-    next() {
-      if (queue.length > 0) {
-        const value = queue.shift() as SessionNotification;
-        return Promise.resolve({ value, done: false });
-      }
-      if (done) {
-        if (error) {
-          return Promise.reject(error);
-        }
-        return Promise.resolve({ value: undefined as unknown as SessionNotification, done: true });
-      }
-      return new Promise<IteratorResult<SessionNotification>>((resolve) => {
-        waiters.push(resolve);
-      });
-    },
-    return() {
-      done = true;
-      unsubscribe();
-      while (waiters.length) {
-        const waiter = waiters.shift();
-        waiter?.({ value: undefined as unknown as SessionNotification, done: true });
-      }
-      return Promise.resolve({ value: undefined as unknown as SessionNotification, done: true });
-    },
-  };
-
-  const handle = promise as PromptHandle;
-  (handle as { [Symbol.asyncIterator]?: () => AsyncIterator<SessionNotification> })[
-    Symbol.asyncIterator
-  ] = () => iterator;
-  return handle;
-}
-
-function createNotificationStream(
-  session: RuntimeSession,
-  isClosed: () => boolean,
-): AsyncIterableIterator<SessionNotification> {
-  const queue: SessionNotification[] = [];
-  const waiters: Array<(value: IteratorResult<SessionNotification>) => void> = [];
-  let closed = false;
-
-  const close = () => {
-    if (closed) return;
-    closed = true;
-    unsubscribe();
-    while (waiters.length) {
-      const waiter = waiters.shift();
-      waiter?.({ value: undefined as unknown as SessionNotification, done: true });
-    }
-  };
-
-  const unsubscribe = session.onRawNotification((notification) => {
-    if (closed) return;
-    const waiter = waiters.shift();
-    if (waiter) {
-      waiter({ value: notification, done: false });
-    } else {
-      queue.push(notification);
-    }
-  });
-
-  return {
-    [Symbol.asyncIterator]() {
-      return this;
-    },
-    next() {
-      if (queue.length > 0) {
-        return Promise.resolve({ value: queue.shift() as SessionNotification, done: false });
-      }
-      if (closed || isClosed()) {
-        close();
-        return Promise.resolve({ value: undefined as unknown as SessionNotification, done: true });
-      }
-      return new Promise<IteratorResult<SessionNotification>>((resolve) => {
-        waiters.push(resolve);
-      });
-    },
-    return() {
-      close();
-      return Promise.resolve({ value: undefined as unknown as SessionNotification, done: true });
-    },
-  };
 }
 
 export function createInitialSessionEvents(params: {

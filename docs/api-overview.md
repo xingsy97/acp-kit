@@ -30,16 +30,14 @@ await using acp = createAcpRuntime({
 ```ts
 await using session = await acp.newSession({ cwd: '/path/to/workspace' });
 
-// Track 1: normalized events
-session.on('event', (event: RuntimeSessionEvent) => {
-  // message.delta, reasoning.delta, tool.start, turn.completed, etc.
+// Subscribe to normalized events with a handler map
+session.on({
+  messageDelta:  (e) => process.stdout.write(e.delta),
+  toolStart:     (e) => console.log(`[${e.toolCallId}] ${e.title ?? e.name}`),
+  turnCompleted: (e) => console.log(`done: ${e.stopReason}`),
 });
 
-// Track 2: raw ACP notifications for one turn
-const handle = session.prompt('Refactor utils.ts');
-for await (const n of handle) { /* ... */ }
-const result = await handle; // Promise<PromptResult>
-
+const result = await session.prompt('Refactor utils.ts'); // Promise<PromptResult>
 await session.cancel(); // optional
 // session and runtime are disposed automatically by `await using`
 ```
@@ -47,8 +45,8 @@ await session.cancel(); // optional
 ## One-shot helper
 
 ```ts
-for await (const n of runOneShotPrompt({ profile: 'copilot', cwd, prompt: 'Hi' })) {
-  // raw ACP SessionNotification
+for await (const event of runOneShotPrompt({ profile: 'copilot', cwd, prompt: 'Hi' })) {
+  // RuntimeSessionEvent: message.delta, tool.start, turn.completed, ...
 }
 ```
 

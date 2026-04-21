@@ -9,7 +9,7 @@ import type { RuntimeEvent } from './events.js';
  * if (event.type === RuntimeEventKind.ToolStart) { ... }
  * ```
  *
- * Prefer `onRuntimeEvent(...)` for the common dispatch case.
+ * Prefer `onRuntimeEvent(...)` (or `session.on({ ... })`) for the common dispatch case.
  */
 export const RuntimeEventKind = {
   MessageDelta:           'message.delta',
@@ -19,6 +19,11 @@ export const RuntimeEventKind = {
   ToolStart:              'tool.start',
   ToolUpdate:             'tool.update',
   ToolEnd:                'tool.end',
+  TurnStarted:            'turn.started',
+  TurnCompleted:          'turn.completed',
+  TurnFailed:             'turn.failed',
+  TurnCancelled:          'turn.cancelled',
+  StatusChanged:          'status.changed',
   SessionCommandsUpdated: 'session.commands.updated',
   SessionConfigUpdated:   'session.config.updated',
   SessionModesUpdated:    'session.modes.updated',
@@ -26,11 +31,7 @@ export const RuntimeEventKind = {
   SessionModelsUpdated:   'session.models.updated',
   SessionModelUpdated:    'session.model.updated',
   SessionUsageUpdated:    'session.usage.updated',
-} as const satisfies Record<string, RuntimeEvent['type']>;
-
-/** Narrow a `RuntimeEvent` to the variant whose `type` equals `K`. */
-export type RuntimeEventOf<K extends RuntimeEvent['type']> =
-  Extract<RuntimeEvent, { type: K }>;
+} as const;
 
 type DotToCamel<S extends string> =
   S extends `${infer Head}.${infer Rest}`
@@ -38,27 +39,32 @@ type DotToCamel<S extends string> =
     : S;
 
 /**
- * Per-variant handler map for `onRuntimeEvent`. All entries are optional;
- * unhandled variants fall through to the optional `default` handler (or are ignored).
+ * Per-variant handler map for `onRuntimeEvent` and `session.on(handlers)`.
  *
- * Keys are camelCase, derived from the `dot.case` event types (`message.delta` →
- * `messageDelta`, `session.commands.updated` → `sessionCommandsUpdated`).
+ * Generic over the event union so the same helper can dispatch the data-only
+ * `RuntimeEvent` set or the full `RuntimeSessionEvent` set (which adds turn /
+ * status events). Keys are camelCase, derived from the `dot.case` event types
+ * (`message.delta` → `messageDelta`, `session.commands.updated` →
+ * `sessionCommandsUpdated`).
+ *
+ * All entries are optional; unhandled variants fall through to the optional
+ * `default` handler (or are ignored).
  *
  * ```ts
- * onRuntimeEvent(event, {
+ * session.on({
  *   messageDelta:  (e) => process.stdout.write(e.delta),
  *   toolStart:     (e) => console.log(`[${e.toolCallId}] ${e.title ?? e.name}`),
- *   toolEnd:       (e) => console.log(`[${e.toolCallId}] ${e.status}`),
+ *   turnCompleted: (e) => console.log(`done: ${e.stopReason}`),
  * });
  * ```
  */
-export type RuntimeEventHandlers<R = void> =
+export type RuntimeEventHandlers<E extends { type: string } = RuntimeEvent, R = void> =
   & {
-      [K in RuntimeEvent['type'] as DotToCamel<K>]?: (event: RuntimeEventOf<K>) => R;
+      [K in E['type'] as DotToCamel<K>]?: (event: Extract<E, { type: K }>) => R;
     }
   & {
       /** Invoked when no per-variant handler matched. */
-      default?: (event: RuntimeEvent) => R;
+      default?: (event: E) => R;
     };
 
 function toCamel(dotted: string): string {
@@ -66,11 +72,7 @@ function toCamel(dotted: string): string {
 }
 
 /**
- * Type-safe dispatcher for **normalized** `RuntimeEvent`s emitted by `RuntimeSession`.
- *
- * "Normalized" means: ACP `session/update` traffic has been aggregated into stable
- * per-message / per-tool / per-turn events with stable ids (`messageId`, `reasoningId`,
- * `toolCallId`). For the lower-level raw ACP surface use `onRawSessionUpdate`.
+ * Type-safe dispatcher for normalized events emitted by `RuntimeSession`.
  *
  * Replaces manual `switch (event.type) { case 'message.delta': ... }` with a
  * camelCase handler map.
@@ -78,12 +80,13 @@ function toCamel(dotted: string): string {
  * Returns the handler's return value, or `undefined` if no handler matched and no
  * `default` was provided.
  */
-export function onRuntimeEvent<R = void>(
-  event: RuntimeEvent,
-  handlers: RuntimeEventHandlers<R>,
+export function onRuntimeEvent<E extends { type: string }, R = void>(
+  event: E,
+  handlers: RuntimeEventHandlers<E, R>,
 ): R | undefined {
-  const key = toCamel(event.type) as keyof RuntimeEventHandlers<R>;
-  const handler = handlers[key] as ((e: RuntimeEvent) => R) | undefined;
+  const key = toCamel(event.type) as keyof RuntimeEventHandlers<E, R>;
+  const handler = handlers[key] as ((e: E) => R) | undefined;
   if (handler) return handler(event);
-  return handlers.default?.(event);
+  const fallback = (handlers as { default?: (e: E) => R }).default;
+  return fallback?.(event);
 }

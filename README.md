@@ -46,7 +46,7 @@ stable correlation ids (`messageId`, `toolCallId`, `turnId`), and a typed payloa
 the runtime aggregates raw `session/update` traffic for you.
 
 ```ts
-import { createAcpRuntime, onRuntimeEvent } from '@acp-kit/core';
+import { createAcpRuntime } from '@acp-kit/core';
 
 await using acp = createAcpRuntime({
   profile: 'copilot',
@@ -58,12 +58,12 @@ await using acp = createAcpRuntime({
 
 await using session = await acp.newSession({ cwd: process.cwd() });
 
-session.on('event', (event) => onRuntimeEvent(event, {
+session.on({
   messageDelta:  (e) => process.stdout.write(e.delta),
   toolStart:     (e) => console.log(`\n[tool ${e.toolCallId}] ${e.title ?? e.name}`),
   toolEnd:       (e) => console.log(`[tool ${e.toolCallId}] ${e.status}`),
   turnCompleted: (e) => console.log(`\n(turn ${e.turnId} done: ${e.stopReason})`),
-}));
+});
 
 await session.prompt('Summarize this repository.');
 ```
@@ -79,12 +79,12 @@ session.on('tool.start', (e) => console.log(e.toolCallId, e.title)); // e: ToolS
 session.on('message.delta', (e) => process.stdout.write(e.delta));   // e: MessageDeltaEvent
 ```
 
-`session.on(type, listener)` is overloaded: passing a literal event type narrows
-the listener parameter to the matching event variant. Passing `'event'` subscribes
-to every event with the full `RuntimeSessionEvent` union.
+`session.on(...)` is overloaded: pass a handler map for camelCase dispatch, a
+literal event type to narrow a single listener, or `'event'` to receive every
+`RuntimeSessionEvent`.
 
 One runtime owns one agent subprocess and can host many sessions over different
-`cwd`s &mdash; see [`examples/advanced-multi-session/`](examples/advanced-multi-session/).
+`cwd`s &mdash; see [`examples/pair-programming/`](examples/pair-programming/).
 
 ## Examples
 
@@ -93,7 +93,7 @@ The repository ships with four runnable examples under [`examples/`](examples/).
 | Example | Runs without an agent installed | What it shows |
 | --- | :---: | --- |
 | [`quick-start/`](examples/quick-start/) | No | Minimal single-prompt script. |
-| [`advanced-multi-session/`](examples/advanced-multi-session/) | No | `createAcpRuntime` + multiple `await using` sessions sharing one agent process. |
+| [`pair-programming/`](examples/pair-programming/) | No | Two sessions in one runtime as AUTHOR + REVIEWER, looping until the reviewer says `APPROVED`. |
 | [`mock-runtime/`](examples/mock-runtime/) | **Yes** | Self-contained mock ACP server. Use this to see the full event flow without installing an agent. |
 | [`real-agent-cli/`](examples/real-agent-cli/) | No | Interactive CLI driver for real agents (`copilot`, `claude`, `codex`) with prompts for auth and permission decisions. |
 
@@ -119,25 +119,21 @@ A real ACP client has to do all of this before it can hold a useful conversation
 - turn raw `session/update` traffic into stable message / reasoning / tool / usage events
 - decide when a turn is actually complete
 
-ACP Kit packages all of the above behind `createAcpRuntime({...}).newSession({ cwd })` (or the `runPrompt` / `runOneShotPrompt` one-shot helpers).
+ACP Kit packages all of the above behind `createAcpRuntime({...}).newSession({ cwd })` (or the `runOneShotPrompt` one-shot helper).
 
 ## API Overview
 
-ACP Kit exposes a **dual-track** API:
+`RuntimeSession` emits **normalized `RuntimeSessionEvent`s** &mdash; stable per-message,
+per-tool, and per-turn events with correlation ids (`messageId`, `toolCallId`,
+`turnId`). They drive transcripts, UI state, and multi-agent orchestration.
 
-- **Track 1 — normalized `RuntimeSessionEvent`** (recommended for application code).
-  Stable per-message / per-tool / per-turn events with correlation ids (`messageId`,
-  `toolCallId`, `turnId`). Drives transcripts, UI state, multi-agent orchestration.
-- **Track 2 — raw ACP `SessionNotification`** (protocol-faithful escape hatch).
-  The exact `session/update` payloads from `@agentclientprotocol/sdk`, in order.
-  Use it for protocol bridges, debuggers, or when you need a field the normalized
-  layer does not yet surface.
+If you need raw protocol traffic (debuggers, protocol bridges), use
+`composeWireMiddleware` / `normalizeWireMiddleware` to observe the exact JSON-RPC
+frames before / after normalization.
 
 ```ts
 import {
   createAcpRuntime,
-  onRuntimeEvent,        // Track 1 dispatcher
-  onRawSessionUpdate,    // Track 2 dispatcher
   type RuntimeHost,
   type RuntimeSessionEvent,
   type AgentProfile,
@@ -148,7 +144,6 @@ await using acp = createAcpRuntime({
   host: {
     requestPermission: async (req) => 'allow_once',
     chooseAuthMethod:  async ({ methods }) => methods[0]?.id ?? null,
-    log:               (event) => console.log(event),
     // Optional: file system + terminal capabilities are advertised to the
     // agent only when the corresponding host methods are provided.
     // readTextFile / writeTextFile take ACP request/response objects from
@@ -159,23 +154,15 @@ await using acp = createAcpRuntime({
 
 await using session = await acp.newSession({ cwd: '/path/to/workspace' });
 
-// Track 1 — normalized events (recommended).
-session.on('event', (event: RuntimeSessionEvent) => onRuntimeEvent(event, {
-  messageDelta: (e) => process.stdout.write(e.delta),
-  toolStart:    (e) => console.log(`[tool ${e.toolCallId}] ${e.title ?? e.name}`),
-  toolEnd:      (e) => console.log(`[tool ${e.toolCallId}] ${e.status}`),
-}));
+// Subscribe with a handler map (camelCase keys, full type narrowing per handler)
+session.on({
+  messageDelta:  (e) => process.stdout.write(e.delta),
+  toolStart:     (e) => console.log(`[tool ${e.toolCallId}] ${e.title ?? e.name}`),
+  toolEnd:       (e) => console.log(`[tool ${e.toolCallId}] ${e.status}`),
+  turnCompleted: (e) => console.log(`done: ${e.stopReason}`),
+});
 
-// Track 2 — raw ACP notifications. Listen via `onRawNotification` (lifetime of session)
-// or iterate the per-turn `PromptHandle` returned by `session.prompt(...)`.
-session.onRawNotification((n) => onRawSessionUpdate(n.update, {
-  agentMessageChunk: (u) => { /* exact ACP payload */ },
-}));
-
-const handle = session.prompt('Refactor utils.ts');
-for await (const n of handle) { /* per-turn raw notifications */ }
-const result = await handle; // Promise<PromptResult>
-
+const result = await session.prompt('Refactor utils.ts'); // Promise<PromptResult>
 await session.cancel();        // optional: cancel the in-flight turn
 // session and runtime are disposed automatically by `await using`
 ```
@@ -188,10 +175,9 @@ Lifecycle helpers:
 - `session.setMode(modeId)` / `session.setModel(modelId)` &mdash; switch agent mode
   or model mid-session when the agent advertises options.
 
-One-shot helpers (spawn agent + run one prompt + auto-dispose):
+One-shot helper (spawn agent + run one prompt + auto-dispose):
 
-- `runPrompt({ profile, cwd, prompt })` &mdash; yields `RuntimeSessionEvent`s (Track 1).
-- `runOneShotPrompt({ profile, cwd, prompt })` &mdash; yields raw `SessionNotification`s (Track 2).
+- `runOneShotPrompt({ profile, cwd, prompt })` &mdash; yields `RuntimeSessionEvent`s.
 
 The full surface is exported from a single entry point: `@acp-kit/core`.
 
@@ -285,11 +271,11 @@ Implemented today:
 - ACP connection bootstrap on top of `@agentclientprotocol/sdk`
 - Auth retry when `session/new` returns `auth_required`
 - Host adapters for permission, file system, and terminal (advertised by capability)
-- Dual-track event surface: normalized `RuntimeSessionEvent` (Track 1) plus raw ACP
-  `SessionNotification` (Track 2, via `session.onRawNotification()` and the
-  `PromptHandle` returned by `session.prompt()`)
+- Normalized `RuntimeSessionEvent` surface (`message.*`, `reasoning.*`, `tool.*`,
+  `turn.*`, `status.changed`, `session.*.updated`) with handler-map dispatch via
+  `session.on({ messageDelta, toolStart, ... })`
 - Multiple sessions per runtime over different `cwd`s, each with `Symbol.asyncDispose` (`await using`)
-- Idempotent `acp.shutdown()` and `acp.reconnect()`; `runPrompt` / `runOneShotPrompt` one-shot helpers
+- Idempotent `acp.shutdown()` and `acp.reconnect()`; `runOneShotPrompt` one-shot helper
 - Transcript reducer with pending-stream completion flushing
 
 Not implemented yet:

@@ -77,6 +77,15 @@ function readToolOutput(update: RawUpdate): unknown {
   return undefined;
 }
 
+/** Forward the raw `_meta` object from the ACP update verbatim, if present. */
+function readMeta(update: RawUpdate): Record<string, unknown> | undefined {
+  const meta = update._meta;
+  if (meta && typeof meta === 'object' && !Array.isArray(meta)) {
+    return meta as Record<string, unknown>;
+  }
+  return undefined;
+}
+
 function readConfigOptions(update: RawUpdate): SessionConfigOption[] | null {
   if (Array.isArray(update.configOptions)) {
     return update.configOptions as SessionConfigOption[];
@@ -158,6 +167,7 @@ export function normalizeAcpUpdate(
         status: normalizeToolStatus(update.status),
         input: readToolInput(update),
         locations: Array.isArray(update.locations) ? update.locations : undefined,
+        meta: readMeta(update),
       }];
     }
     case 'tool_call_update': {
@@ -175,6 +185,7 @@ export function normalizeAcpUpdate(
           status,
           title: typeof update.title === 'string' ? update.title : undefined,
           output: readToolOutput(update),
+          meta: readMeta(update),
         }];
       }
       return [{
@@ -186,6 +197,7 @@ export function normalizeAcpUpdate(
         status,
         title: typeof update.title === 'string' ? update.title : undefined,
         output: readToolOutput(update),
+        meta: readMeta(update),
       }];
     }
     case 'available_commands_update': {
@@ -253,6 +265,18 @@ export function normalizeAcpUpdate(
         at,
         turnId,
         state,
+      }];
+    }
+    case 'session_error': {
+      const message = typeof update.message === 'string' && update.message
+        ? update.message
+        : 'Session error';
+      return [{
+        type: 'session.error',
+        sessionId,
+        at,
+        turnId,
+        message,
       }];
     }
     default:

@@ -47,6 +47,8 @@ export interface ToolStartEvent extends RuntimeEventBase {
   status: RuntimeToolStatus;
   input?: unknown;
   locations?: unknown[];
+  /** Raw `_meta` from the ACP update, forwarded verbatim (ACP spec vendor-extension slot). */
+  meta?: Record<string, unknown>;
 }
 
 export interface ToolUpdateEvent extends RuntimeEventBase {
@@ -55,6 +57,8 @@ export interface ToolUpdateEvent extends RuntimeEventBase {
   status: RuntimeToolStatus;
   title?: string;
   output?: unknown;
+  /** Raw `_meta` from the ACP update, forwarded verbatim. */
+  meta?: Record<string, unknown>;
 }
 
 export interface ToolEndEvent extends RuntimeEventBase {
@@ -63,6 +67,13 @@ export interface ToolEndEvent extends RuntimeEventBase {
   status: Extract<RuntimeToolStatus, 'completed' | 'failed'>;
   title?: string;
   output?: unknown;
+  /** Raw `_meta` from the ACP update, forwarded verbatim. */
+  meta?: Record<string, unknown>;
+}
+
+export interface SessionErrorEvent extends RuntimeEventBase {
+  type: 'session.error';
+  message: string;
 }
 
 export interface SessionCommandsUpdatedEvent extends RuntimeEventBase {
@@ -116,4 +127,5 @@ export type RuntimeEvent =
   | SessionModeUpdatedEvent
   | SessionModelsUpdatedEvent
   | SessionModelUpdatedEvent
-  | SessionUsageUpdatedEvent;
+  | SessionUsageUpdatedEvent
+  | SessionErrorEvent;

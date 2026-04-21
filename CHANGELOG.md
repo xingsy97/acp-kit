@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per the SemVer 0.x convention). Patch versions remain backward compatible.
 
+## [0.2.1] - 2026-04-22
+
+Patch release. Non-breaking additions to the normalized event surface so every ACP session update has a typed runtime event and vendor extensions survive the normalization layer.
+
+### Added
+
+- `ToolStartEvent` / `ToolUpdateEvent` / `ToolEndEvent` now carry an optional `meta?: Record<string, unknown>` field, forwarding the raw `_meta` object from the underlying ACP update verbatim. ACP's `_meta` is the spec-defined vendor-extension slot &mdash; consumers that want vendor-specific tool names, arguments, or responses (e.g. `_meta.claudeCode.toolName`) no longer have to attach a wire middleware to reach them.
+- New `SessionErrorEvent` (`type: 'session.error'`) mapping ACP's `session_error` session-update variant. `RuntimeEventHandlers.sessionError?: (e) => void` is now part of the handler-map dispatch (`session.on({ sessionError: ... })`), and `RuntimeEventKind.SessionError` is exported.
+
+### Compatibility
+
+Both additions are non-breaking: existing code that did not read `meta` or handle `session.error` continues to work unchanged.
+
 ## [0.2.0] - 2026-04-21
 
 Minor release with **breaking changes** (allowed in 0.x). The dual normalized / raw event surface is collapsed into a single normalized track, and the helper is reshaped into an idiomatic handler-map dispatch.

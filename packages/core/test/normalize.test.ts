@@ -99,6 +99,60 @@ describe('normalizeAcpUpdate', () => {
       }),
     ]);
   });
+
+  it('forwards _meta verbatim on tool events', () => {
+    const sessionId = 'session-meta';
+    const meta = { claudeCode: { toolName: 'Bash', input: { cmd: 'ls' } }, custom: 42 };
+    const started = normalizeAcpUpdate(
+      {
+        sessionId,
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'tool-m',
+          status: 'pending',
+          _meta: meta,
+        },
+      } as never,
+      { sessionId },
+    );
+    const ended = normalizeAcpUpdate(
+      {
+        sessionId,
+        update: {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'tool-m',
+          status: 'completed',
+          _meta: meta,
+        },
+      } as never,
+      { sessionId },
+    );
+
+    expect(started[0]).toMatchObject({ type: 'tool.start', meta });
+    expect(ended[0]).toMatchObject({ type: 'tool.end', meta });
+  });
+
+  it('maps session_error to session.error', () => {
+    const sessionId = 'session-e';
+    const events = normalizeAcpUpdate(
+      {
+        sessionId,
+        update: {
+          sessionUpdate: 'session_error',
+          message: 'MCP server disconnected',
+        },
+      } as never,
+      { sessionId },
+    );
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'session.error',
+        sessionId,
+        message: 'MCP server disconnected',
+      }),
+    ]);
+  });
 });
 
 describe('transcript reducer', () => {

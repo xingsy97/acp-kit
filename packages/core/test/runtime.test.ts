@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createAcpRuntime,
   runOneShotPrompt,
+  runPrompt,
   type AcpConnectionFactory,
   type AcpTransport,
   type SpawnProcess,
@@ -675,6 +676,48 @@ describe('runOneShotPrompt', () => {
     }
 
     expect(seen).toEqual(['agent_message_chunk']);
+    expect(connection.dispose).toHaveBeenCalled();
+  });
+});
+
+describe('runPrompt', () => {
+  it('yields normalized RuntimeSessionEvents and disposes after iteration', async () => {
+    let capturedClient: { sessionUpdate(notification: unknown): Promise<void> } | null = null;
+    const connection = {
+      initialize: vi.fn().mockResolvedValue({ authMethods: [] }),
+      newSession: vi.fn().mockResolvedValue({ sessionId: 'np-1' }),
+      prompt: vi.fn(async () => {
+        await capturedClient?.sessionUpdate({
+          sessionId: 'np-1',
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hi' } },
+        });
+        return { stopReason: 'end_turn' };
+      }),
+      cancel: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const transport: AcpTransport = {
+      async connect({ client }) {
+        capturedClient = client as typeof capturedClient;
+        return {
+          connection: connection as never,
+          getDiagnostics: () => ({ stderr: '', exitSummary: null }),
+        };
+      },
+    };
+
+    const types: string[] = [];
+    for await (const event of runPrompt({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      prompt: 'hi',
+      transport,
+    })) {
+      types.push(event.type);
+    }
+
+    expect(types).toContain('message.delta');
+    expect(types).toContain('turn.completed');
     expect(connection.dispose).toHaveBeenCalled();
   });
 });

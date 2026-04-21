@@ -119,18 +119,27 @@ A real ACP client has to do all of this before it can hold a useful conversation
 - turn raw `session/update` traffic into stable message / reasoning / tool / usage events
 - decide when a turn is actually complete
 
-ACP Kit packages all of the above behind `createAcpRuntime({...}).newSession({ cwd })`.
+ACP Kit packages all of the above behind `createAcpRuntime({...}).newSession({ cwd })` (or the `runPrompt` / `runOneShotPrompt` one-shot helpers).
 
 ## API Overview
 
-The primary surface is `createAcpRuntime` + `RuntimeSession`, with normalized
-`RuntimeSessionEvent`s as the event model.
+ACP Kit exposes a **dual-track** API:
+
+- **Track 1 — normalized `RuntimeSessionEvent`** (recommended for application code).
+  Stable per-message / per-tool / per-turn events with correlation ids (`messageId`,
+  `toolCallId`, `turnId`). Drives transcripts, UI state, multi-agent orchestration.
+- **Track 2 — raw ACP `SessionNotification`** (protocol-faithful escape hatch).
+  The exact `session/update` payloads from `@agentclientprotocol/sdk`, in order.
+  Use it for protocol bridges, debuggers, or when you need a field the normalized
+  layer does not yet surface.
 
 ```ts
 import {
   createAcpRuntime,
-  onRuntimeEvent,
+  onRuntimeEvent,        // Track 1 dispatcher
+  onRawSessionUpdate,    // Track 2 dispatcher
   type RuntimeHost,
+  type RuntimeSessionEvent,
   type AgentProfile,
 } from '@acp-kit/core';
 
@@ -150,14 +159,24 @@ await using acp = createAcpRuntime({
 
 await using session = await acp.newSession({ cwd: '/path/to/workspace' });
 
-session.on('event', (event) => onRuntimeEvent(event, {
+// Track 1 — normalized events (recommended).
+session.on('event', (event: RuntimeSessionEvent) => onRuntimeEvent(event, {
   messageDelta: (e) => process.stdout.write(e.delta),
   toolStart:    (e) => console.log(`[tool ${e.toolCallId}] ${e.title ?? e.name}`),
   toolEnd:      (e) => console.log(`[tool ${e.toolCallId}] ${e.status}`),
 }));
 
-const result = await session.prompt('Refactor utils.ts'); // PromptResult
-await session.cancel();        // optional: cancel an in-flight turn
+// Track 2 — raw ACP notifications. Listen via `onRawNotification` (lifetime of session)
+// or iterate the per-turn `PromptHandle` returned by `session.prompt(...)`.
+session.onRawNotification((n) => onRawSessionUpdate(n.update, {
+  agentMessageChunk: (u) => { /* exact ACP payload */ },
+}));
+
+const handle = session.prompt('Refactor utils.ts');
+for await (const n of handle) { /* per-turn raw notifications */ }
+const result = await handle; // Promise<PromptResult>
+
+await session.cancel();        // optional: cancel the in-flight turn
 // session and runtime are disposed automatically by `await using`
 ```
 
@@ -168,6 +187,11 @@ Lifecycle helpers:
   losing application-level state.
 - `session.setMode(modeId)` / `session.setModel(modelId)` &mdash; switch agent mode
   or model mid-session when the agent advertises options.
+
+One-shot helpers (spawn agent + run one prompt + auto-dispose):
+
+- `runPrompt({ profile, cwd, prompt })` &mdash; yields `RuntimeSessionEvent`s (Track 1).
+- `runOneShotPrompt({ profile, cwd, prompt })` &mdash; yields raw `SessionNotification`s (Track 2).
 
 The full surface is exported from a single entry point: `@acp-kit/core`.
 
@@ -261,9 +285,11 @@ Implemented today:
 - ACP connection bootstrap on top of `@agentclientprotocol/sdk`
 - Auth retry when `session/new` returns `auth_required`
 - Host adapters for permission, file system, and terminal (advertised by capability)
-- Normalized `RuntimeSessionEvent` surface (`message.*`, `reasoning.*`, `tool.*`, `turn.*`, `session.*`) with stable correlation ids
+- Dual-track event surface: normalized `RuntimeSessionEvent` (Track 1) plus raw ACP
+  `SessionNotification` (Track 2, via `session.onRawNotification()` and the
+  `PromptHandle` returned by `session.prompt()`)
 - Multiple sessions per runtime over different `cwd`s, each with `Symbol.asyncDispose` (`await using`)
-- Idempotent `acp.shutdown()` and `acp.reconnect()`
+- Idempotent `acp.shutdown()` and `acp.reconnect()`; `runPrompt` / `runOneShotPrompt` one-shot helpers
 - Transcript reducer with pending-stream completion flushing
 
 Not implemented yet:

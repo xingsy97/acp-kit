@@ -1,0 +1,48 @@
+{
+  "name": "@acp-kit/core",
+  "version": "0.1.0",
+  "description": "ACP Kit core runtime: agent profiles, process spawn, ACP connection bootstrap, auth orchestration, host adapters, and session lifecycle on top of @agentclientprotocol/sdk.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "acp",
+    "agent-client-protocol",
+    "acp-kit",
+    "copilot",
+    "claude",
+    "codex",
+    "runtime"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xingsy97/acp-kit.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/xingsy97/acp-kit#readme",
+  "bugs": {
+    "url": "https://github.com/xingsy97/acp-kit/issues"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^0.18.0"
+  }
+}

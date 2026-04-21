@@ -1,0 +1,31 @@
+{
+  "name": "acp-kit",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xingsy97/acp-kit.git"
+  },
+  "homepage": "https://github.com/xingsy97/acp-kit#readme",
+  "bugs": {
+    "url": "https://github.com/xingsy97/acp-kit/issues"
+  },
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc -b packages/core",
+    "typecheck": "tsc -b packages/core",
+    "predemo": "npm run build",
+    "demo": "node ./examples/runtime-demo.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "publish:core": "npm publish -w @acp-kit/core --access public"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.2"
+  }
+}

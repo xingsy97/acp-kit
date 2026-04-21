@@ -1,0 +1,14 @@
+{
+  "name": "@acp-kit/example-real-agent-cli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Interactive CLI driver for @acp-kit/core against real ACP agents (Copilot CLI, Claude ACP, Codex ACP).",
+  "type": "module",
+  "main": "./index.mjs",
+  "scripts": {
+    "start": "node ./index.mjs"
+  },
+  "dependencies": {
+    "@acp-kit/core": "^0.1.0"
+  }
+}

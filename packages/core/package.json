@@ -1,6 +1,6 @@
 {
   "name": "@acp-kit/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "ACP Kit core runtime: agent profiles, process spawn, ACP connection bootstrap, auth orchestration, host adapters, and session lifecycle on top of @agentclientprotocol/sdk.",
   "type": "module",
   "main": "./dist/index.js",
@@ -34,6 +34,7 @@
   "bugs": {
     "url": "https://github.com/xingsy97/acp-kit/issues"
   },
+  "author": "ACP Kit contributors",
   "license": "MIT",
   "publishConfig": {
     "access": "public",

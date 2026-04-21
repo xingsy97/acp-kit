@@ -17,8 +17,6 @@
   "scripts": {
     "build": "tsc -b packages/core",
     "typecheck": "tsc -b packages/core",
-    "predemo": "npm run build",
-    "demo": "node ./examples/runtime-demo.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "publish:core": "npm publish -w @acp-kit/core --access public"

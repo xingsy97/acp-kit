@@ -7,9 +7,9 @@
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
 [![Status](https://img.shields.io/badge/status-experimental-orange.svg)](#status)
 
-> A small, opinionated runtime for building [Agent Client Protocol](https://agentclientprotocol.com/) (ACP) products on top of [`@agentclientprotocol/sdk`](https://www.npmjs.com/package/@agentclientprotocol/sdk).
+**ACP Kit is a runtime for building applications on top of the [Agent Client Protocol](https://agentclientprotocol.com/).**
 
-`@agentclientprotocol/sdk` gives you the protocol. ACP Kit gives you the runtime: agent process launch, auth orchestration, host adapters, session lifecycle, and normalized turn events — so the same plumbing does not get rewritten in every ACP product.
+It launches an ACP agent process, manages the protocol connection, handles authentication, exposes host adapters for permissions / files / terminals, and turns raw `session/update` traffic into normalized turn, message, reasoning, and tool events. Your application chooses an agent profile, attaches a host, opens a session, and consumes stable events.
 
 ---
 
@@ -17,11 +17,11 @@
 
 - [Install](#install)
 - [Quick Start](#quick-start)
-- [Demo](#demo)
+- [Examples](#examples)
 - [What ACP Kit Does](#what-acp-kit-does)
-- [Where It Sits](#where-it-sits)
 - [API Overview](#api-overview)
 - [Built-in Agent Profiles](#built-in-agent-profiles)
+- [How It Compares to `@agentclientprotocol/sdk`](#how-it-compares-to-agentclientprotocolsdk)
 - [Compatibility](#compatibility)
 - [Status](#status)
 - [Documentation](#documentation)
@@ -33,8 +33,6 @@
 ```bash
 npm install @acp-kit/core
 ```
-
-`@agentclientprotocol/sdk` is installed automatically as a dependency. You do not need to add it yourself.
 
 Requirements:
 
@@ -66,33 +64,23 @@ await session.dispose();
 
 That is the complete shape of an ACP Kit application: pick a profile, attach a host adapter, open a session, listen for normalized events.
 
-## Demo
+## Examples
 
-The repository ships with a runnable end-to-end demo at [`examples/runtime-demo.mjs`](examples/runtime-demo.mjs).
+The repository ships with three runnable examples under [`examples/`](examples/). Each one is a standalone npm package that installs the published `@acp-kit/core` from npm:
+
+| Example | Runs without an agent installed | What it shows |
+| --- | :---: | --- |
+| [`quick-start/`](examples/quick-start/) | No | Minimum runnable mirror of the snippet above. |
+| [`mock-runtime/`](examples/mock-runtime/) | **Yes** | Self-contained mock ACP server. Use this to see the full event flow without installing an agent. |
+| [`real-agent-cli/`](examples/real-agent-cli/) | No | Interactive CLI driver for real agents (`copilot`, `claude`, `codex`) with prompts for auth and permission decisions. |
 
 ```bash
+cd examples/mock-runtime
 npm install
-npm run demo
+npm start
 ```
 
-The default mode is a self-contained **mock flow** that exercises the runtime without any real ACP agent installed. It prints normalized turn, message, reasoning, tool, and usage events plus a final transcript snapshot.
-
-To drive the same demo against a real agent:
-
-```bash
-npm run build
-node ./examples/runtime-demo.mjs --profile copilot --prompt "Summarize this repository."
-```
-
-Flags:
-
-| Flag | Purpose |
-| --- | --- |
-| `--profile <id>` | Select a built-in profile (`copilot`, `claude`, `codex`). Omit for mock mode. |
-| `--prompt <text>` | Prompt text to send. |
-| `--cwd <path>` | Working directory for the runtime session. |
-| `--auto-auth <methodId>` | Pre-select an auth method without prompting. |
-| `--auto-permission <allow_once\|allow_always\|deny>` | Pre-select a permission decision. |
+See [`examples/README.md`](examples/README.md) for details.
 
 ## What ACP Kit Does
 
@@ -109,47 +97,6 @@ A real ACP client has to do all of this before it can hold a useful conversation
 - decide when a turn is actually complete
 
 ACP Kit packages all of the above behind a single `createRuntime({...}).newSession()` call.
-
-The protocol layer underneath stays exactly `@agentclientprotocol/sdk` — ACP Kit does not fork it, replace it, or hide it.
-
-## Where It Sits
-
-```text
-┌──────────────────────────────────────────────────────────────────┐
-│  Your Product (editor extension, desktop shell, daemon, web …)   │
-│  - product UI / state                                            │
-│  - product persistence and remote sync                           │
-│  - cross-session orchestration                                   │
-└───────────────────────────────▲──────────────────────────────────┘
-                                │  normalized events:
-                                │  message.delta / reasoning.delta
-                                │  tool.start / tool.update / tool.end
-                                │  turn.started / turn.completed / turn.failed
-                                │
-┌───────────────────────────────┴──────────────────────────────────┐
-│                          ACP Kit                                 │
-│  agent profiles · process spawn · startup diagnostics            │
-│  auth orchestration · session creation                           │
-│  host adapters: permission, fs, terminal                         │
-│  session/update normalization · transcript reduction             │
-│  turn lifecycle (start / complete / cancel / fail)               │
-└───────────────────────────────▲──────────────────────────────────┘
-                                │  uses
-                                │
-┌───────────────────────────────┴──────────────────────────────────┐
-│                    @agentclientprotocol/sdk                      │
-│  ClientSideConnection · ndJsonStream · JSON-RPC framing          │
-│  initialize / session.new / session.prompt · session/update      │
-└───────────────────────────────▲──────────────────────────────────┘
-                                │  bytes over a transport
-                                │  (this repo: child-process stdio)
-                                │
-┌───────────────────────────────┴──────────────────────────────────┐
-│   ACP Server (Copilot CLI --acp, Claude ACP, Codex ACP, …)       │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-For a deeper walkthrough of the boundary between the SDK and ACP Kit, see [`docs/acp-sdk-vs-runtime.md`](docs/acp-sdk-vs-runtime.md).
 
 ## API Overview
 
@@ -209,6 +156,52 @@ const myProfile: AgentProfile = {
 const runtime = createRuntime({ profile: myProfile, cwd, host });
 ```
 
+## How It Compares to `@agentclientprotocol/sdk`
+
+ACP Kit is built **on top of** [`@agentclientprotocol/sdk`](https://www.npmjs.com/package/@agentclientprotocol/sdk), not as a replacement.
+
+- `@agentclientprotocol/sdk` is the **protocol toolkit**. It gives you `ClientSideConnection`, `ndJsonStream`, typed request/response/notification payloads, and JSON-RPC framing — once you already have a connection to an ACP server.
+- ACP Kit is the **client runtime**. It launches the agent, manages the connection lifecycle, runs auth, exposes host adapters, normalizes raw protocol updates into stable events, and tracks turn state.
+
+The protocol layer underneath stays exactly `@agentclientprotocol/sdk`. ACP Kit does not fork it, replace it, or hide it — it depends on it as a regular npm dependency.
+
+```text
+┌──────────────────────────────────────────────────────────────────┐
+│  Your Product (editor extension, desktop shell, daemon, web …)   │
+│  - product UI / state                                            │
+│  - product persistence and remote sync                           │
+│  - cross-session orchestration                                   │
+└───────────────────────────────▲──────────────────────────────────┘
+                                │  normalized events:
+                                │  message.delta / reasoning.delta
+                                │  tool.start / tool.update / tool.end
+                                │  turn.started / turn.completed / turn.failed
+                                │
+┌───────────────────────────────┴──────────────────────────────────┐
+│                          ACP Kit                                 │
+│  agent profiles · process spawn · startup diagnostics            │
+│  auth orchestration · session creation                           │
+│  host adapters: permission, fs, terminal                         │
+│  session/update normalization · transcript reduction             │
+│  turn lifecycle (start / complete / cancel / fail)               │
+└───────────────────────────────▲──────────────────────────────────┘
+                                │  uses
+                                │
+┌───────────────────────────────┴──────────────────────────────────┐
+│                    @agentclientprotocol/sdk                      │
+│  ClientSideConnection · ndJsonStream · JSON-RPC framing          │
+│  initialize / session.new / session.prompt · session/update      │
+└───────────────────────────────▲──────────────────────────────────┘
+                                │  bytes over a transport
+                                │  (this repo: child-process stdio)
+                                │
+┌───────────────────────────────┴──────────────────────────────────┐
+│   ACP Server (Copilot CLI --acp, Claude ACP, Codex ACP, …)       │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+For a deeper walkthrough see [`docs/acp-sdk-vs-runtime.md`](docs/acp-sdk-vs-runtime.md).
+
 ## Compatibility
 
 | Dependency | Version |
@@ -251,10 +244,17 @@ See [`docs/migration-plan.md`](docs/migration-plan.md) for how downstream produc
 ## Development
 
 ```bash
-npm install        # install workspace deps
+npm install        # install workspace deps (packages/core only)
 npm run build      # tsc -b packages/core
 npm test           # vitest run
-npm run demo       # build + run the mock demo
+```
+
+To try an example:
+
+```bash
+cd examples/mock-runtime
+npm install
+npm start
 ```
 
 Repository layout:
@@ -262,7 +262,7 @@ Repository layout:
 ```text
 packages/core/     @acp-kit/core source, tests, build output
 docs/              architecture and design notes
-examples/          runnable demos (mock + real-agent CLI)
+examples/          standalone npm packages that depend on the published @acp-kit/core
 ```
 
 Contributions are welcome. Please open an issue to discuss non-trivial changes before sending a PR.

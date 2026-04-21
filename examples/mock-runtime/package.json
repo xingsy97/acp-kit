@@ -1,0 +1,14 @@
+{
+  "name": "@acp-kit/example-mock-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Self-contained mock ACP server demo for @acp-kit/core. Runs without any agent installed.",
+  "type": "module",
+  "main": "./index.mjs",
+  "scripts": {
+    "start": "node ./index.mjs"
+  },
+  "dependencies": {
+    "@acp-kit/core": "^0.1.0"
+  }
+}

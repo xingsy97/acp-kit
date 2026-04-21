@@ -1,10 +1,5 @@
-import { spawn } from 'node:child_process';
-import { PassThrough, Readable, Writable } from 'node:stream';
-
 import {
-  ClientSideConnection,
   PROTOCOL_VERSION,
-  ndJsonStream,
   type AgentCapabilities,
   type AuthMethod,
   type Client,
@@ -21,46 +16,64 @@ import {
 import type { RuntimeHost } from './host.js';
 import { resolveAgentProfile, type AgentProfile, type BuiltInProfileId } from './profiles.js';
 import { RuntimeSession, createInitialSessionEvents, type AcpConnectionLike } from './session.js';
+import type {
+  AcpConnectionFactory,
+  SpawnProcess,
+} from './transports/node.js';
 
-export interface SpawnOptions {
-  cwd: string;
-  env?: NodeJS.ProcessEnv;
+/* ------------------------------------------------------------------------- */
+/* Transport contract                                                         */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Connection produced by an {@link AcpTransport}. Extends the per-session
+ * {@link AcpConnectionLike} surface with the connection-level methods used
+ * by the runtime during initialize / new session / load session / auth /
+ * setMode / setModel.
+ */
+export interface AcpTransportConnection extends AcpConnectionLike {
+  initialize(params: Record<string, unknown>): Promise<InitializeResponse>;
+  newSession(params: Record<string, unknown>): Promise<{
+    sessionId: string;
+    configOptions?: unknown[];
+    modes?: unknown;
+    models?: unknown;
+  }>;
+  loadSession?(params: Record<string, unknown>): Promise<{
+    configOptions?: unknown[];
+    modes?: unknown;
+    models?: unknown;
+  } | undefined>;
+  authenticate?(params: { methodId: string }): Promise<unknown>;
+  setSessionMode?(params: { sessionId: string; modeId: string }): Promise<unknown>;
+  unstable_setSessionModel?(params: { sessionId: string; modelId: string }): Promise<unknown>;
 }
 
-export interface SpawnedProcess {
-  stdin: Writable | null;
-  stdout: Readable | null;
-  stderr: Readable | null;
-  kill(signal?: NodeJS.Signals | number): boolean;
+export interface AcpTransportSession {
+  connection: AcpTransportConnection;
+  /** Optional diagnostic hook; the runtime calls this when enriching startup errors. */
+  getDiagnostics?(): { stderr: string; exitSummary: string | null };
 }
 
-export type SpawnProcess = (
-  command: string,
-  args: string[],
-  options: SpawnOptions,
-) => SpawnedProcess;
-
-export interface AcpConnectionFactory {
-  create(params: {
-    client: Client;
-    process: SpawnedProcess;
+/**
+ * Transport abstraction. Owns the underlying transport (child process, IPC,
+ * websocket, etc.) and produces an {@link AcpTransportConnection} ready for
+ * `initialize`. The runtime owns the lifecycle of the returned session via
+ * `connection.dispose()`.
+ */
+export interface AcpTransport {
+  connect(params: {
     profile: AgentProfile;
-  }): AcpConnectionLike & {
-    initialize(params: Record<string, unknown>): Promise<InitializeResponse>;
-    newSession(params: Record<string, unknown>): Promise<{
-      sessionId: string;
-      configOptions?: unknown[];
-      modes?: unknown;
-      models?: unknown;
-    }>;
-    loadSession?(params: Record<string, unknown>): Promise<{
-      configOptions?: unknown[];
-      modes?: unknown;
-      models?: unknown;
-    } | undefined>;
-    authenticate?(params: { methodId: string }): Promise<unknown>;
-  };
+    host: RuntimeHost;
+    client: Client;
+    cwd: string | undefined;
+    onSessionUpdate: (notification: SessionNotification) => void;
+  }): Promise<AcpTransportSession>;
 }
+
+/* ------------------------------------------------------------------------- */
+/* Runtime options                                                            */
+/* ------------------------------------------------------------------------- */
 
 export interface RuntimeOptions {
   profile: AgentProfile | BuiltInProfileId;
@@ -70,7 +83,15 @@ export interface RuntimeOptions {
    */
   cwd?: string;
   host: RuntimeHost;
+  /**
+   * Pluggable transport. Defaults to the node child-process transport
+   * (`@acp-kit/core/node` → `nodeChildProcessTransport`). Browser/Webview hosts
+   * should provide their own transport that bridges to the underlying IPC.
+   */
+  transport?: AcpTransport;
+  /** @deprecated Provide a custom `transport` instead. Forwarded to the default node transport when set. */
   spawnProcess?: SpawnProcess;
+  /** @deprecated Provide a custom `transport` instead. Forwarded to the default node transport when set. */
   connectionFactory?: AcpConnectionFactory;
 }
 
@@ -92,26 +113,25 @@ export interface LoadSessionOptions {
   mcpServers?: McpServer[];
 }
 
-interface ProcessMonitor {
-  getStderr(): string;
-  getExitSummary(): string | null;
-}
-
 interface ConnectionState {
-  process: SpawnedProcess;
-  monitor: ProcessMonitor;
-  connection: ReturnType<AcpConnectionFactory['create']>;
+  transportSession: AcpTransportSession;
+  connection: AcpTransportConnection;
   initResponse: InitializeResponse;
   sessionsById: Map<string, RuntimeSession>;
   sessionUpdateRouter: (notification: SessionNotification) => void;
 }
 
+/* ------------------------------------------------------------------------- */
+/* AcpRuntime                                                                 */
+/* ------------------------------------------------------------------------- */
+
 export class AcpRuntime {
   private readonly profile: AgentProfile;
   private readonly cwd: string | undefined;
   private readonly host: RuntimeHost;
-  private readonly spawnProcess: SpawnProcess;
-  private readonly connectionFactory: AcpConnectionFactory;
+  private readonly explicitTransport: AcpTransport | undefined;
+  private readonly legacySpawnProcess: SpawnProcess | undefined;
+  private readonly legacyConnectionFactory: AcpConnectionFactory | undefined;
   private connectPromise: Promise<ConnectionState> | null = null;
   private connectionState: ConnectionState | null = null;
   private shutdownStarted = false;
@@ -120,8 +140,9 @@ export class AcpRuntime {
     this.profile = resolveAgentProfile(options.profile);
     this.cwd = options.cwd;
     this.host = options.host;
-    this.spawnProcess = options.spawnProcess || defaultSpawnProcess;
-    this.connectionFactory = options.connectionFactory || createSdkConnectionFactory();
+    this.explicitTransport = options.transport;
+    this.legacySpawnProcess = options.spawnProcess;
+    this.legacyConnectionFactory = options.connectionFactory;
   }
 
   /** Information reported by the agent during `initialize`. `null` until the first session is created. */
@@ -145,13 +166,13 @@ export class AcpRuntime {
     return typeof v === 'number' ? v : null;
   }
 
-  /** True once the agent process has been spawned and `initialize` completed. */
+  /** True once the transport has connected and `initialize` completed. */
   get isReady(): boolean {
     return this.connectionState !== null;
   }
 
   /**
-   * Spawn the agent process and complete the ACP `initialize` handshake. Idempotent.
+   * Connect the transport and complete the ACP `initialize` handshake. Idempotent.
    * Most users do not need to call this directly; `newSession` / `loadSession` will call it for you.
    */
   async ready(): Promise<void> {
@@ -173,27 +194,25 @@ export class AcpRuntime {
           startupTimeoutMs,
           'ACP session/new',
         ),
-        state.monitor,
+        state.transportSession,
         this.profile,
         'ACP session/new',
       ),
       authMethods: state.initResponse.authMethods || [],
       authenticate: state.connection.authenticate?.bind(state.connection),
       host: this.host,
-      monitor: state.monitor,
+      transportSession: state.transportSession,
       profile: this.profile,
       timeoutMs: startupTimeoutMs,
     });
 
-    const session = this.adoptSession({
+    return this.adoptSession({
       state,
       sessionId: sessionResponse.sessionId,
       modes: sessionResponse.modes,
       models: sessionResponse.models,
       configOptions: sessionResponse.configOptions,
     });
-
-    return session;
   }
 
   /**
@@ -228,27 +247,42 @@ export class AcpRuntime {
           startupTimeoutMs,
           'ACP session/load',
         ),
-        state.monitor,
+        state.transportSession,
         this.profile,
         'ACP session/load',
       ),
       authMethods: state.initResponse.authMethods || [],
       authenticate: state.connection.authenticate?.bind(state.connection),
       host: this.host,
-      monitor: state.monitor,
+      transportSession: state.transportSession,
       profile: this.profile,
       timeoutMs: startupTimeoutMs,
     });
 
-    const session = this.adoptSession({
+    return this.adoptSession({
       state,
       sessionId: options.sessionId,
       modes: loadResponse?.modes,
       models: loadResponse?.models,
       configOptions: loadResponse?.configOptions,
     });
+  }
 
-    return session;
+  /**
+   * Tear down the current transport session (and any ACP sessions on it) without
+   * shutting the runtime down. The next call to `newSession`/`loadSession` will
+   * reconnect transparently. External references to the runtime stay valid;
+   * external references to prior {@link RuntimeSession} instances do not
+   * (they will be in `disposed` status).
+   */
+  async reconnect(): Promise<void> {
+    if (this.shutdownStarted) {
+      throw new Error('Cannot reconnect: runtime has been shut down.');
+    }
+    if (!this.connectionState && !this.connectPromise) {
+      return; // never connected, nothing to do
+    }
+    await this.teardownConnection();
   }
 
   /**
@@ -258,8 +292,16 @@ export class AcpRuntime {
   async shutdown(): Promise<void> {
     if (this.shutdownStarted) return;
     this.shutdownStarted = true;
-    const errors: unknown[] = [];
+    await this.teardownConnection();
+  }
 
+  /** ES Explicit Resource Management: enables `await using acp = createAcpRuntime(...)`. */
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.shutdown();
+  }
+
+  private async teardownConnection(): Promise<void> {
+    const errors: unknown[] = [];
     if (this.connectionState) {
       const sessions = [...this.connectionState.sessionsById.values()];
       for (const session of sessions) {
@@ -275,11 +317,6 @@ export class AcpRuntime {
       } catch (err) {
         errors.push(err);
       }
-      try {
-        this.connectionState.process.kill();
-      } catch {
-        /* process may already be gone */
-      }
       this.connectionState = null;
     }
     this.connectPromise = null;
@@ -288,11 +325,6 @@ export class AcpRuntime {
     if (errors.length > 1) {
       throw new AggregateError(errors as Error[], `${errors.length} resources failed to dispose cleanly.`);
     }
-  }
-
-  /** ES Explicit Resource Management: enables `await using acp = createAcpRuntime(...)`. */
-  async [Symbol.asyncDispose](): Promise<void> {
-    await this.shutdown();
   }
 
   private requireCwd(cwd: string | undefined, methodName: string): string {
@@ -330,30 +362,24 @@ export class AcpRuntime {
       sessionsById.get(sessionId)?.handleSessionUpdate(notification);
     };
 
-    const child = this.spawnProcess(this.profile.command, this.profile.args, {
-      cwd: this.cwd || process.cwd(),
-      env: {
-        ...processEnv(),
-        ...this.profile.env,
-      },
-    });
-    const monitor = monitorProcess(child, this.host);
-
+    const transport = await this.resolveTransport();
     const client = createClientBridge({
       host: this.host,
       onSessionUpdate: sessionUpdateRouter,
     });
 
-    const connection = this.connectionFactory.create({
-      client,
-      process: child,
+    const transportSession = await transport.connect({
       profile: this.profile,
+      host: this.host,
+      client,
+      cwd: this.cwd,
+      onSessionUpdate: sessionUpdateRouter,
     });
 
     const startupTimeoutMs = this.profile.startupTimeoutMs || 30000;
     const initResponse = await withStartupDiagnostics(
       withTimeout(
-        connection.initialize({
+        transportSession.connection.initialize({
           protocolVersion: PROTOCOL_VERSION,
           clientInfo: {
             name: '@acp-kit/core',
@@ -376,21 +402,31 @@ export class AcpRuntime {
         startupTimeoutMs,
         'ACP initialize',
       ),
-      monitor,
+      transportSession,
       this.profile,
       'ACP initialize',
     );
 
     const state: ConnectionState = {
-      process: child,
-      monitor,
-      connection,
+      transportSession,
+      connection: transportSession.connection,
       initResponse,
       sessionsById,
       sessionUpdateRouter,
     };
     this.connectionState = state;
     return state;
+  }
+
+  private async resolveTransport(): Promise<AcpTransport> {
+    if (this.explicitTransport) {
+      return this.explicitTransport;
+    }
+    const { nodeChildProcessTransport } = await import('./transports/node.js');
+    return nodeChildProcessTransport({
+      spawnProcess: this.legacySpawnProcess,
+      connectionFactory: this.legacyConnectionFactory,
+    });
   }
 
   private adoptSession(params: {
@@ -429,12 +465,16 @@ export class AcpRuntime {
   }
 }
 
+/* ------------------------------------------------------------------------- */
+/* Auth retry                                                                 */
+/* ------------------------------------------------------------------------- */
+
 interface AuthRetryParams<T> {
   operation: () => Promise<T>;
   authMethods: readonly AuthMethod[];
   authenticate: ((params: { methodId: string }) => Promise<unknown>) | undefined;
   host: RuntimeHost;
-  monitor: ProcessMonitor;
+  transportSession: AcpTransportSession;
   profile: AgentProfile;
   timeoutMs: number;
 }
@@ -460,7 +500,7 @@ async function withAuthRetry<T>(params: AuthRetryParams<T>): Promise<T> {
         params.timeoutMs,
         'ACP authenticate',
       ),
-      params.monitor,
+      params.transportSession,
       params.profile,
       'ACP authenticate',
     );
@@ -481,128 +521,26 @@ export function createAcpRuntime(options: RuntimeOptions): AcpRuntime {
   return new AcpRuntime(options);
 }
 
-export function createSdkConnectionFactory(): AcpConnectionFactory {
-  return {
-    create({ client, process, profile }) {
-      if (!process.stdin || !process.stdout) {
-        throw new Error('The spawned ACP process did not expose stdin/stdout streams.');
-      }
-
-      const readable = profile.filterStdoutLine
-        ? createFilteredReadable(process.stdout, profile.filterStdoutLine)
-        : process.stdout;
-      const stream = ndJsonStream(
-        Writable.toWeb(process.stdin) as WritableStream<Uint8Array>,
-        Readable.toWeb(readable) as ReadableStream<Uint8Array>,
-      );
-
-      return new ClientSideConnection(() => client, stream) as never;
-    },
-  };
-}
-
-function processEnv(): NodeJS.ProcessEnv {
-  return process.env;
-}
-
-function defaultSpawnProcess(command: string, args: string[], options: SpawnOptions): SpawnedProcess {
-  const launch = resolveLaunch(command, args);
-  return spawn(launch.command, launch.args, {
-    cwd: options.cwd,
-    env: options.env,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    windowsHide: true,
-  });
-}
-
-function createFilteredReadable(source: Readable, filterLine: (line: string) => string | null): Readable {
-  const output = new PassThrough();
-  let buffer = '';
-
-  source.on('data', (chunk) => {
-    buffer += chunk.toString();
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() || '';
-    for (const line of lines) {
-      const filtered = filterLine(line);
-      if (filtered !== null) {
-        output.write(`${filtered}\n`);
-      }
-    }
-  });
-  source.on('end', () => {
-    if (buffer) {
-      const filtered = filterLine(buffer);
-      if (filtered !== null) {
-        output.write(filtered);
-      }
-    }
-    output.end();
-  });
-  source.on('error', (error) => {
-    output.destroy(error instanceof Error ? error : new Error(String(error)));
-  });
-
-  return output;
-}
-
-function monitorProcess(process: SpawnedProcess, host: RuntimeHost): ProcessMonitor {
-  let stderrBuffer = '';
-  let exitSummary: string | null = null;
-
-  process.stderr?.on('data', (chunk) => {
-    const text = chunk.toString();
-    stderrBuffer += text;
-    if (stderrBuffer.length > 32_768) {
-      stderrBuffer = stderrBuffer.slice(-32_768);
-    }
-    host.log?.({
-      level: 'debug',
-      message: 'ACP child wrote to stderr',
-      context: { text },
-    });
-  });
-
-  const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-    exitSummary = `exit code=${code ?? 'null'}${signal ? ` signal=${signal}` : ''}`;
-    host.log?.({
-      level: code === 0 ? 'info' : 'warn',
-      message: 'ACP child exited',
-      context: { code, signal },
-    });
-  };
-
-  const child = process as SpawnedProcess & {
-    on?: (event: string, listener: (...args: never[]) => void) => void;
-  };
-  child.on?.('close', onExit as never);
-
-  return {
-    getStderr() {
-      return stderrBuffer.trim();
-    },
-    getExitSummary() {
-      return exitSummary;
-    },
-  };
-}
+/* ------------------------------------------------------------------------- */
+/* Diagnostic + utility helpers                                               */
+/* ------------------------------------------------------------------------- */
 
 async function withStartupDiagnostics<T>(
   promise: Promise<T>,
-  monitor: ProcessMonitor,
+  transportSession: AcpTransportSession,
   profile: AgentProfile,
   label: string,
 ): Promise<T> {
   try {
     return await promise;
   } catch (error) {
-    throw enhanceStartupError(error, monitor, profile, label);
+    throw enhanceStartupError(error, transportSession, profile, label);
   }
 }
 
 function enhanceStartupError(
   error: unknown,
-  monitor: ProcessMonitor,
+  transportSession: AcpTransportSession,
   profile: AgentProfile,
   label: string,
 ): Error {
@@ -612,14 +550,12 @@ function enhanceStartupError(
     baseMessage,
   ];
 
-  const exitSummary = monitor.getExitSummary();
-  if (exitSummary) {
-    details.push(`Process: ${exitSummary}`);
+  const diagnostics = transportSession.getDiagnostics?.();
+  if (diagnostics?.exitSummary) {
+    details.push(`Process: ${diagnostics.exitSummary}`);
   }
-
-  const stderr = monitor.getStderr();
-  if (stderr) {
-    details.push(`stderr:\n${stderr}`);
+  if (diagnostics?.stderr) {
+    details.push(`stderr:\n${diagnostics.stderr}`);
   }
 
   if (error instanceof Error) {
@@ -634,27 +570,6 @@ function enhanceStartupError(
     if (source.data !== undefined) wrapped.data = source.data;
   }
   return wrapped;
-}
-
-function quoteWindowsArgument(value: string): string {
-  if (!value) return '""';
-  if (!/[\s"]/.test(value)) return value;
-  return `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, '$1$1')}"`;
-}
-
-function resolveLaunch(command: string, args: string[]) {
-  if (process.platform !== 'win32') {
-    return { command, args };
-  }
-  const requiresCmd = command === 'npm' || command === 'npx' || /\.(cmd|bat)$/i.test(command);
-  if (!requiresCmd) {
-    return { command, args };
-  }
-  const commandLine = [quoteWindowsArgument(command), ...args.map(quoteWindowsArgument)].join(' ');
-  return {
-    command: 'cmd.exe',
-    args: ['/d', '/s', '/c', commandLine],
-  };
 }
 
 function createClientBridge(params: {
@@ -787,7 +702,7 @@ function looksLikeModelState(value: unknown): value is SessionModelState {
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  let timeoutHandle: NodeJS.Timeout | null = null;
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   try {
     return await Promise.race([
       promise,

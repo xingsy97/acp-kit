@@ -2,7 +2,14 @@ import { PassThrough } from 'node:stream';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { createAcpRuntime, runOneShotPrompt, type AcpConnectionFactory, type SpawnProcess } from '../src/index.js';
+import {
+  createAcpRuntime,
+  runOneShotPrompt,
+  type AcpConnectionFactory,
+  type AcpTransport,
+  type SpawnProcess,
+  type WireMiddleware,
+} from '../src/index.js';
 
 function createFakeSpawn(): SpawnProcess {
   return () => ({
@@ -423,6 +430,211 @@ describe('AcpRuntime', () => {
     });
 
     await expect(runtime.loadSession({ sessionId: 'x' })).rejects.toThrow(/loadSession capability/);
+  });
+
+  it('forwards setMode and setModel to the underlying connection', async () => {
+    const setSessionMode = vi.fn().mockResolvedValue(undefined);
+    const unstable_setSessionModel = vi.fn().mockResolvedValue(undefined);
+    const connectionFactory: AcpConnectionFactory = {
+      create() {
+        return {
+          initialize: async () => ({ authMethods: [] }),
+          newSession: async () => ({ sessionId: 'sess-mode' }),
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+          setSessionMode,
+          unstable_setSessionModel,
+        } as never;
+      },
+    };
+
+    const runtime = createAcpRuntime({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+
+    const session = await runtime.newSession();
+    await session.setMode('plan');
+    await session.setModel('gpt-5');
+
+    expect(setSessionMode).toHaveBeenCalledWith({ sessionId: 'sess-mode', modeId: 'plan' });
+    expect(unstable_setSessionModel).toHaveBeenCalledWith({ sessionId: 'sess-mode', modelId: 'gpt-5' });
+
+    await runtime.shutdown();
+  });
+
+  it('setMode/setModel throw when the connection does not implement them', async () => {
+    const connectionFactory: AcpConnectionFactory = {
+      create() {
+        return {
+          initialize: async () => ({ authMethods: [] }),
+          newSession: async () => ({ sessionId: 'sess-no-mode' }),
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+        } as never;
+      },
+    };
+    const runtime = createAcpRuntime({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+    const session = await runtime.newSession();
+    await expect(session.setMode('plan')).rejects.toThrow(/session\/set_mode/);
+    await expect(session.setModel('gpt-5')).rejects.toThrow(/session\/set_model/);
+    await runtime.shutdown();
+  });
+
+  it('reconnect tears down the current connection and reconnects on next session', async () => {
+    const initialize = vi.fn().mockResolvedValue({ authMethods: [] });
+    const newSession = vi
+      .fn()
+      .mockResolvedValueOnce({ sessionId: 'before' })
+      .mockResolvedValueOnce({ sessionId: 'after' });
+    const dispose = vi.fn().mockResolvedValue(undefined);
+    const connectionFactory: AcpConnectionFactory = {
+      create() {
+        return {
+          initialize,
+          newSession,
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+          dispose,
+        } as never;
+      },
+    };
+    const spawn = vi.fn(createFakeSpawn());
+    const runtime = createAcpRuntime({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess: spawn,
+      connectionFactory,
+    });
+
+    const before = await runtime.newSession();
+    await runtime.reconnect();
+    expect(dispose).toHaveBeenCalledTimes(1);
+
+    const after = await runtime.newSession();
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(initialize).toHaveBeenCalledTimes(2);
+    expect(before.sessionId).toBe('before');
+    expect(after.sessionId).toBe('after');
+
+    await runtime.shutdown();
+  });
+
+  it('accepts a custom transport in place of the node child-process transport', async () => {
+    const connection = {
+      initialize: vi.fn().mockResolvedValue({ authMethods: [] }),
+      newSession: vi.fn().mockResolvedValue({ sessionId: 'custom-transport' }),
+      prompt: vi.fn().mockResolvedValue({ stopReason: 'end_turn' }),
+      cancel: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const transport: AcpTransport = {
+      connect: vi.fn().mockResolvedValue({
+        connection: connection as never,
+        getDiagnostics: () => ({ stderr: '', exitSummary: null }),
+      }),
+    };
+
+    const runtime = createAcpRuntime({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      transport,
+    });
+
+    const session = await runtime.newSession();
+    expect(session.sessionId).toBe('custom-transport');
+    expect(transport.connect).toHaveBeenCalledTimes(1);
+    expect(connection.initialize).toHaveBeenCalledTimes(1);
+
+    await runtime.shutdown();
+    expect(connection.dispose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('wireMiddleware', () => {
+  it('runs Koa-style middleware on outgoing frames and observes mutations', async () => {
+    const sentFrames: unknown[] = [];
+    const transport: AcpTransport = {
+      async connect({ host, client: _client }) {
+        // Build a tiny in-process pipeline: middleware → terminator (collect into sentFrames).
+        const { composeWireMiddleware, normalizeWireMiddleware } = await import('../src/wire-middleware.js');
+        const middlewares = normalizeWireMiddleware(host.wireMiddleware);
+        const dispatch = composeWireMiddleware(middlewares, (ctx) => {
+          sentFrames.push(ctx.frame);
+        });
+
+        const connection = {
+          initialize: async () => ({ authMethods: [] }),
+          newSession: async () => ({ sessionId: 'wm-1' }),
+          prompt: async (params: unknown) => {
+            await dispatch({ direction: 'out', frame: { method: 'session/prompt', params } });
+            return { stopReason: 'end_turn' };
+          },
+          cancel: async () => undefined,
+        };
+        return { connection: connection as never };
+      },
+    };
+
+    const calls: Array<{ direction: string; frame: unknown }> = [];
+    const logger: WireMiddleware = async (ctx, next) => {
+      calls.push({ direction: ctx.direction, frame: ctx.frame });
+      await next();
+    };
+    const tagger: WireMiddleware = async (ctx, next) => {
+      ctx.frame = { ...(ctx.frame as object), tagged: true };
+      await next();
+    };
+
+    const runtime = createAcpRuntime({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: { wireMiddleware: [logger, tagger] },
+      transport,
+    });
+    const session = await runtime.newSession();
+    await session.prompt('hi');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].direction).toBe('out');
+    expect(sentFrames).toHaveLength(1);
+    expect(sentFrames[0]).toMatchObject({ method: 'session/prompt', tagged: true });
+
+    await runtime.shutdown();
+  });
+
+  it('drops a frame when middleware does not call next()', async () => {
+    const reached: unknown[] = [];
+    const { composeWireMiddleware } = await import('../src/wire-middleware.js');
+    const dropAll: WireMiddleware = async () => {
+      // do not call next
+    };
+    const dispatch = composeWireMiddleware([dropAll], (ctx) => {
+      reached.push(ctx.frame);
+    });
+    await dispatch({ direction: 'out', frame: { method: 'whatever' } });
+    expect(reached).toHaveLength(0);
+  });
+
+  it('throws if a middleware calls next() more than once', async () => {
+    const { composeWireMiddleware } = await import('../src/wire-middleware.js');
+    const buggy: WireMiddleware = async (_ctx, next) => {
+      await next();
+      await next();
+    };
+    const dispatch = composeWireMiddleware([buggy], () => undefined);
+    await expect(dispatch({ direction: 'out', frame: {} })).rejects.toThrow(/multiple times/);
   });
 });
 

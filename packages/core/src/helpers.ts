@@ -2,7 +2,8 @@ import type { McpServer, SessionNotification } from '@agentclientprotocol/sdk';
 
 import type { RuntimeHost } from './host.js';
 import type { AgentProfile, BuiltInProfileId } from './profiles.js';
-import { createAcpRuntime, type SpawnProcess, type AcpConnectionFactory } from './runtime.js';
+import { createAcpRuntime, type AcpTransport } from './runtime.js';
+import type { AcpConnectionFactory, SpawnProcess } from './transports/node.js';
 
 export interface RunOneShotPromptOptions {
   profile: AgentProfile | BuiltInProfileId;
@@ -14,7 +15,11 @@ export interface RunOneShotPromptOptions {
    */
   host?: RuntimeHost;
   mcpServers?: McpServer[];
+  /** Pluggable transport. Defaults to the node child-process transport. */
+  transport?: AcpTransport;
+  /** @deprecated Use `transport` instead. */
   spawnProcess?: SpawnProcess;
+  /** @deprecated Use `transport` instead. */
   connectionFactory?: AcpConnectionFactory;
 }
 
@@ -36,6 +41,7 @@ export function runOneShotPrompt(options: RunOneShotPromptOptions): AsyncIterabl
   const runtime = createAcpRuntime({
     profile: options.profile,
     host,
+    transport: options.transport,
     spawnProcess: options.spawnProcess,
     connectionFactory: options.connectionFactory,
   });

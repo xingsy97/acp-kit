@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 import type { PromptResponse, SessionNotification } from '@agentclientprotocol/sdk';
 import {
   applyRuntimeEvent,
@@ -19,9 +17,19 @@ import {
 import type { RuntimeHost } from './host.js';
 import type { AgentProfile } from './profiles.js';
 
+function newId(): string {
+  // Web Crypto is available in Node >=19 and every modern browser/Webview.
+  const c: { randomUUID?: () => string } | undefined = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (c?.randomUUID) return c.randomUUID();
+  // Fallback (should never trigger on supported runtimes); not cryptographically strong.
+  return `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export interface AcpConnectionLike {
   prompt(params: { sessionId: string; prompt: Array<{ type: 'text'; text: string }> }): Promise<PromptResponse>;
   cancel(params: { sessionId: string }): Promise<void>;
+  setSessionMode?(params: { sessionId: string; modeId: string }): Promise<unknown>;
+  unstable_setSessionModel?(params: { sessionId: string; modelId: string }): Promise<unknown>;
   dispose?(): Promise<void>;
 }
 
@@ -173,6 +181,35 @@ export class RuntimeSession {
     await this.connection.cancel({ sessionId: this.sessionId });
   }
 
+  /**
+   * Switch the active mode for this session via ACP `session/set_mode`. Throws
+   * if the connected agent does not implement the request.
+   */
+  async setMode(modeId: string): Promise<void> {
+    if (this.status === 'disposed') {
+      throw new Error('Session has already been disposed.');
+    }
+    if (typeof this.connection.setSessionMode !== 'function') {
+      throw new Error('The ACP connection does not support session/set_mode.');
+    }
+    await this.connection.setSessionMode({ sessionId: this.sessionId, modeId });
+  }
+
+  /**
+   * Switch the active model for this session via ACP `session/set_model`
+   * (currently exposed by the SDK as `unstable_setSessionModel`). Throws if
+   * the connected agent does not implement the request.
+   */
+  async setModel(modelId: string): Promise<void> {
+    if (this.status === 'disposed') {
+      throw new Error('Session has already been disposed.');
+    }
+    if (typeof this.connection.unstable_setSessionModel !== 'function') {
+      throw new Error('The ACP connection does not support session/set_model.');
+    }
+    await this.connection.unstable_setSessionModel({ sessionId: this.sessionId, modelId });
+  }
+
   async dispose(): Promise<void> {
     if (this.status === 'disposed') {
       return;
@@ -220,7 +257,7 @@ export class RuntimeSession {
       throw new Error('A prompt is already running for this session.');
     }
 
-    const turnId = randomUUID();
+    const turnId = newId();
     const startedAt = Date.now();
     this.currentTurnId = turnId;
     this.currentMessageId = null;
@@ -289,14 +326,14 @@ export class RuntimeSession {
 
   private ensureMessageId(): string {
     if (!this.currentMessageId) {
-      this.currentMessageId = `message:${this.currentTurnId || randomUUID()}`;
+      this.currentMessageId = `message:${this.currentTurnId || newId()}`;
     }
     return this.currentMessageId;
   }
 
   private ensureReasoningId(): string {
     if (!this.currentReasoningId) {
-      this.currentReasoningId = `reasoning:${this.currentTurnId || randomUUID()}`;
+      this.currentReasoningId = `reasoning:${this.currentTurnId || newId()}`;
     }
     return this.currentReasoningId;
   }

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
-import { onSessionUpdate, SessionUpdateKind } from '../src/session-update.js';
+import { onRawSessionUpdate, SessionUpdateKind } from '../src/session-update.js';
 
-describe('onSessionUpdate', () => {
+describe('onRawSessionUpdate', () => {
   it('dispatches by camelCase key with narrowed types', () => {
     const update: SessionUpdate = {
       sessionUpdate: 'agent_message_chunk',
@@ -10,7 +10,7 @@ describe('onSessionUpdate', () => {
     };
 
     const onAgent = vi.fn();
-    onSessionUpdate(update, { agentMessageChunk: onAgent });
+    onRawSessionUpdate(update, { agentMessageChunk: onAgent });
     expect(onAgent).toHaveBeenCalledWith(update);
   });
 
@@ -21,7 +21,7 @@ describe('onSessionUpdate', () => {
     };
     const def = vi.fn();
     const handled = vi.fn();
-    onSessionUpdate(update, { agentMessageChunk: handled, default: def });
+    onRawSessionUpdate(update, { agentMessageChunk: handled, default: def });
     expect(handled).not.toHaveBeenCalled();
     expect(def).toHaveBeenCalledWith(update);
   });
@@ -32,7 +32,7 @@ describe('onSessionUpdate', () => {
       toolCallId: 't1',
       title: 'read file',
     } as SessionUpdate;
-    const result = onSessionUpdate(update, {
+    const result = onRawSessionUpdate(update, {
       toolCall: (u) => `tool:${u.title}`,
     });
     expect(result).toBe('tool:read file');

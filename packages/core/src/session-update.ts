@@ -9,7 +9,7 @@ import type { SessionUpdate } from '@agentclientprotocol/sdk';
  * if (notification.update.sessionUpdate === SessionUpdateKind.AgentMessageChunk) { ... }
  * ```
  *
- * Prefer `onSessionUpdate(...)` for the common dispatch case.
+ * Prefer `onRawSessionUpdate(...)` for the common dispatch case.
  */
 export const SessionUpdateKind = {
   UserMessageChunk:        'user_message_chunk',
@@ -35,16 +35,16 @@ type SnakeToCamel<S extends string> =
     : S;
 
 /**
- * Per-variant handler map for `onSessionUpdate`. All entries are optional;
+ * Per-variant handler map for `onRawSessionUpdate`. All entries are optional;
  * unhandled variants fall through to the optional `default` handler (or are ignored).
  *
  * Keys are camelCase so users never have to type ACP's snake_case literals.
  *
  * ```ts
- * onSessionUpdate(notification.update, {
+ * onRawSessionUpdate(notification.update, {
  *   agentMessageChunk: (u) => process.stdout.write(u.content.text ?? ''),
- *   toolCall:          (u) => console.log(`[tool] ${u.title}`),
- *   toolCallUpdate:    (u) => console.log(`[tool:${u.status}]`),
+ *   toolCall:          (u) => console.log(`[tool ${u.toolCallId}] ${u.title}`),
+ *   toolCallUpdate:    (u) => console.log(`[tool ${u.toolCallId}:${u.status}]`),
  * });
  * ```
  */
@@ -62,7 +62,12 @@ function toCamel(snake: string): string {
 }
 
 /**
- * Type-safe dispatcher for ACP `SessionUpdate` notifications.
+ * Type-safe dispatcher for **raw ACP** `SessionUpdate` notifications.
+ *
+ * "Raw" means: this operates on the protocol layer (`session/update` payloads from
+ * `@agentclientprotocol/sdk`). Each handler receives the exact ACP variant. For the
+ * higher-level normalized event surface (`tool.start` / `tool.end` / `message.delta`
+ * with stable per-message ids), use `onRuntimeEvent` instead.
  *
  * Replaces the manual `switch (update.sessionUpdate) { case '...': ... }` boilerplate
  * with a per-variant handler map keyed by camelCase variant names.
@@ -70,7 +75,7 @@ function toCamel(snake: string): string {
  * Returns the handler's return value, or `undefined` if no handler matched and no
  * `default` was provided.
  */
-export function onSessionUpdate<R = void>(
+export function onRawSessionUpdate<R = void>(
   update: SessionUpdate,
   handlers: SessionUpdateHandlers<R>,
 ): R | undefined {

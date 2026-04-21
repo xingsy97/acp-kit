@@ -12,7 +12,7 @@
  */
 
 import process from 'node:process';
-import { runOneShotPrompt, onSessionUpdate } from '@acp-kit/core';
+import { runOneShotPrompt, onRawSessionUpdate } from '@acp-kit/core';
 
 const profile = process.argv[2] || 'claude';
 const prompt = process.argv[3] || 'Write a demo for this repo';
@@ -26,12 +26,12 @@ try {
     cwd: process.cwd(),
     prompt,
   })) {
-    onSessionUpdate(notification.update, {
+    onRawSessionUpdate(notification.update, {
       agentMessageChunk: (u) => process.stdout.write(u.content?.text ?? ''),
       agentThoughtChunk: (u) =>
         process.stderr.write(`\u001b[2m${u.content?.text ?? ''}\u001b[0m`),
-      toolCall:       (u) => console.log(`\n\u2192 tool: ${u.title ?? 'tool'}`),
-      toolCallUpdate: (u) => console.log(`  status: ${u.status}`),
+      toolCall:       (u) => console.log(`\n\u2192 tool ${u.toolCallId}: ${u.title ?? 'tool'}`),
+      toolCallUpdate: (u) => console.log(`  ${u.toolCallId} status: ${u.status}`),
     });
   }
   console.log('\n\u2713 done');

@@ -41,31 +41,12 @@ Requirements:
 
 ## Quick Start
 
-For one-shot prompts, use the `runOneShotPrompt` helper. It spawns the agent, runs a single prompt, streams raw ACP `session/update` notifications, and disposes everything when the loop ends:
+Open a session and subscribe to **normalized** events. Each event has a stable `type`,
+stable correlation ids (`messageId`, `toolCallId`, `turnId`), and a typed payload &mdash;
+the runtime aggregates raw `session/update` traffic for you.
 
 ```ts
-import { runOneShotPrompt, onSessionUpdate } from '@acp-kit/core';
-
-for await (const n of runOneShotPrompt({
-  profile: 'copilot',
-  cwd: process.cwd(),
-  prompt: 'Write a demo for this repo',
-})) {
-  onSessionUpdate(n.update, {
-    agentMessageChunk: (u) => process.stdout.write(u.content.text ?? ''),
-    toolCall:          (u) => console.log(`\n[tool] ${u.title}`),
-    toolCallUpdate:    (u) => console.log(`[tool:${u.status}]`),
-  });
-}
-```
-
-No string literals, full type narrowing per handler, only the variants you care about.
-For the full list of variants, see [`SessionUpdateKind`](packages/core/src/session-update.ts).
-
-For multi-session apps, use `createAcpRuntime` directly with `await using` (ES Explicit Resource Management):
-
-```ts
-import { createAcpRuntime, onSessionUpdate } from '@acp-kit/core';
+import { createAcpRuntime, onRuntimeEvent } from '@acp-kit/core';
 
 await using acp = createAcpRuntime({
   profile: 'copilot',
@@ -77,18 +58,57 @@ await using acp = createAcpRuntime({
 
 await using session = await acp.newSession({ cwd: process.cwd() });
 
-// Normalized events (dual-track API):
-session.on('event', (event) => console.log(event.type));
+session.on('event', (event) => onRuntimeEvent(event, {
+  messageDelta:  (e) => process.stdout.write(e.delta),
+  toolStart:     (e) => console.log(`\n[tool ${e.toolCallId}] ${e.title ?? e.name}`),
+  toolEnd:       (e) => console.log(`[tool ${e.toolCallId}] ${e.status}`),
+  turnCompleted: (e) => console.log(`\n(turn ${e.turnId} done: ${e.stopReason})`),
+}));
 
-// Or iterate raw ACP notifications for a single turn:
-for await (const n of session.prompt('Summarize this repository.')) {
-  onSessionUpdate(n.update, {
+await session.prompt('Summarize this repository.');
+```
+
+The handler keys are camelCase; each callback receives the matching event variant
+with full type narrowing &mdash; no string literals to remember.
+For the full list see [`RuntimeEventKind`](packages/core/src/runtime-event.ts).
+
+If you only need to watch a single event type, use a typed listener directly:
+
+```ts
+session.on('tool.start', (e) => console.log(e.toolCallId, e.title)); // e: ToolStartEvent
+session.on('message.delta', (e) => process.stdout.write(e.delta));   // e: MessageDeltaEvent
+```
+
+`session.on(type, listener)` is overloaded: passing a literal event type narrows
+the listener parameter to the matching event variant. Passing `'event'` subscribes
+to every event with the full `RuntimeSessionEvent` union.
+
+### One-shot scripts
+
+For throw-away scripts, `runOneShotPrompt` spawns the agent, runs one prompt, and
+disposes everything when iteration ends. It yields **raw** ACP notifications:
+
+```ts
+import { runOneShotPrompt, onRawSessionUpdate } from '@acp-kit/core';
+
+for await (const n of runOneShotPrompt({
+  profile: 'copilot',
+  cwd: process.cwd(),
+  prompt: 'Write a demo for this repo',
+})) {
+  onRawSessionUpdate(n.update, {
     agentMessageChunk: (u) => process.stdout.write(u.content.text ?? ''),
+    toolCall:          (u) => console.log(`\n[tool ${u.toolCallId}] ${u.title}`),
+    toolCallUpdate:    (u) => console.log(`[tool ${u.toolCallId}:${u.status}]`),
   });
 }
 ```
 
-One runtime owns one agent subprocess and can host many sessions over different `cwd`s.
+`onRawSessionUpdate` is the raw-layer counterpart of `onRuntimeEvent`: it dispatches
+the protocol-level `SessionUpdate` variants from `@agentclientprotocol/sdk`.
+
+One runtime owns one agent subprocess and can host many sessions over different
+`cwd`s &mdash; see [`examples/advanced-multi-session/`](examples/advanced-multi-session/).
 
 ## Examples
 

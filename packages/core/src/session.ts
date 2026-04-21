@@ -134,6 +134,21 @@ export class RuntimeSession {
     }
   }
 
+  /**
+   * Subscribe to a specific normalized event type. The listener parameter is
+   * narrowed to the matching event variant (e.g. `'tool.start'` →
+   * `ToolStartEvent`), so fields like `e.toolCallId` / `e.delta` are typed.
+   */
+  on<K extends RuntimeSessionEvent['type']>(
+    type: K,
+    listener: (event: Extract<RuntimeSessionEvent, { type: K }>) => void,
+  ): () => void;
+  /**
+   * Subscribe to every normalized event. The listener receives the full
+   * `RuntimeSessionEvent` union; use `onRuntimeEvent(event, { ... })` or a
+   * `switch (event.type)` for per-variant dispatch.
+   */
+  on(type: 'event', listener: (event: RuntimeSessionEvent) => void): () => void;
   on(type: RuntimeSessionEvent['type'] | 'event', listener: Listener): () => void {
     const listeners = this.listeners.get(type) || new Set<Listener>();
     listeners.add(listener);

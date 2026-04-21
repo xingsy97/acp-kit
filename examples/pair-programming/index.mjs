@@ -17,8 +17,8 @@ const task = process.argv[3] ||
   'write a very complete, beautiful, production-quality graphical snake game in C#';
 
 const authorSettings = {
-  profile: 'claude',
-  model:   'sonnet',
+  profile: 'copilot',
+  model:   'gpt-5.4',
   prompt: ({ round, feedback }) => round === 1
     ? `You are the AUTHOR. Working dir: ${cwd}\n\nTask: ${task}\n\n` +
       `Use your filesystem tools to create / modify files on disk. Do not paste code.`

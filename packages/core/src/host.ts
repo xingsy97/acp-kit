@@ -29,6 +29,12 @@ export interface RuntimePermissionRequest {
   sessionId: string;
   toolCallId: string;
   toolName: string;
+  /**
+   * Human-readable title surfaced by the agent for the operation that needs
+   * approval (e.g. `"Run npm install"`). Pulled from `toolCall.title` on the
+   * raw payload; empty string when the agent didn't supply one.
+   */
+  title: string;
   input: unknown;
   options: Array<{
     optionId?: string;

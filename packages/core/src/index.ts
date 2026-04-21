@@ -1,5 +1,6 @@
 export * from './helpers.js';
 export * from './host.js';
+export * from './errors.js';
 export * from './profiles.js';
 export * from './runtime.js';
 export * from './session.js';

@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per the SemVer 0.x convention). Patch versions remain backward compatible.
 
+## [0.3.1] - 2026-04-22
+
+Patch release. Backwards compatible additions extracted from real daemon usage.
+
+### Added
+
+- `isAcpCancelled(error)` &mdash; returns `true` for JSON-RPC code `-32800` or messages matching `cancelled` / `canceled` / `aborted`. Use to distinguish "the agent cancelled this turn" from "the agent failed".
+- `isAcpAuthRequired(error)` &mdash; returns `true` for JSON-RPC code `-32000` or messages requiring authentication. Same logic the runtime already uses internally for `withAuthRetry`, now exposed so callers can react identically (e.g. surface a "sign in" UI).
+- `RuntimePermissionRequest.title: string` &mdash; the human-readable title surfaced by the agent for the operation needing approval (extracted from `toolCall.title` on the raw payload). Hosts no longer need to dig through `request.raw?.toolCall?.title` to render a prompt.
+
+Both helpers re-exported from the main entry (`@acp-kit/core`); `RuntimePermissionRequest` is unchanged in shape, only adds an extra field.
+
 ## [0.3.0] - 2026-04-22
 
 Minor release. No breaking changes &mdash; only new opt-in exports under `@acp-kit/core/node`.

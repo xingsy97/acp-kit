@@ -14,6 +14,7 @@ import {
 } from '@agentclientprotocol/sdk';
 
 import type { RuntimeHost } from './host.js';
+import { isAcpAuthRequired } from './errors.js';
 import { resolveAgentProfile, type AgentProfile, type BuiltInProfileId } from './profiles.js';
 import { RuntimeSession, createInitialSessionEvents, type AcpConnectionLike } from './session.js';
 import type {
@@ -484,7 +485,7 @@ async function withAuthRetry<T>(params: AuthRetryParams<T>): Promise<T> {
   try {
     return await params.operation();
   } catch (error) {
-    if (!isAuthRequiredError(error)) throw error;
+    if (!isAcpAuthRequired(error)) throw error;
 
     const methodId = await chooseAuthMethod(params.host, [...params.authMethods]);
     if (!methodId) {
@@ -619,6 +620,7 @@ async function handlePermissionRequest(
       id?: string;
       toolName?: string;
       kind?: string;
+      title?: string;
       input?: unknown;
       arguments?: unknown;
       content?: unknown;
@@ -626,6 +628,7 @@ async function handlePermissionRequest(
   }).toolCall;
   const toolCallId = toolCall?.id || 'unknown-tool-call';
   const toolName = toolCall?.toolName || toolCall?.kind || 'tool';
+  const title = toolCall?.title || '';
   const input = toolCall?.input ?? toolCall?.arguments ?? toolCall?.content;
 
   const decision = host.requestPermission
@@ -633,6 +636,7 @@ async function handlePermissionRequest(
       sessionId,
       toolCallId,
       toolName,
+      title,
       input,
       options,
       raw: request,
@@ -676,21 +680,6 @@ async function chooseAuthMethod(host: RuntimeHost, methods: AuthMethod[]): Promi
     return host.chooseAuthMethod({ methods });
   }
   return methods[0]?.id || null;
-}
-
-function isAuthRequiredError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') {
-    return false;
-  }
-  const candidate = error as { code?: unknown; message?: unknown; data?: { message?: unknown; details?: unknown } };
-  if (candidate.code === -32000) {
-    return true;
-  }
-  const text = [candidate.message, candidate.data?.message, candidate.data?.details]
-    .filter(Boolean)
-    .map((value) => String(value).toLowerCase())
-    .join(' | ');
-  return /auth/.test(text) && /require/.test(text);
 }
 
 function looksLikeModeState(value: unknown): value is SessionModeState {

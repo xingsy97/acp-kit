@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per the SemVer 0.x convention). Patch versions remain backward compatible.
 
+## [0.2.2] - 2026-04-22
+
+Patch release. Non-breaking.
+
+### Added
+
+- `RuntimeSession.transcript` &mdash; read-only public getter returning the session's reducer state (messages, reasoning, tool calls, mode / model state, open stream ids, usage). Useful for reading the initial mode / model state populated by `newSession` / `loadSession` before the first handler has a chance to attach, and for rendering UI snapshots mid-stream without resubscribing. Previously only accessible via `getSnapshot()`, which returned a deep clone on each call.
+
 ## [0.2.1] - 2026-04-22
 
 Patch release. Non-breaking additions to the normalized event surface so every ACP session update has a typed runtime event and vendor extensions survive the normalization layer.

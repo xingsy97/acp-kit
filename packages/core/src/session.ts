@@ -104,7 +104,7 @@ export class RuntimeSession {
   private readonly host: RuntimeHost;
   private readonly connection: AcpConnectionLike;
   private readonly listeners = new Map<string, Set<Listener>>();
-  private readonly transcript = createTranscriptState();
+  private readonly transcriptState = createTranscriptState();
 
   private status: SessionStatus = 'idle';
   private currentTurnId: string | null = null;
@@ -119,8 +119,20 @@ export class RuntimeSession {
     this.connection = options.connection;
 
     for (const event of options.initialEvents || []) {
-      applyRuntimeEvent(this.transcript, event);
+      applyRuntimeEvent(this.transcriptState, event);
     }
+  }
+
+  /**
+   * Read-only snapshot of the session's reducer state (messages, reasoning,
+   * tool calls, mode/model state, open stream ids, usage). Updates in place as
+   * events arrive &mdash; do not mutate. Useful for reading the initial
+   * mode / model state populated by `newSession` / `loadSession` before the
+   * first handler has a chance to attach, or for rendering a fresh UI from a
+   * mid-stream snapshot.
+   */
+  get transcript() {
+    return this.transcriptState;
   }
 
   /**
@@ -177,7 +189,7 @@ export class RuntimeSession {
   }
 
   getSnapshot(): TranscriptState {
-    return cloneTranscriptState(this.transcript);
+    return cloneTranscriptState(this.transcriptState);
   }
 
   async prompt(text: string): Promise<PromptResult> {
@@ -321,7 +333,7 @@ export class RuntimeSession {
 
   hydrateInitialState(initialEvents: RuntimeEvent[]): void {
     for (const event of initialEvents) {
-      applyRuntimeEvent(this.transcript, event);
+      applyRuntimeEvent(this.transcriptState, event);
     }
   }
 
@@ -340,14 +352,14 @@ export class RuntimeSession {
   }
 
   private flushPendingStreams(): void {
-    const completions = flushOpenStreamCompletions(this.transcript, Date.now());
+    const completions = flushOpenStreamCompletions(this.transcriptState, Date.now());
     for (const event of completions) {
       this.emitEvent(event);
     }
   }
 
   private emitRuntimeEvent(event: RuntimeEvent): void {
-    applyRuntimeEvent(this.transcript, event);
+    applyRuntimeEvent(this.transcriptState, event);
     this.emitEvent(event);
   }
 

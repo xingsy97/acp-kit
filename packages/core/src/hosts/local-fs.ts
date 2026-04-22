@@ -146,7 +146,24 @@ export function createLocalFileSystemHost(options: LocalFileSystemHostOptions): 
 }
 
 function assertUnderRoot(root: string, candidate: string, requested: string): void {
-  const rel = relative(root, candidate);
-  if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) return;
+  const r = canonicalizeForCompare(root);
+  const c = canonicalizeForCompare(candidate);
+  if (c === r) return;
+  const sep = process.platform === 'win32' ? '\\' : '/';
+  if (c.startsWith(r.endsWith(sep) ? r : r + sep)) return;
   throw new Error(`Path escapes sandbox root: ${requested}`);
+}
+
+/**
+ * Normalize a path for safe equality / startsWith comparison across the
+ * platform-specific oddities `path.relative` cannot smooth over by itself
+ * (Windows `\\?\` long-path prefix and case-insensitive volumes).
+ */
+function canonicalizeForCompare(p: string): string {
+  let out = p;
+  if (process.platform === 'win32') {
+    if (out.startsWith('\\\\?\\')) out = out.slice(4);
+    out = out.toLowerCase();
+  }
+  return out;
 }

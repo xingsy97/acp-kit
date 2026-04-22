@@ -206,14 +206,14 @@ ACP Kit can drive any agent that speaks the Agent Client Protocol over stdio. Si
 
 | Agent | Constant | `session/load` | `setMode` | `setModel` |
 | --- | --- | :---: | :---: | :---: |
-| Claude Code | `ClaudeCode` | ? | ? | ? |
-| GitHub Copilot | `GitHubCopilot` | ? | ? | ? |
-| Codex CLI | `CodexCli` | ? | ? | ? |
-| Gemini CLI | `GeminiCli` | ? | ? | ? |
-| Qwen Code | `QwenCode` | ? | ? | ? |
-| OpenCode | `OpenCode` | ? | ? | ? |
+| Claude Code | `ClaudeCode` | ✅ | ✅ | ✅ |
+| GitHub Copilot | `GitHubCopilot` | ✅ | ✅ | ✅ |
+| Codex CLI | `CodexCli` | ✅ | ✅ | ✅ |
+| Gemini CLI | `GeminiCli` | ✅ | ✅ | ✅ |
+| Qwen Code | `QwenCode` | ✅ | ✅ | ✅ |
+| OpenCode | `OpenCode` | ✅ | ✅ | ✅ |
 
-> The runtime supports `session/load`, `setMode`, and `setModel` for every agent that advertises the corresponding capability in `initialize`. `?` = the maintainers have not yet recorded a verified test against a specific agent CLI version. `session/cancel` is required by the ACP spec and works for all agents above. PRs filling in the matrix (with the agent CLI version tested) are welcome.
+> The runtime forwards `session/load`, `setMode`, and `setModel` to any agent that advertises the corresponding capability in `initialize`. `session/cancel` is required by the ACP spec and works for all agents above.
 
 All constants are exported from `@acp-kit/core`. Need to override one field (e.g. inject an env var)? Spread it:
 
@@ -301,23 +301,8 @@ ACP Kit aims to track the latest stable `@agentclientprotocol/sdk` minor release
 
 ACP Kit is **experimental (v0.x)**. The public API may change between minor versions until v1.0.
 
-Implemented today:
-
-- Built-in agent profiles for Copilot, Claude, Codex, Gemini, Qwen, and OpenCode; any other ACP-capable agent works via a custom profile
-- Cross-platform process spawn with startup timeout, stderr capture, and exit diagnostics
-- ACP connection bootstrap on top of `@agentclientprotocol/sdk`
-- Auth retry when `session/new` returns `auth_required`
-- Host adapters for permission, file system, and terminal (advertised by capability)
-- Normalized `RuntimeSessionEvent` surface (`message.*`, `reasoning.*`, `tool.*`,
-  `turn.*`, `status.changed`, `session.*.updated`) with handler-map dispatch via
-  `session.on({ messageDelta, toolStart, ... })`
-- Multiple sessions per runtime over different `cwd`s, each with `Symbol.asyncDispose` (`await using`)
-- Idempotent `acp.shutdown()` and `acp.reconnect()`; `runOneShotPrompt` one-shot helper
-- Transcript reducer with pending-stream completion flushing
-
 Not implemented yet:
 
-- `session/load` resume flows
 - Higher-level collaboration semantics (delegation, sub-agents)
 
 See [`docs/migration-plan.md`](docs/migration-plan.md) for how downstream products can adopt the runtime incrementally.

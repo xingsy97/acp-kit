@@ -2,14 +2,14 @@
 
 Two ACP agents collaborating on the same working directory:
 
-- **AUTHOR** &mdash; Claude Code (`claude` profile, `haiku` model). Writes / modifies files via the agent's filesystem tools.
-- **REVIEWER** &mdash; Codex (`codex` profile, `gpt-5.4` model). Reads the files back via its own filesystem tools and replies `APPROVED` or a numbered list of issues.
+- **AUTHOR** &mdash; GitHub Copilot (`GitHubCopilot` agent, `gpt-5.4` model). Writes / modifies files via the agent's filesystem tools.
+- **REVIEWER** &mdash; Codex (`CodexCli` agent, `gpt-5.4` model). Reads the files back via its own filesystem tools and replies `APPROVED` or a numbered list of issues.
 
 The script loops until `APPROVED` (or `MAX_ROUNDS` is hit). The deliverable is the working tree, not pasted code.
 
 ## What it shows
 
-- `authorSettings` / `reviewerSettings` objects at the top of `index.mjs` &mdash; swap profile or model in one place.
+- `authorSettings` / `reviewerSettings` objects at the top of `index.mjs` &mdash; swap agent or model in one place.
 - Two `createAcpRuntime` instances (one per agent process) hosting one session each, both pointed at the same `cwd`.
 - `session.setModel(...)` &mdash; per-session model selection via ACP `session/set_model`.
 - `session.on({ messageDelta, toolStart, toolEnd, turnCompleted, turnFailed })` &mdash; handler-map dispatch over normalized `RuntimeSessionEvent`s.

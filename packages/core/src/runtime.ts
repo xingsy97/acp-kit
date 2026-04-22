@@ -21,7 +21,7 @@ import { CORE_PACKAGE_NAME, CORE_PACKAGE_VERSION } from './package-info.js';
 
 import type { RuntimeHost } from './host.js';
 import { isAcpAuthRequired } from './errors.js';
-import { resolveAgentProfile, type AgentProfile, type BuiltInProfileId } from './profiles.js';
+import { type AgentProfile } from './agents.js';
 import { RuntimeSession, createInitialSessionEvents, type AcpConnectionLike } from './session.js';
 import type {
   AcpConnectionFactory,
@@ -72,7 +72,7 @@ export interface AcpTransportSession {
  */
 export interface AcpTransport {
   connect(params: {
-    profile: AgentProfile;
+    agent: AgentProfile;
     host: RuntimeHost;
     client: Client;
     cwd: string | undefined;
@@ -85,7 +85,13 @@ export interface AcpTransport {
 /* ------------------------------------------------------------------------- */
 
 export interface RuntimeOptions {
-  profile: AgentProfile | BuiltInProfileId;
+  /**
+   * Which agent to launch. Pass one of the built-in constants
+   * ({@link GitHubCopilot}, {@link ClaudeCode}, {@link CodexCli},
+   * {@link GeminiCli}, {@link QwenCode}, {@link OpenCode}) or a custom
+   * {@link AgentProfile} literal.
+   */
+  agent: AgentProfile;
   /**
    * Optional default working directory for sessions created via `newSession()` without an explicit `cwd`.
    * If omitted, callers MUST provide `cwd` to every `newSession({ cwd })` call.
@@ -135,7 +141,7 @@ interface ConnectionState {
 /* ------------------------------------------------------------------------- */
 
 export class AcpRuntime {
-  private readonly profile: AgentProfile;
+  private readonly agent: AgentProfile;
   private readonly cwd: string | undefined;
   private readonly host: RuntimeHost;
   private readonly explicitTransport: AcpTransport | undefined;
@@ -146,7 +152,11 @@ export class AcpRuntime {
   private shutdownStarted = false;
 
   constructor(options: RuntimeOptions) {
-    this.profile = resolveAgentProfile(options.profile);
+    this.agent = {
+      ...options.agent,
+      args: [...options.agent.args],
+      env: options.agent.env ? { ...options.agent.env } : undefined,
+    };
     this.cwd = options.cwd;
     this.host = options.host;
     this.explicitTransport = options.transport;
@@ -193,7 +203,7 @@ export class AcpRuntime {
     const sessionCapabilities = state.initResponse.agentCapabilities?.sessionCapabilities;
     if (!sessionCapabilities?.list) {
       throw new Error(
-        `Agent "${this.profile.id}" does not advertise the session/list capability. `
+        `Agent "${this.agent.id}" does not advertise the session/list capability. `
         + 'Inspect `acp.agentCapabilities.sessionCapabilities?.list` before calling listSessions().',
       );
     }
@@ -214,7 +224,7 @@ export class AcpRuntime {
   async newSession(options: NewSessionOptions = {}): Promise<RuntimeSession> {
     const cwd = this.requireCwd(options.cwd, 'newSession');
     const state = await this.connect();
-    const startupTimeoutMs = this.profile.startupTimeoutMs || 30000;
+    const startupTimeoutMs = this.agent.startupTimeoutMs || 30000;
 
     const sessionResponse = await withAuthRetry({
       operation: () => withStartupDiagnostics(
@@ -227,14 +237,14 @@ export class AcpRuntime {
           'ACP session/new',
         ),
         state.transportSession,
-        this.profile,
+        this.agent,
         'ACP session/new',
       ),
       authMethods: state.initResponse.authMethods || [],
       authenticate: state.connection.authenticate?.bind(state.connection),
       host: this.host,
       transportSession: state.transportSession,
-      profile: this.profile,
+      agent: this.agent,
       timeoutMs: startupTimeoutMs,
     });
 
@@ -262,11 +272,11 @@ export class AcpRuntime {
     }
     if (!state.initResponse.agentCapabilities?.loadSession) {
       throw new Error(
-        `Agent "${this.profile.id}" does not advertise the loadSession capability. `
+        `Agent "${this.agent.id}" does not advertise the loadSession capability. `
         + 'Inspect `acp.agentCapabilities.loadSession` before calling loadSession().',
       );
     }
-    const startupTimeoutMs = this.profile.startupTimeoutMs || 30000;
+    const startupTimeoutMs = this.agent.startupTimeoutMs || 30000;
 
     const loadResponse = await withAuthRetry({
       operation: () => withStartupDiagnostics(
@@ -280,14 +290,14 @@ export class AcpRuntime {
           'ACP session/load',
         ),
         state.transportSession,
-        this.profile,
+        this.agent,
         'ACP session/load',
       ),
       authMethods: state.initResponse.authMethods || [],
       authenticate: state.connection.authenticate?.bind(state.connection),
       host: this.host,
       transportSession: state.transportSession,
-      profile: this.profile,
+      agent: this.agent,
       timeoutMs: startupTimeoutMs,
     });
 
@@ -401,14 +411,14 @@ export class AcpRuntime {
     });
 
     const transportSession = await transport.connect({
-      profile: this.profile,
+      agent: this.agent,
       host: this.host,
       client,
       cwd: this.cwd,
       onSessionUpdate: sessionUpdateRouter,
     });
 
-    const startupTimeoutMs = this.profile.startupTimeoutMs || 30000;
+    const startupTimeoutMs = this.agent.startupTimeoutMs || 30000;
     const promptCapabilities = this.host.promptCapabilities;
     const initResponse = await withStartupDiagnostics(
       withTimeout(
@@ -443,7 +453,7 @@ export class AcpRuntime {
         'ACP initialize',
       ),
       transportSession,
-      this.profile,
+      this.agent,
       'ACP initialize',
     );
 
@@ -485,7 +495,7 @@ export class AcpRuntime {
 
     const session = new RuntimeSession({
       sessionId: params.sessionId,
-      profile: this.profile,
+      agent: this.agent,
       host: this.host,
       connection: params.state.connection,
       initialEvents,
@@ -515,7 +525,7 @@ interface AuthRetryParams<T> {
   authenticate: ((params: { methodId: string }) => Promise<unknown>) | undefined;
   host: RuntimeHost;
   transportSession: AcpTransportSession;
-  profile: AgentProfile;
+  agent: AgentProfile;
   timeoutMs: number;
 }
 
@@ -541,7 +551,7 @@ async function withAuthRetry<T>(params: AuthRetryParams<T>): Promise<T> {
         'ACP authenticate',
       ),
       params.transportSession,
-      params.profile,
+      params.agent,
       'ACP authenticate',
     );
 
@@ -568,25 +578,25 @@ export function createAcpRuntime(options: RuntimeOptions): AcpRuntime {
 async function withStartupDiagnostics<T>(
   promise: Promise<T>,
   transportSession: AcpTransportSession,
-  profile: AgentProfile,
+  agent: AgentProfile,
   label: string,
 ): Promise<T> {
   try {
     return await promise;
   } catch (error) {
-    throw enhanceStartupError(error, transportSession, profile, label);
+    throw enhanceStartupError(error, transportSession, agent, label);
   }
 }
 
 function enhanceStartupError(
   error: unknown,
   transportSession: AcpTransportSession,
-  profile: AgentProfile,
+  agent: AgentProfile,
   label: string,
 ): Error {
   const baseMessage = error instanceof Error ? error.message : String(error);
   const details: string[] = [
-    `${label} failed for profile "${profile.id}".`,
+    `${label} failed for agent "${agent.id}".`,
     baseMessage,
   ];
 

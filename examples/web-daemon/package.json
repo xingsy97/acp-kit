@@ -1,0 +1,14 @@
+{
+  "name": "@acp-kit/example-web-daemon",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Tiny HTTP + Server-Sent Events demo for @acp-kit/core: POST a prompt, stream normalized session events back to a browser.",
+  "type": "module",
+  "main": "./index.mjs",
+  "scripts": {
+    "start": "node ./index.mjs"
+  },
+  "dependencies": {
+    "@acp-kit/core": "^0.5.0"
+  }
+}

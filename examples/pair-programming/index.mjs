@@ -10,14 +10,14 @@
 import process from 'node:process';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { createAcpRuntime } from '@acp-kit/core';
+import { createAcpRuntime, GitHubCopilot, CodexCli } from '@acp-kit/core';
 
 const cwd  = path.resolve(process.argv[2] || process.cwd());
 const task = process.argv[3] ||
   'write a very complete, beautiful, production-quality graphical snake game in C#';
 
 const authorSettings = {
-  profile: 'copilot',
+  agent:   GitHubCopilot,
   model:   'gpt-5.4',
   prompt: ({ round, feedback }) => round === 1
     ? `You are the AUTHOR. Working dir: ${cwd}\n\nTask: ${task}\n\n` +
@@ -26,7 +26,7 @@ const authorSettings = {
 };
 
 const reviewerSettings = {
-  profile: 'codex',
+  agent:   CodexCli,
   model:   'gpt-5.4',
   prompt: () =>
     `You are the REVIEWER. Original task: ${task}\n\n` +
@@ -37,7 +37,7 @@ const reviewerSettings = {
 
 const MAX_ROUNDS = 10;
 
-console.log(`cwd:      ${cwd}\nauthor:   ${authorSettings.profile} / ${authorSettings.model}\nreviewer: ${reviewerSettings.profile} / ${reviewerSettings.model}\ntask:     ${task}\n`);
+console.log(`cwd:      ${cwd}\nauthor:   ${authorSettings.agent.displayName}\nreviewer: ${reviewerSettings.agent.displayName}\ntask:     ${task}\n`);
 await fs.mkdir(cwd, { recursive: true });
 
 console.log('Launching agents in parallel (this can take a few seconds on cold start)...');
@@ -66,11 +66,11 @@ try {
   await reviewer.close();
 }
 
-async function openRole(role, { profile, model }) {
+async function openRole(role, { agent, model }) {
   const log = (msg) => console.log(`  [${role.toLowerCase()}] ${msg}`);
-  log(`launching ${profile}...`);
+  log(`launching ${agent.displayName}...`);
   const runtime = createAcpRuntime({
-    profile,
+    agent,
     host: {
       requestPermission: async () => 'allow_once',
       chooseAuthMethod:  async ({ methods }) => methods[0]?.id ?? null,

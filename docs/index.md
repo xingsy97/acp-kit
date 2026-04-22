@@ -8,7 +8,7 @@ description: ACP Kit is a runtime for building applications on top of the Agent 
 hero:
   name: ACP Kit
   text: Ship ACP agents, not agent plumbing.
-  tagline: One runtime to launch any ACP agent, including Copilot, Claude, and Codex. Process lifecycle, auth retries, and streaming events handled.
+  tagline: One runtime to launch any ACP agent, including Copilot, Claude, Codex, Gemini, Qwen, and OpenCode. Process lifecycle, auth retries, and streaming events handled.
   image:
     src: /logo.svg
     alt: ACP Kit logo

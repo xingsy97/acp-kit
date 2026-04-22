@@ -4,7 +4,7 @@ The minimum code needed to run a single ACP prompt through ACP Kit. Uses the one
 
 ## What it shows
 
-- Call `runOneShotPrompt({ profile, cwd, prompt })` and iterate the returned async iterable of `RuntimeSessionEvent`s.
+- Call `runOneShotPrompt({ agent, cwd, prompt })` and iterate the returned async iterable of `RuntimeSessionEvent`s.
 - Use `onRuntimeEvent(event, { ... })` to dispatch by camelCase name (`messageDelta`, `toolStart`, ...) &mdash; no string literals, full type narrowing per handler.
 - No manual `dispose` / `shutdown` needed.
 
@@ -12,8 +12,8 @@ The minimum code needed to run a single ACP prompt through ACP Kit. Uses the one
 
 ```bash
 npm install
-npm start                                # defaults: profile=claude, prompt="Write a demo for this repo"
-npm start -- copilot "Summarize this"    # custom profile + prompt
+npm start                                # defaults: agent=claude, prompt="Write a demo for this repo"
+npm start -- copilot "Summarize this"    # custom agent + prompt
 ```
 
 > Requires the corresponding agent CLI on `PATH` (`claude`, `gh copilot`, etc). To explore the runtime without installing any agent, use [`../mock-runtime/`](../mock-runtime/) instead.

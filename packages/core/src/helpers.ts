@@ -1,12 +1,12 @@
 import type { McpServer } from '@agentclientprotocol/sdk';
 
+import type { AgentProfile } from './agents.js';
 import type { RuntimeHost } from './host.js';
-import type { AgentProfile, BuiltInProfileId } from './profiles.js';
 import { createAcpRuntime, type AcpTransport } from './runtime.js';
 import type { RuntimeSessionEvent } from './session.js';
 
 export interface RunOneShotPromptOptions {
-  profile: AgentProfile | BuiltInProfileId;
+  agent: AgentProfile;
   cwd: string;
   prompt: string;
   /**
@@ -30,7 +30,9 @@ export interface RunOneShotPromptOptions {
  * For multi-turn, multi-session, or long-lived hosts use `createAcpRuntime` directly.
  *
  * ```ts
- * for await (const event of runOneShotPrompt({ profile: 'copilot', cwd, prompt: 'Hi' })) {
+ * import { runOneShotPrompt, ClaudeCode } from '@acp-kit/core';
+ *
+ * for await (const event of runOneShotPrompt({ agent: ClaudeCode, cwd, prompt: 'Hi' })) {
  *   if (event.type === 'message.delta') process.stdout.write(event.delta);
  * }
  * ```
@@ -42,7 +44,7 @@ export function runOneShotPrompt(options: RunOneShotPromptOptions): AsyncIterabl
   };
 
   const runtime = createAcpRuntime({
-    profile: options.profile,
+    agent: options.agent,
     host,
     transport: options.transport,
   });

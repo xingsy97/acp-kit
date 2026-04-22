@@ -16,7 +16,7 @@ import {
 import { onRuntimeEvent, type RuntimeEventHandlers } from './runtime-event.js';
 
 import type { RuntimeHost } from './host.js';
-import type { AgentProfile } from './profiles.js';
+import type { AgentProfile } from './agents.js';
 
 function newId(): string {
   // Web Crypto is available in Node >=19 and every modern browser/Webview.
@@ -92,7 +92,7 @@ type Listener = (event: RuntimeSessionEvent) => void;
 
 interface RuntimeSessionOptions {
   sessionId: string;
-  profile: AgentProfile;
+  agent: AgentProfile;
   host: RuntimeHost;
   connection: AcpConnectionLike;
   initialEvents?: RuntimeEvent[];
@@ -100,7 +100,7 @@ interface RuntimeSessionOptions {
 
 export class RuntimeSession {
   readonly sessionId: string;
-  readonly profile: AgentProfile;
+  readonly agent: AgentProfile;
 
   private readonly host: RuntimeHost;
   private readonly connection: AcpConnectionLike;
@@ -115,7 +115,7 @@ export class RuntimeSession {
 
   constructor(options: RuntimeSessionOptions) {
     this.sessionId = options.sessionId;
-    this.profile = options.profile;
+    this.agent = options.agent;
     this.host = options.host;
     this.connection = options.connection;
 

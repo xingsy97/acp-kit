@@ -5,7 +5,20 @@ ACP Kit is a Node.js runtime for products that need to talk to ACP agents throug
 ## Prerequisites
 
 - Node.js 18+
-- A reachable ACP-capable agent CLI for real sessions (Copilot CLI, Claude ACP, or Codex ACP)
+- A reachable ACP-capable agent CLI for real sessions (see [Supported ACP agents](#supported-acp-agents) below)
+
+## Supported ACP agents
+
+ACP Kit can drive any agent that speaks the Agent Client Protocol over stdio. Six agents ship as named constants you import and pass as `agent: <Constant>`; any other ACP-capable agent works via a custom `AgentProfile` literal.
+
+| Agent | Constant |
+| --- | --- |
+| GitHub Copilot | `GitHubCopilot` |
+| Claude Code | `ClaudeCode` |
+| Codex CLI | `CodexCli` |
+| Gemini CLI | `GeminiCli` |
+| Qwen Code | `QwenCode` |
+| OpenCode | `OpenCode` |
 
 ## Installation
 
@@ -18,10 +31,10 @@ npm install @acp-kit/core
 For a one-shot prompt, use `runOneShotPrompt` (yields normalized `RuntimeSessionEvent`s):
 
 ```ts
-import { runOneShotPrompt, onRuntimeEvent } from '@acp-kit/core';
+import { runOneShotPrompt, onRuntimeEvent, ClaudeCode } from '@acp-kit/core';
 
 for await (const event of runOneShotPrompt({
-  profile: 'copilot',
+  agent: ClaudeCode,
   cwd: process.cwd(),
   prompt: 'Explain what this repository does.',
 })) {
@@ -35,10 +48,10 @@ For multi-session apps, use `createAcpRuntime` with `await using` and pass a
 handler map directly to `session.on(...)`:
 
 ```ts
-import { createAcpRuntime } from '@acp-kit/core';
+import { createAcpRuntime, ClaudeCode } from '@acp-kit/core';
 
 await using acp = createAcpRuntime({
-  profile: 'copilot',
+  agent: ClaudeCode,
   host: { requestPermission: async () => 'allow_once' },
 });
 

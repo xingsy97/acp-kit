@@ -22,7 +22,7 @@ What you thought should happen instead.
 
 **Reproduction**
 
-Minimal steps. If possible, base the repro on `examples/runtime-demo.mjs` or a small standalone script.
+Minimal steps. If possible, base the repro on [`examples/quick-start/`](../../examples/quick-start/) or [`examples/mock-runtime/`](../../examples/mock-runtime/) (the latter requires no agent install).
 
 ```ts
 // minimal repro here

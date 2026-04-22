@@ -3,14 +3,32 @@
 import { createInterface } from 'node:readline/promises';
 import process from 'node:process';
 
-import { createAcpRuntime } from '@acp-kit/core';
+import {
+  createAcpRuntime,
+  GitHubCopilot,
+  ClaudeCode,
+  CodexCli,
+  GeminiCli,
+  QwenCode,
+  OpenCode,
+} from '@acp-kit/core';
+
+const agents = {
+  copilot: GitHubCopilot,
+  claude:  ClaudeCode,
+  codex:   CodexCli,
+  gemini:  GeminiCli,
+  qwen:    QwenCode,
+  opencode: OpenCode,
+};
 
 const args = parseArgs(process.argv.slice(2));
-if (!args.profile) {
-  console.error('Error: --profile <copilot|claude|codex> is required.');
+if (!args.profile || !agents[args.profile]) {
+  console.error(`Error: --profile <${Object.keys(agents).join('|')}> is required.`);
   console.error('See examples/real-agent-cli/README.md');
   process.exit(2);
 }
+const agent = agents[args.profile];
 
 const promptText = args.prompt || 'Describe this repository in two sentences.';
 const cwd = args.cwd || process.cwd();
@@ -20,11 +38,11 @@ const host = createInteractiveHost({
   autoPermission: args.autoPermission,
 });
 
-const runtime = createAcpRuntime({ profile: args.profile, host });
+const runtime = createAcpRuntime({ agent, host });
 
 console.log(`\nACP Kit real-agent-cli demo`);
-console.log(`profile: ${args.profile}`);
-console.log(`cwd: ${cwd}`);
+console.log(`agent:  ${agent.displayName}`);
+console.log(`cwd:    ${cwd}`);
 console.log(`prompt: ${promptText}\n`);
 
 let session;
@@ -103,7 +121,7 @@ function parseArgs(argv) {
     const token = argv[i];
     const next = argv[i + 1];
     switch (token) {
-      case '--profile':         parsed.profile = next; i += 1; break;
+      case '--agent':           parsed.profile = next; i += 1; break;
       case '--prompt':          parsed.prompt = next; i += 1; break;
       case '--cwd':             parsed.cwd = next; i += 1; break;
       case '--auto-auth':       parsed.autoAuth = next; i += 1; break;

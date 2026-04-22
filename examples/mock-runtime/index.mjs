@@ -6,7 +6,7 @@ import process from 'node:process';
 import { createAcpRuntime } from '@acp-kit/core';
 
 const runtime = createAcpRuntime({
-  profile: {
+  agent: {
     id: 'mock',
     displayName: 'Mock ACP Agent',
     command: 'mock-agent',

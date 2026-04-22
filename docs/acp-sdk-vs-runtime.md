@@ -281,10 +281,10 @@ With ACP Kit, the product is still doing the same thing.
 But the repeated runtime work has already been pulled into a shared layer:
 
 ```ts
-import { createAcpRuntime } from '@acp-kit/core'
+import { createAcpRuntime, ClaudeCode } from '@acp-kit/core'
 
 await using acp = createAcpRuntime({
-  profile: 'copilot',
+  agent: ClaudeCode,
   host: {
     requestPermission: async (request) => ui.askPermission(request),
   },

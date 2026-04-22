@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per the SemVer 0.x convention). Patch versions remain backward compatible.
 
+## [0.5.0] - 2026-04-22
+
+Minor release with **breaking API changes** (allowed by 0.x SemVer). Renames the agent-selection surface so that what you pass to the runtime reads as "which agent", not "which configuration preset". Also expands the set of agents that ship as built-in named constants from 3 to 6.
+
+### Breaking
+
+- `RuntimeOptions.profile` is now `RuntimeOptions.agent`. Same for `RunOneShotPromptOptions.profile` (`runOneShotPrompt`), `AcpTransport.connect({ profile })`, and `AcpConnectionFactory.create({ profile })`. The field type is now strictly `AgentProfile` &mdash; **string ids are no longer accepted**; import the named constant instead.
+- `RuntimeSession.profile` is now `RuntimeSession.agent` (read-only).
+- Removed: `BuiltInProfileId`, `builtInProfiles`, `resolveAgentProfile`. Code that did `profile: 'claude'` should switch to `agent: ClaudeCode` (`import { ClaudeCode } from '@acp-kit/core'`).
+- The startup-error message format changed from `... failed for profile "X".` to `... failed for agent "X".`.
+
+### Added
+
+- Six built-in agent constants exported from `@acp-kit/core`, all typed as `AgentProfile`:
+  - `GitHubCopilot` &mdash; `npx @github/copilot-language-server@latest --acp`
+  - `ClaudeCode` &mdash; `npx @zed-industries/claude-code-acp@latest`
+  - `CodexCli` &mdash; `npx @zed-industries/codex-acp@latest`
+  - `GeminiCli` &mdash; `npx @google/gemini-cli@latest --experimental-acp`
+  - `QwenCode` &mdash; `npx @qwen-code/qwen-code@latest --acp --experimental-skills`
+  - `OpenCode` &mdash; `npx opencode-ai@latest acp`
+
+  Override individual fields with a spread: `{ ...ClaudeCode, env: { ANTHROPIC_API_KEY: '...' } }`.
+
+### Why
+
+The word "profile" suggested a configuration preset, but the value really answered "which agent". Accepting bare strings (`profile: 'claude'`) made typos a runtime failure and made it awkward to override a single field. Named constants give IDE autocompletion, compile-time safety, and a one-line spread for partial overrides &mdash; while still letting custom agents drop in via a plain `AgentProfile` literal.
+
+### Migration
+
+```ts
+// Before (0.4.x):
+import { createAcpRuntime } from '@acp-kit/core';
+await using acp = createAcpRuntime({ profile: 'claude', host });
+
+// After (0.5.0):
+import { createAcpRuntime, ClaudeCode } from '@acp-kit/core';
+await using acp = createAcpRuntime({ agent: ClaudeCode, host });
+
+// Custom agent (was already supported, now passed under `agent`):
+await using acp = createAcpRuntime({
+  agent: { id: 'my-agent', displayName: 'My Agent', command: 'my-cli', args: ['--acp'] },
+  host,
+});
+```
+
 ## [0.4.0] - 2026-04-22
 
 Minor release. Aligns the runtime more closely with the upstream `agent-client-protocol` spec (currently v0.12.0, SDK ^0.18.0). No breaking changes for existing callers; only additive surface and one cosmetic correction.

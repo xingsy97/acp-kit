@@ -9,7 +9,7 @@ import {
 } from '@agentclientprotocol/sdk';
 
 import type { RuntimeHost } from '../host.js';
-import type { AgentProfile } from '../profiles.js';
+import type { AgentProfile } from '../agents.js';
 import type {
   AcpTransport,
   AcpTransportConnection,
@@ -47,7 +47,7 @@ export interface AcpConnectionFactory {
   create(params: {
     client: Client;
     process: SpawnedProcess;
-    profile: AgentProfile;
+    agent: AgentProfile;
     /** Optional host — when provided, the SDK factory will tap wire frames into `host.onWireMessage`. */
     host?: RuntimeHost;
   }): AcpTransportConnection;
@@ -85,19 +85,19 @@ export function nodeChildProcessTransport(
   const connectionFactory = options.connectionFactory || createSdkConnectionFactory();
 
   return {
-    async connect({ profile, host, client, cwd }) {
-      const child = spawnProcess(profile.command, profile.args, {
+    async connect({ agent, host, client, cwd }) {
+      const child = spawnProcess(agent.command, agent.args, {
         cwd: cwd ?? process.cwd(),
         env: {
           ...process.env,
-          ...profile.env,
+          ...agent.env,
         },
       });
       const monitor = monitorProcess(child, host);
       const baseConnection = connectionFactory.create({
         client,
         process: child,
-        profile,
+        agent,
         host,
       }) as AcpTransportConnection;
 
@@ -220,12 +220,12 @@ function resolveLaunch(command: string, args: string[]): { command: string; args
 
 export function createSdkConnectionFactory(): AcpConnectionFactory {
   return {
-    create({ client, process: child, profile, host }) {
+    create({ client, process: child, agent, host }) {
       if (!child.stdin || !child.stdout) {
         throw new Error('The spawned ACP process did not expose stdin/stdout streams.');
       }
-      const readable = profile.filterStdoutLine
-        ? createFilteredReadable(child.stdout, profile.filterStdoutLine)
+      const readable = agent.filterStdoutLine
+        ? createFilteredReadable(child.stdout, agent.filterStdoutLine)
         : child.stdout;
       let stream = ndJsonStream(
         Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,

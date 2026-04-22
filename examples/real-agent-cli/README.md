@@ -4,7 +4,7 @@ A small command-line driver that runs ACP Kit against a real ACP agent. Useful a
 
 ## What it shows
 
-- Selecting a built-in profile (`copilot`, `claude`, `codex`).
+- Selecting a built-in agent (`copilot`, `claude`, `codex`, `gemini`, `qwen`, `opencode`).
 - An interactive host adapter that prompts the terminal for auth method selection and permission decisions.
 - Flag overrides for non-interactive runs (CI, automation).
 - Streaming normalized events to stdout.
@@ -18,11 +18,11 @@ This example is a standalone npm package that depends on the published `@acp-kit
 npm install
 
 # interactive
-npm start -- --profile copilot --prompt "Summarize this repository."
+npm start -- --agent copilot --prompt "Summarize this repository."
 
 # non-interactive
 npm start -- \
-  --profile copilot \
+  --agent copilot \
   --prompt "Summarize this repository." \
   --auto-auth device \
   --auto-permission allow_once
@@ -34,14 +34,14 @@ Copy this folder anywhere, then:
 
 ```bash
 npm install
-npm start -- --profile claude --prompt "Hello"
+npm start -- --agent claude --prompt "Hello"
 ```
 
 ## Flags
 
 | Flag | Purpose |
 | --- | --- |
-| `--profile <id>` | Built-in profile id: `copilot`, `claude`, or `codex`. **Required.** |
+| `--agent <id>` | Built-in agent id: `copilot`, `claude`, `codex`, `gemini`, `qwen`, or `opencode`. **Required.** |
 | `--prompt <text>` | Prompt text to send. Defaults to a short description prompt. |
 | `--cwd <path>` | Working directory for the runtime session. Defaults to the current shell `cwd`. |
 | `--auto-auth <methodId>` | Pre-select an auth method without prompting. |

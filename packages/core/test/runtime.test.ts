@@ -64,7 +64,7 @@ describe('AcpRuntime', () => {
     };
 
     const runtime = createAcpRuntime({
-      profile: {
+      agent: {
         id: 'test',
         displayName: 'Test Agent',
         command: 'test-agent',
@@ -125,7 +125,7 @@ describe('AcpRuntime', () => {
 
     const chooseAuthMethod = vi.fn().mockResolvedValue('device');
     const runtime = createAcpRuntime({
-      profile: {
+      agent: {
         id: 'test',
         displayName: 'Test Agent',
         command: 'test-agent',
@@ -165,7 +165,7 @@ describe('AcpRuntime', () => {
     };
 
     const runtime = createAcpRuntime({
-      profile: {
+      agent: {
         id: 'test',
         displayName: 'Test Agent',
         command: 'test-agent',
@@ -214,7 +214,7 @@ describe('AcpRuntime', () => {
     };
 
     const runtime = createAcpRuntime({
-      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      agent: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
       host: {},
       spawnProcess: createFakeSpawn(),
       connectionFactory,
@@ -248,7 +248,7 @@ describe('AcpRuntime', () => {
 
     const spawn = vi.fn(createFakeSpawn());
     const runtime = createAcpRuntime({
-      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      agent: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
       cwd: 'C:/repo',
       host: {},
       spawnProcess: spawn,
@@ -290,7 +290,7 @@ describe('AcpRuntime', () => {
     };
 
     const runtime = createAcpRuntime({
-      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      agent: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
       cwd: 'C:/repo',
       host: {},
       spawnProcess: createFakeSpawn(),
@@ -338,7 +338,7 @@ describe('AcpRuntime', () => {
     };
 
     const runtime = createAcpRuntime({
-      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      agent: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
       cwd: 'C:/repo',
       host: {},
       spawnProcess: createFakeSpawn(),
@@ -370,7 +370,7 @@ describe('AcpRuntime', () => {
     };
 
     const runtime = createAcpRuntime({
-      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      agent: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
       cwd: 'C:/repo',
       host: {},
       spawnProcess: createFakeSpawn(),
@@ -397,7 +397,7 @@ describe('AcpRuntime', () => {
     };
 
     const runtime = createAcpRuntime({
-      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      agent: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
       cwd: 'C:/repo',
       host: {},
       spawnProcess: createFakeSpawn(),
@@ -426,7 +426,7 @@ describe('AcpRuntime', () => {
       },
     };
     const runtime = createAcpRuntime({
-      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      agent: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
       cwd: 'C:/repo',
       host: {},
       spawnProcess: createFakeSpawn(),
@@ -451,7 +451,7 @@ describe('AcpRuntime', () => {
       },
     };
     const runtime = createAcpRuntime({
-      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      agent: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
       cwd: 'C:/repo',
       host: {
         promptCapabilities: { image: true, embeddedContext: true },
@@ -486,7 +486,7 @@ describe('AcpRuntime', () => {
       },
     };
     const runtime = createAcpRuntime({
-      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      agent: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
       cwd: 'C:/repo',
       host: {},
       spawnProcess: createFakeSpawn(),
@@ -515,7 +515,7 @@ describe('AcpRuntime', () => {
       },
     };
     const runtime = createAcpRuntime({
-      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      agent: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
       cwd: 'C:/repo',
       host: {},
       spawnProcess: createFakeSpawn(),
@@ -540,7 +540,7 @@ describe('AcpRuntime', () => {
       },
     };
     const runtime = createAcpRuntime({
-      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      agent: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
       cwd: 'C:/repo',
       host: {},
       spawnProcess: createFakeSpawn(),
@@ -565,7 +565,7 @@ describe('AcpRuntime', () => {
       },
     };
     const runtime = createAcpRuntime({
-      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      agent: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
       cwd: 'C:/repo',
       host: {},
       spawnProcess: createFakeSpawn(),
@@ -593,7 +593,7 @@ describe('AcpRuntime', () => {
       },
     };
     const runtime = createAcpRuntime({
-      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      agent: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
       cwd: 'C:/repo',
       host: {},
       spawnProcess: createFakeSpawn(),
@@ -625,7 +625,7 @@ describe('AcpRuntime', () => {
     };
     const spawn = vi.fn(createFakeSpawn());
     const runtime = createAcpRuntime({
-      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      agent: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
       cwd: 'C:/repo',
       host: {},
       spawnProcess: spawn,
@@ -661,7 +661,7 @@ describe('AcpRuntime', () => {
     };
 
     const runtime = createAcpRuntime({
-      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      agent: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
       cwd: 'C:/repo',
       host: {},
       transport,
@@ -713,7 +713,7 @@ describe('wireMiddleware', () => {
     };
 
     const runtime = createAcpRuntime({
-      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      agent: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
       cwd: 'C:/repo',
       host: { wireMiddleware: [logger, tagger] },
       transport,
@@ -781,7 +781,7 @@ describe('runOneShotPrompt', () => {
 
     const types: string[] = [];
     for await (const event of runOneShotPrompt({
-      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      agent: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
       cwd: 'C:/repo',
       prompt: 'hi',
       transport,

@@ -11,6 +11,12 @@
 
 It launches an ACP agent process, manages the protocol connection, handles authentication, exposes host adapters for permissions / files / terminals, and turns raw `session/update` traffic into normalized turn, message, reasoning, and tool events. Your application chooses an agent profile, attaches a host, opens a session, and consumes stable events.
 
+**Why ACP Kit:**
+
+- **Stable events over messy `session/update`.** Per-message, per-tool, per-turn events with correlation ids (`messageId`, `toolCallId`, `turnId`) &mdash; drive UI state and transcripts without parsing raw protocol traffic.
+- **Lifecycle is handled for you.** Cross-platform process spawn, startup diagnostics, `auth_required` retry, `session.error` surfacing, vendor `_meta` pass-through, multiple sessions over one agent process.
+- **Six common agents, one import.** `import { ClaudeCode, GitHubCopilot, CodexCli, GeminiCli, QwenCode, OpenCode } from '@acp-kit/core'` &mdash; or drive any other ACP-capable agent via a custom `AgentProfile`.
+
 ---
 
 ## Contents
@@ -20,7 +26,7 @@ It launches an ACP agent process, manages the protocol connection, handles authe
 - [Examples](#examples)
 - [What ACP Kit Does](#what-acp-kit-does)
 - [API Overview](#api-overview)
-- [Built-in Agent Profiles](#built-in-agent-profiles)
+- [Supported ACP Agents](#supported-acp-agents)
 - [How It Compares to `@agentclientprotocol/sdk`](#how-it-compares-to-agentclientprotocolsdk)
 - [Compatibility](#compatibility)
 - [Status](#status)
@@ -46,10 +52,10 @@ stable correlation ids (`messageId`, `toolCallId`, `turnId`), and a typed payloa
 the runtime aggregates raw `session/update` traffic for you.
 
 ```ts
-import { createAcpRuntime } from '@acp-kit/core';
+import { createAcpRuntime, ClaudeCode } from '@acp-kit/core';
 
 await using acp = createAcpRuntime({
-  profile: 'copilot',
+  agent: ClaudeCode,
   host: {
     requestPermission: async () => 'allow_once',
     chooseAuthMethod:  async ({ methods }) => methods[0]?.id ?? null,
@@ -88,14 +94,15 @@ One runtime owns one agent subprocess and can host many sessions over different
 
 ## Examples
 
-The repository ships with four runnable examples under [`examples/`](examples/). Each one is a standalone npm package that installs the published `@acp-kit/core` from npm:
+The repository ships with five runnable examples under [`examples/`](examples/). Each one is a standalone npm package that installs the published `@acp-kit/core` from npm:
 
 | Example | Runs without an agent installed | What it shows |
 | --- | :---: | --- |
 | [`quick-start/`](examples/quick-start/) | No | Minimal single-prompt script. |
 | [`pair-programming/`](examples/pair-programming/) | No | Two sessions in one runtime as AUTHOR + REVIEWER, looping until the reviewer says `APPROVED`. |
 | [`mock-runtime/`](examples/mock-runtime/) | **Yes** | Self-contained mock ACP server. Use this to see the full event flow without installing an agent. |
-| [`real-agent-cli/`](examples/real-agent-cli/) | No | Interactive CLI driver for real agents (`copilot`, `claude`, `codex`) with prompts for auth and permission decisions. |
+| [`real-agent-cli/`](examples/real-agent-cli/) | No | Interactive CLI driver for real agents (`copilot`, `claude`, `codex`, `gemini`, `qwen`, `opencode`) with prompts for auth and permission decisions. |
+| [`web-daemon/`](examples/web-daemon/) | No | Tiny `node:http` + Server-Sent Events demo: POST a prompt, stream normalized events back to a browser. |
 
 ```bash
 cd examples/mock-runtime
@@ -106,6 +113,17 @@ npm start
 See [`examples/README.md`](examples/README.md) for details.
 
 ## What ACP Kit Does
+
+```mermaid
+flowchart TB
+  P["Your Product<br/>(editor extension &middot; desktop shell &middot; web daemon &middot; CLI)"]
+  K["<b>ACP Kit</b><br/>process spawn &middot; auth &middot; session lifecycle<br/>event normalization &middot; host adapters"]
+  S["@agentclientprotocol/sdk<br/>JSON-RPC framing &middot; typed payloads"]
+  A["ACP Agent CLI<br/>(Claude &middot; Copilot &middot; Codex &middot; Gemini &middot; Qwen &middot; OpenCode)"]
+  P -- normalized events --> K
+  K -- uses --> S
+  S -- stdio --> A
+```
 
 A real ACP client has to do all of this before it can hold a useful conversation:
 
@@ -134,13 +152,14 @@ frames before / after normalization.
 ```ts
 import {
   createAcpRuntime,
+  ClaudeCode,
   type RuntimeHost,
   type RuntimeSessionEvent,
   type AgentProfile,
 } from '@acp-kit/core';
 
 await using acp = createAcpRuntime({
-  profile: 'copilot',          // built-in id, or a custom AgentProfile object
+  agent: ClaudeCode,           // built-in constant, or a custom AgentProfile literal
   host: {
     requestPermission: async (req) => 'allow_once',
     chooseAuthMethod:  async ({ methods }) => methods[0]?.id ?? null,
@@ -177,22 +196,40 @@ Lifecycle helpers:
 
 One-shot helper (spawn agent + run one prompt + auto-dispose):
 
-- `runOneShotPrompt({ profile, cwd, prompt })` &mdash; yields `RuntimeSessionEvent`s.
+- `runOneShotPrompt({ agent, cwd, prompt })` &mdash; yields `RuntimeSessionEvent`s.
 
 The full surface is exported from a single entry point: `@acp-kit/core`.
 
-## Built-in Agent Profiles
+## Supported ACP Agents
 
-| Profile id | Agent |
-| --- | --- |
-| `copilot` | GitHub Copilot CLI in ACP mode |
-| `claude` | Claude ACP |
-| `codex` | Codex ACP |
+ACP Kit can drive any agent that speaks the Agent Client Protocol over stdio. Six agents ship as named constants you import and pass as `agent: <Constant>`; any other ACP-capable agent works via a custom `AgentProfile` literal (see below).
 
-Custom profiles are plain objects:
+| Agent | Constant | `session/load` | `setMode` | `setModel` |
+| --- | --- | :---: | :---: | :---: |
+| Claude Code | `ClaudeCode` | ? | ? | ? |
+| GitHub Copilot | `GitHubCopilot` | ? | ? | ? |
+| Codex CLI | `CodexCli` | ? | ? | ? |
+| Gemini CLI | `GeminiCli` | ? | ? | ? |
+| Qwen Code | `QwenCode` | ? | ? | ? |
+| OpenCode | `OpenCode` | ? | ? | ? |
+
+> The runtime supports `session/load`, `setMode`, and `setModel` for every agent that advertises the corresponding capability in `initialize`. `?` = the maintainers have not yet recorded a verified test against a specific agent CLI version. `session/cancel` is required by the ACP spec and works for all agents above. PRs filling in the matrix (with the agent CLI version tested) are welcome &mdash; see [`.github/ISSUE_TEMPLATE/agent_compatibility.md`](.github/ISSUE_TEMPLATE/agent_compatibility.md).
+
+All constants are exported from `@acp-kit/core`. Need to override one field (e.g. inject an env var)? Spread it:
 
 ```ts
-const myProfile: AgentProfile = {
+import { createAcpRuntime, ClaudeCode } from '@acp-kit/core';
+
+await using acp = createAcpRuntime({
+  agent: { ...ClaudeCode, env: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY! } },
+  host,
+});
+```
+
+For a brand-new agent, write an `AgentProfile` literal:
+
+```ts
+const myAgent: AgentProfile = {
   id: 'my-agent',
   displayName: 'My Agent',
   command: 'my-agent-cli',
@@ -200,7 +237,7 @@ const myProfile: AgentProfile = {
   env: { /* optional */ },
 };
 
-await using acp = createAcpRuntime({ profile: myProfile, host });
+await using acp = createAcpRuntime({ agent: myAgent, host });
 ```
 
 ## How It Compares to `@agentclientprotocol/sdk`
@@ -266,7 +303,7 @@ ACP Kit is **experimental (v0.x)**. The public API may change between minor vers
 
 Implemented today:
 
-- Built-in agent profiles for Copilot, Claude, Codex; custom profiles via plain objects
+- Built-in agent profiles for Copilot, Claude, Codex, Gemini, Qwen, and OpenCode; any other ACP-capable agent works via a custom profile
 - Cross-platform process spawn with startup timeout, stderr capture, and exit diagnostics
 - ACP connection bootstrap on top of `@agentclientprotocol/sdk`
 - Auth retry when `session/new` returns `auth_required`

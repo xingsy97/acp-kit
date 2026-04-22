@@ -1,6 +1,6 @@
 {
   "name": "@acp-kit/core",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "ACP Kit core runtime: agent profiles, process spawn, ACP connection bootstrap, auth orchestration, host adapters, and session lifecycle on top of @agentclientprotocol/sdk.",
   "type": "module",
   "main": "./dist/index.js",
@@ -24,10 +24,20 @@
     "acp",
     "agent-client-protocol",
     "acp-kit",
+    "runtime",
+    "llm",
+    "llm-agents",
+    "ai-agents",
     "copilot",
     "claude",
+    "claude-code",
     "codex",
-    "runtime"
+    "gemini",
+    "qwen",
+    "opencode",
+    "json-rpc",
+    "sse",
+    "agents"
   ],
   "repository": {
     "type": "git",

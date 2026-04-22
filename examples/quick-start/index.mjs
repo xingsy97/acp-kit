@@ -7,22 +7,47 @@
  * completes.
  *
  * Usage:
- *   node ./index.mjs [profile] [prompt]
+ *   node ./index.mjs [agent] [prompt]
  *   node ./index.mjs claude "Write a demo for this repo"
+ *
+ * Where [agent] is one of: copilot, claude, codex, gemini, qwen, opencode.
  */
 
 import process from 'node:process';
-import { runOneShotPrompt, onRuntimeEvent } from '@acp-kit/core';
+import {
+  runOneShotPrompt,
+  onRuntimeEvent,
+  GitHubCopilot,
+  ClaudeCode,
+  CodexCli,
+  GeminiCli,
+  QwenCode,
+  OpenCode,
+} from '@acp-kit/core';
 
-const profile = process.argv[2] || 'claude';
+const agents = {
+  copilot: GitHubCopilot,
+  claude:  ClaudeCode,
+  codex:   CodexCli,
+  gemini:  GeminiCli,
+  qwen:    QwenCode,
+  opencode: OpenCode,
+};
+
+const agentKey = process.argv[2] || 'claude';
+const agent = agents[agentKey];
+if (!agent) {
+  console.error(`Unknown agent: ${agentKey}. Choose one of: ${Object.keys(agents).join(', ')}`);
+  process.exit(2);
+}
 const prompt = process.argv[3] || 'Write a demo for this repo';
 
-console.log(`profile: ${profile}`);
-console.log(`prompt:  ${prompt}\n`);
+console.log(`agent:  ${agent.displayName}`);
+console.log(`prompt: ${prompt}\n`);
 
 try {
   for await (const event of runOneShotPrompt({
-    profile,
+    agent,
     cwd: process.cwd(),
     prompt,
   })) {

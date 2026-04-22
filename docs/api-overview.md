@@ -6,6 +6,7 @@
 import {
   createAcpRuntime,
   runOneShotPrompt,
+  ClaudeCode,
   type RuntimeHost,
   type RuntimeSessionEvent,
   type AgentProfile
@@ -16,7 +17,7 @@ import {
 
 ```ts
 await using acp = createAcpRuntime({
-  profile: 'copilot',
+  agent: ClaudeCode,
   host: {
     requestPermission: async () => 'allow_once',
     chooseAuthMethod: async ({ methods }) => methods[0]?.id ?? null,
@@ -45,28 +46,33 @@ await session.cancel(); // optional
 ## One-shot helper
 
 ```ts
-for await (const event of runOneShotPrompt({ profile: 'copilot', cwd, prompt: 'Hi' })) {
+for await (const event of runOneShotPrompt({ agent: ClaudeCode, cwd, prompt: 'Hi' })) {
   // RuntimeSessionEvent: message.delta, tool.start, turn.completed, ...
 }
 ```
 
-## Built-in profiles
+## Built-in agents
 
-- `copilot`
-- `claude`
-- `codex`
+Named constants exported from `@acp-kit/core`:
 
-## Custom profile
+- `GitHubCopilot`
+- `ClaudeCode`
+- `CodexCli`
+- `GeminiCli`
+- `QwenCode`
+- `OpenCode`
+
+## Custom agent
 
 ```ts
-const profile: AgentProfile = {
+const myAgent: AgentProfile = {
   id: 'my-agent',
   displayName: 'My Agent',
   command: 'my-agent-cli',
   args: ['--acp']
 };
 
-await using acp = createAcpRuntime({ profile, host: {} });
+await using acp = createAcpRuntime({ agent: myAgent, host: {} });
 ```
 
 ## Capability boundary

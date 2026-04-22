@@ -24,7 +24,7 @@ For v0.x the cleaner answer is: one package, clear internal modules, room to spl
 
 ```text
 packages/core/src/
-  profiles.ts        agent profile definitions
+  agents.ts          agent profile interface and built-in constants
   host.ts            host adapter interfaces (permission, fs, terminal)
   runtime.ts         process spawn, ACP connection bootstrap, auth, lifecycle
   session.ts         RuntimeSession class: prompt, cancel, turn events

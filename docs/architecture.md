@@ -8,6 +8,19 @@ Create a reusable runtime layer above `@agentclientprotocol/sdk` that multiple A
 
 ## Architecture in One Diagram
 
+```mermaid
+flowchart TB
+  P["Your Product<br/>(editor extension &middot; desktop shell &middot; web daemon &middot; CLI)"]
+  K["<b>ACP Kit</b><br/>process spawn &middot; auth &middot; session lifecycle<br/>event normalization &middot; host adapters"]
+  S["@agentclientprotocol/sdk<br/>JSON-RPC framing &middot; typed payloads"]
+  A["ACP Agent CLI<br/>(Claude &middot; Copilot &middot; Codex &middot; Gemini &middot; Qwen &middot; OpenCode)"]
+  P -- normalized events --> K
+  K -- uses --> S
+  S -- stdio --> A
+```
+
+Text fallback (for renderers without mermaid support):
+
 ```text
 Applications and Product Shells
   - VS Code extension

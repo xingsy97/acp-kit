@@ -17,39 +17,15 @@ It launches an ACP agent process, manages the protocol connection, handles authe
 - **Lifecycle is handled for you.** Cross-platform process spawn, startup diagnostics, `auth_required` retry, `session.error` surfacing, vendor `_meta` pass-through, multiple sessions over one agent process.
 - **Six common agents, one import.** `import { ClaudeCode, GitHubCopilot, CodexCli, GeminiCli, QwenCode, OpenCode } from '@acp-kit/core'` &mdash; or drive any other ACP-capable agent via a custom `AgentProfile`.
 
----
-
-## Contents
-
-- [Install](#install)
-- [Quick Start](#quick-start)
-- [Examples](#examples)
-- [What ACP Kit Does](#what-acp-kit-does)
-- [API Overview](#api-overview)
-- [Supported ACP Agents](#supported-acp-agents)
-- [How It Compares to `@agentclientprotocol/sdk`](#how-it-compares-to-agentclientprotocolsdk)
-- [Compatibility](#compatibility)
-- [Status](#status)
-- [Documentation](#documentation)
-- [Development](#development)
-- [License](#license)
-
 ## Install
 
 ```bash
 npm install @acp-kit/core
 ```
 
-Requirements:
-
-- Node.js **>= 20.11** (required for `await using` / `Symbol.asyncDispose` used in the examples below; if you cannot upgrade, call `acp.shutdown()` and `session.dispose()` explicitly and Node 18 still works)
-- A reachable ACP agent CLI (for example Copilot CLI, Claude ACP, Codex ACP) installed on the machine running the runtime
+Requires Node.js **>= 20.11** and a reachable ACP agent CLI on `PATH`.
 
 ## Quick Start
-
-Open a session and subscribe to **normalized** events. Each event has a stable `type`,
-stable correlation ids (`messageId`, `toolCallId`, `turnId`), and a typed payload &mdash;
-the runtime aggregates raw `session/update` traffic for you.
 
 ```ts
 import { createAcpRuntime, ClaudeCode } from '@acp-kit/core';
@@ -74,23 +50,7 @@ session.on({
 await session.prompt('Summarize this repository.');
 ```
 
-The handler keys are camelCase; each callback receives the matching event variant
-with full type narrowing &mdash; no string literals to remember.
-For the full list see [`RuntimeEventKind`](packages/core/src/runtime-event.ts).
-
-If you only need to watch a single event type, use a typed listener directly:
-
-```ts
-session.on('tool.start', (e) => console.log(e.toolCallId, e.title)); // e: ToolStartEvent
-session.on('message.delta', (e) => process.stdout.write(e.delta));   // e: MessageDeltaEvent
-```
-
-`session.on(...)` is overloaded: pass a handler map for camelCase dispatch, a
-literal event type to narrow a single listener, or `'event'` to receive every
-`RuntimeSessionEvent`.
-
-One runtime owns one agent subprocess and can host many sessions over different
-`cwd`s &mdash; see [`examples/pair-programming/`](examples/pair-programming/).
+`session.on(...)` accepts a camelCase handler map (shown above), a single `'tool.start'`-style event type for one listener, or `'event'` for the full union. Each callback is type-narrowed. See [Getting Started](docs/getting-started.md) for the full event vocabulary, multi-session use, and how to debug startup / auth failures.
 
 ## Examples
 
@@ -125,36 +85,21 @@ flowchart TB
   S -- stdio --> A
 ```
 
-A real ACP client has to do all of this before it can hold a useful conversation:
+Without ACP Kit, every product that wants to host an ACP agent has to write the same plumbing: pick the right CLI for the platform, spawn it without breaking on Windows shells or login envs, surface stderr when it fails to start, run `initialize`, retry `session/new` after `auth_required`, expose host capabilities only when the application actually backs them, parse `session/update` notifications into something a UI can render, and decide when a turn is really done.
 
-- choose which agent implementation to talk to and where it lives on disk
-- spawn that agent in a platform-safe way (Windows quirks, login shells, env propagation)
-- detect startup failure and surface stderr / exit reasons clearly
-- bootstrap an ACP connection with `initialize`
-- handle `auth_required` during `session/new`, run an auth method, retry
-- create sessions
-- expose host adapters (permission prompts, file access, terminal access)
-- turn raw `session/update` traffic into stable message / reasoning / tool / usage events
-- decide when a turn is actually complete
-
-ACP Kit packages all of the above behind `createAcpRuntime({...}).newSession({ cwd })` (or the `runOneShotPrompt` one-shot helper).
+ACP Kit packages all of that behind `createAcpRuntime({...}).newSession({ cwd })` (or the `runOneShotPrompt` one-shot helper). The agent stays a regular ACP server; your application stays a regular consumer of typed events. See [Architecture](docs/architecture.md) for the layer breakdown.
 
 ## API Overview
 
-`RuntimeSession` emits **normalized `RuntimeSessionEvent`s** &mdash; stable per-message,
-per-tool, and per-turn events with correlation ids (`messageId`, `toolCallId`,
-`turnId`). They drive transcripts, UI state, and multi-agent orchestration.
+`RuntimeSession` emits **normalized `RuntimeSessionEvent`s**: stable per-message, per-tool, and per-turn events with correlation ids (`messageId`, `toolCallId`, `turnId`). They drive transcripts, UI state, and multi-agent orchestration. If you need raw protocol traffic (debuggers, protocol bridges), `composeWireMiddleware` / `normalizeWireMiddleware` let you observe the exact JSON-RPC frames.
 
-If you need raw protocol traffic (debuggers, protocol bridges), use
-`composeWireMiddleware` / `normalizeWireMiddleware` to observe the exact JSON-RPC
-frames before / after normalization.
+Create the runtime with an agent profile and a host that implements only the capabilities your application backs:
 
 ```ts
 import {
   createAcpRuntime,
   ClaudeCode,
   type RuntimeHost,
-  type RuntimeSessionEvent,
   type AgentProfile,
 } from '@acp-kit/core';
 
@@ -163,17 +108,17 @@ await using acp = createAcpRuntime({
   host: {
     requestPermission: async (req) => 'allow_once',
     chooseAuthMethod:  async ({ methods }) => methods[0]?.id ?? null,
-    // Optional: file system + terminal capabilities are advertised to the
-    // agent only when the corresponding host methods are provided.
-    // readTextFile / writeTextFile take ACP request/response objects from
-    // @agentclientprotocol/sdk; createTerminal must be paired with
-    // terminalOutput / waitForTerminalExit / killTerminal / releaseTerminal.
+    // readTextFile / writeTextFile / createTerminal+friends are advertised to
+    // the agent only when you provide them. See docs/api-overview.md.
   } satisfies RuntimeHost,
 });
+```
 
+Then open a session, subscribe to events, send prompts:
+
+```ts
 await using session = await acp.newSession({ cwd: '/path/to/workspace' });
 
-// Subscribe with a handler map (camelCase keys, full type narrowing per handler)
 session.on({
   messageDelta:  (e) => process.stdout.write(e.delta),
   toolStart:     (e) => console.log(`[tool ${e.toolCallId}] ${e.title ?? e.name}`),
@@ -186,112 +131,42 @@ await session.cancel();        // optional: cancel the in-flight turn
 // session and runtime are disposed automatically by `await using`
 ```
 
-Lifecycle helpers:
+Lifecycle helpers: `acp.shutdown()` (explicit teardown), `acp.reconnect()` (drop the agent process and reconnect), `session.setMode(modeId)` / `session.setModel(modelId)` (switch mid-session when the agent advertises options). One-shot helper: `runOneShotPrompt({ agent, cwd, prompt })` yields `RuntimeSessionEvent`s and disposes everything when iteration completes.
 
-- `acp.shutdown()` &mdash; explicit teardown if you cannot use `await using`.
-- `acp.reconnect()` &mdash; drop the current agent process and reconnect without
-  losing application-level state.
-- `session.setMode(modeId)` / `session.setModel(modelId)` &mdash; switch agent mode
-  or model mid-session when the agent advertises options.
-
-One-shot helper (spawn agent + run one prompt + auto-dispose):
-
-- `runOneShotPrompt({ agent, cwd, prompt })` &mdash; yields `RuntimeSessionEvent`s.
-
-The full surface is exported from a single entry point: `@acp-kit/core`.
+The full surface is exported from a single entry point: `@acp-kit/core`. See [API Overview](docs/api-overview.md) for the complete `RuntimeHost`, `AcpRuntime`, `RuntimeSession`, and `RuntimeSessionEvent` reference.
 
 ## Supported ACP Agents
 
-ACP Kit can drive any agent that speaks the Agent Client Protocol over stdio. Six agents ship as named constants you import and pass as `agent: <Constant>`; any other ACP-capable agent works via a custom `AgentProfile` literal (see below).
+ACP Kit can drive any agent that speaks the Agent Client Protocol over stdio. Six agents ship as named constants you import and pass as `agent: <Constant>`:
 
-| Agent | Constant | `session/load` | `setMode` | `setModel` |
-| --- | --- | :---: | :---: | :---: |
-| Claude Code | `ClaudeCode` | ✅ | ✅ | ✅ |
-| GitHub Copilot | `GitHubCopilot` | ✅ | ✅ | ✅ |
-| Codex CLI | `CodexCli` | ✅ | ✅ | ✅ |
-| Gemini CLI | `GeminiCli` | ✅ | ✅ | ✅ |
-| Qwen Code | `QwenCode` | ✅ | ✅ | ✅ |
-| OpenCode | `OpenCode` | ✅ | ✅ | ✅ |
+| Agent | Constant |
+| --- | --- |
+| Claude Code | `ClaudeCode` |
+| GitHub Copilot | `GitHubCopilot` |
+| Codex CLI | `CodexCli` |
+| Gemini CLI | `GeminiCli` |
+| Qwen Code | `QwenCode` |
+| OpenCode | `OpenCode` |
 
-> The runtime forwards `session/load`, `setMode`, and `setModel` to any agent that advertises the corresponding capability in `initialize`. `session/cancel` is required by the ACP spec and works for all agents above.
+> The runtime treats every agent uniformly: features like `session/load`, `setMode`, `setModel`, `session/list`, file system, and terminal capabilities are forwarded to whichever agent advertises them in its `initialize` response. Inspect `acp.agentCapabilities` after the runtime is ready to see exactly what a given agent CLI version supports.
 
-All constants are exported from `@acp-kit/core`. Need to override one field (e.g. inject an env var)? Spread it:
-
-```ts
-import { createAcpRuntime, ClaudeCode } from '@acp-kit/core';
-
-await using acp = createAcpRuntime({
-  agent: { ...ClaudeCode, env: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY! } },
-  host,
-});
-```
-
-For a brand-new agent, write an `AgentProfile` literal:
-
-```ts
-const myAgent: AgentProfile = {
-  id: 'my-agent',
-  displayName: 'My Agent',
-  command: 'my-agent-cli',
-  args: ['--acp'],
-  env: { /* optional */ },
-};
-
-await using acp = createAcpRuntime({ agent: myAgent, host });
-```
+To override one field on a built-in profile (e.g. `agent: { ...ClaudeCode, env: { ANTHROPIC_API_KEY } }`) or to drive a brand-new agent via a custom [`AgentProfile`](packages/core/src/agents.ts) literal, see [Supported Agents](docs/agents.md) for per-agent details (command/args, login flow, known quirks).
 
 ## How It Compares to `@agentclientprotocol/sdk`
 
 ACP Kit is built **on top of** [`@agentclientprotocol/sdk`](https://www.npmjs.com/package/@agentclientprotocol/sdk), not as a replacement.
 
-- `@agentclientprotocol/sdk` is the **protocol toolkit**. It gives you `ClientSideConnection`, `ndJsonStream`, typed request/response/notification payloads, and JSON-RPC framing — once you already have a connection to an ACP server.
+- `@agentclientprotocol/sdk` is the **protocol toolkit**. It gives you `ClientSideConnection`, `ndJsonStream`, typed request/response/notification payloads, and JSON-RPC framing &mdash; once you already have a connection to an ACP server.
 - ACP Kit is the **client runtime**. It launches the agent, manages the connection lifecycle, runs auth, exposes host adapters, normalizes raw protocol updates into stable events, and tracks turn state.
 
-The protocol layer underneath stays exactly `@agentclientprotocol/sdk`. ACP Kit does not fork it, replace it, or hide it — it depends on it as a regular npm dependency.
-
-```text
-┌──────────────────────────────────────────────────────────────────┐
-│  Your Product (editor extension, desktop shell, daemon, web …)   │
-│  - product UI / state                                            │
-│  - product persistence and remote sync                           │
-│  - cross-session orchestration                                   │
-└───────────────────────────────▲──────────────────────────────────┘
-                                │  normalized events:
-                                │  message.delta / reasoning.delta
-                                │  tool.start / tool.update / tool.end
-                                │  turn.started / turn.completed / turn.failed
-                                │
-┌───────────────────────────────┴──────────────────────────────────┐
-│                          ACP Kit                                 │
-│  agent profiles · process spawn · startup diagnostics            │
-│  auth orchestration · session creation                           │
-│  host adapters: permission, fs, terminal                         │
-│  session/update normalization · transcript reduction             │
-│  turn lifecycle (start / complete / cancel / fail)               │
-└───────────────────────────────▲──────────────────────────────────┘
-                                │  uses
-                                │
-┌───────────────────────────────┴──────────────────────────────────┐
-│                    @agentclientprotocol/sdk                      │
-│  ClientSideConnection · ndJsonStream · JSON-RPC framing          │
-│  initialize · session/new · session/prompt · session/update      │
-└───────────────────────────────▲──────────────────────────────────┘
-                                │  bytes over a transport
-                                │  (this repo: child-process stdio)
-                                │
-┌───────────────────────────────┴──────────────────────────────────┐
-│   ACP Server (Copilot CLI --acp, Claude ACP, Codex ACP, …)       │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-For a deeper walkthrough see [`docs/acp-sdk-vs-runtime.md`](docs/acp-sdk-vs-runtime.md).
+The protocol layer underneath stays exactly `@agentclientprotocol/sdk`. ACP Kit does not fork it, replace it, or hide it &mdash; it depends on it as a regular npm dependency. For the full layered diagram and side-by-side code comparison, see [SDK vs Runtime](docs/acp-sdk-vs-runtime.md).
 
 ## Compatibility
 
 | Dependency | Version |
 | --- | --- |
 | `@agentclientprotocol/sdk` | `^0.18` |
-| Node.js | `>= 20.11` recommended (for `await using`); `>= 18` works if you dispose manually |
+| Node.js | `>= 20.11` (matches the package's `engines` field; CI tests Node 20 and 22) |
 | TypeScript (consumers) | `>= 5.2` (for `using` / `await using` syntax) |
 | OS | Windows, macOS, Linux |
 
@@ -299,20 +174,17 @@ ACP Kit aims to track the latest stable `@agentclientprotocol/sdk` minor release
 
 ## Status
 
-ACP Kit is **experimental (v0.x)**. The public API may change between minor versions until v1.0.
-
-Not implemented yet:
-
-- Higher-level collaboration semantics (delegation, sub-agents)
-
-See [`docs/migration-plan.md`](docs/migration-plan.md) for how downstream products can adopt the runtime incrementally.
+ACP Kit is **experimental (v0.x)**. The public API may change between minor versions until v1.0; every breaking change is called out in [`CHANGELOG.md`](CHANGELOG.md). See [`docs/migration-plan.md`](docs/migration-plan.md) for incremental adoption.
 
 ## Documentation
 
-- [`docs/acp-sdk-vs-runtime.md`](docs/acp-sdk-vs-runtime.md) — the boundary between the official SDK and ACP Kit
-- [`docs/architecture.md`](docs/architecture.md) — runtime layers and design principles
-- [`docs/package-plan.md`](docs/package-plan.md) — why ACP Kit ships as a single package today and when to split
-- [`docs/migration-plan.md`](docs/migration-plan.md) — incremental adoption path for existing ACP products
+- [Getting Started](docs/getting-started.md) &mdash; install, first session, common failures
+- [API Overview](docs/api-overview.md) &mdash; complete `RuntimeHost`, `AcpRuntime`, `RuntimeSession`, and event reference
+- [Supported Agents](docs/agents.md) &mdash; per-agent command, login, known quirks
+- [SDK vs Runtime](docs/acp-sdk-vs-runtime.md) &mdash; the boundary between the official SDK and ACP Kit
+- [Architecture](docs/architecture.md) &mdash; runtime layers and design principles
+- [Package Plan](docs/package-plan.md) &mdash; why ACP Kit ships as a single package today
+- [Migration Plan](docs/migration-plan.md) &mdash; incremental adoption path for existing ACP products
 
 ## Development
 
@@ -322,21 +194,7 @@ npm run build      # tsc -b packages/core
 npm test           # vitest run
 ```
 
-To try an example:
-
-```bash
-cd examples/mock-runtime
-npm install
-npm start
-```
-
-Repository layout:
-
-```text
-packages/core/     @acp-kit/core source, tests, build output
-docs/              architecture and design notes
-examples/          standalone npm packages that depend on the published @acp-kit/core
-```
+To try an example: `cd examples/mock-runtime && npm install && npm start`.
 
 Contributions are welcome. Please open an issue to discuss non-trivial changes before sending a PR.
 

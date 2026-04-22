@@ -22,6 +22,7 @@ export default defineConfig({
           { text: 'Home', link: '/' },
           { text: 'Getting Started', link: '/getting-started' },
           { text: 'API Overview', link: '/api-overview' },
+          { text: 'Supported Agents', link: '/agents' },
           { text: 'SDK vs Runtime', link: '/acp-sdk-vs-runtime' }
         ]
       },
@@ -44,6 +45,8 @@ export default defineConfig({
     }
   },
   head: [
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/acp-kit/logo.svg' }],
+    ['link', { rel: 'alternate icon', type: 'image/png', href: '/acp-kit/logo.svg' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:site_name', content: 'ACP Kit' }],
     [

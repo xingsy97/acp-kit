@@ -185,23 +185,16 @@ export function createLocalTerminalHost(options: LocalTerminalHostOptions = {}):
     async killTerminal(params: KillTerminalRequest): Promise<KillTerminalResponse> {
       const record = terminals.get(params.terminalId);
       if (record && !record.exited) {
+        // ACP `killTerminal` semantics are "stop it now" — go straight to
+        // SIGKILL. SIGTERM is unreliable on shared CI runners (a child that
+        // has not yet installed its handler can race the signal, the parent
+        // shell may not propagate it, etc.) and any attempt to handle it
+        // gracefully belongs in the caller, not here.
         try {
-          record.process.kill('SIGTERM');
+          record.process.kill('SIGKILL');
         } catch {
-          /* swallow — best-effort */
+          /* already gone */
         }
-        // Some shells/processes ignore SIGTERM (or trap it). Escalate to
-        // SIGKILL after a short grace window so callers always observe exit.
-        const escalate = setTimeout(() => {
-          if (!record.exited) {
-            try {
-              record.process.kill('SIGKILL');
-            } catch {
-              /* already gone */
-            }
-          }
-        }, 2000);
-        escalate.unref?.();
       }
       return {};
     },

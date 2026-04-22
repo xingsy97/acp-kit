@@ -438,6 +438,173 @@ describe('AcpRuntime', () => {
     await runtime.shutdown();
   });
 
+  it('forwards initialize.clientInfo from package.json and advertises promptCapabilities', async () => {
+    const initialize = vi.fn().mockResolvedValue({ authMethods: [] });
+    const connectionFactory: AcpConnectionFactory = {
+      create() {
+        return {
+          initialize,
+          newSession: async () => ({ sessionId: 'sess-init' }),
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+        } as never;
+      },
+    };
+    const runtime = createAcpRuntime({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {
+        promptCapabilities: { image: true, embeddedContext: true },
+      },
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+    await runtime.newSession();
+    const params = initialize.mock.calls[0]?.[0];
+    expect(params?.clientInfo?.name).toBe('@acp-kit/core');
+    // Should be a real semver string from package.json, not the old hardcoded '0.1.4'.
+    expect(params?.clientInfo?.version).toMatch(/^\d+\.\d+\.\d+/);
+    expect(params?.clientInfo?.version).not.toBe('0.1.4');
+    expect(params?.clientCapabilities?.promptCapabilities).toEqual({
+      image: true,
+      audio: false,
+      embeddedContext: true,
+    });
+    await runtime.shutdown();
+  });
+
+  it('omits promptCapabilities when the host does not declare any', async () => {
+    const initialize = vi.fn().mockResolvedValue({ authMethods: [] });
+    const connectionFactory: AcpConnectionFactory = {
+      create() {
+        return {
+          initialize,
+          newSession: async () => ({ sessionId: 'sess-init-2' }),
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+        } as never;
+      },
+    };
+    const runtime = createAcpRuntime({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+    await runtime.newSession();
+    const params = initialize.mock.calls[0]?.[0];
+    expect(params?.clientCapabilities?.promptCapabilities).toBeUndefined();
+    await runtime.shutdown();
+  });
+
+  it('listSessions forwards to the connection when the agent advertises the capability', async () => {
+    const listSessions = vi.fn().mockResolvedValue({ sessions: [{ sessionId: 'a', cwd: 'C:/repo' }] });
+    const connectionFactory: AcpConnectionFactory = {
+      create() {
+        return {
+          initialize: async () => ({
+            authMethods: [],
+            agentCapabilities: { sessionCapabilities: { list: {} } },
+          }),
+          newSession: async () => ({ sessionId: 'sess-list' }),
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+          listSessions,
+        } as never;
+      },
+    };
+    const runtime = createAcpRuntime({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+    await runtime.newSession();
+    const result = await runtime.listSessions({ cwd: 'C:/repo' });
+    expect(listSessions).toHaveBeenCalledWith({ cwd: 'C:/repo' });
+    expect(result.sessions).toHaveLength(1);
+    await runtime.shutdown();
+  });
+
+  it('listSessions throws when the agent does not advertise the capability', async () => {
+    const connectionFactory: AcpConnectionFactory = {
+      create() {
+        return {
+          initialize: async () => ({ authMethods: [] }),
+          newSession: async () => ({ sessionId: 'sess-no-list' }),
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+        } as never;
+      },
+    };
+    const runtime = createAcpRuntime({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+    await runtime.newSession();
+    await expect(runtime.listSessions()).rejects.toThrow(/session\/list capability/);
+    await runtime.shutdown();
+  });
+
+  it('session.close calls unstable_closeSession then disposes the session', async () => {
+    const unstable_closeSession = vi.fn().mockResolvedValue(undefined);
+    const connectionFactory: AcpConnectionFactory = {
+      create() {
+        return {
+          initialize: async () => ({ authMethods: [] }),
+          newSession: async () => ({ sessionId: 'sess-close' }),
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+          unstable_closeSession,
+        } as never;
+      },
+    };
+    const runtime = createAcpRuntime({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+    const session = await runtime.newSession();
+    await session.close();
+    expect(unstable_closeSession).toHaveBeenCalledWith({ sessionId: 'sess-close' });
+    await expect(session.setMode('plan')).rejects.toThrow(/disposed/);
+    // close() is idempotent
+    await session.close();
+    expect(unstable_closeSession).toHaveBeenCalledTimes(1);
+    await runtime.shutdown();
+  });
+
+  it('session.close gracefully falls back to dispose when the agent does not implement close', async () => {
+    const connectionFactory: AcpConnectionFactory = {
+      create() {
+        return {
+          initialize: async () => ({ authMethods: [] }),
+          newSession: async () => ({ sessionId: 'sess-close-fallback' }),
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+        } as never;
+      },
+    };
+    const runtime = createAcpRuntime({
+      profile: { id: 'test', displayName: 'Test', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+    const session = await runtime.newSession();
+    await session.close();
+    await expect(session.setMode('plan')).rejects.toThrow(/disposed/);
+    await runtime.shutdown();
+  });
+
   it('reconnect tears down the current connection and reconnects on next session', async () => {
     const initialize = vi.fn().mockResolvedValue({ authMethods: [] });
     const newSession = vi

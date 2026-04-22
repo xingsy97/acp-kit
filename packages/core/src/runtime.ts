@@ -5,6 +5,8 @@ import {
   type Client,
   type Implementation,
   type InitializeResponse,
+  type ListSessionsRequest,
+  type ListSessionsResponse,
   type McpServer,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
@@ -12,6 +14,10 @@ import {
   type SessionModeState,
   type SessionNotification,
 } from '@agentclientprotocol/sdk';
+
+// Read at build time so the value matches whatever package.json the consumer installs.
+// Updated when the package version changes; safe to read once at module init.
+import { CORE_PACKAGE_NAME, CORE_PACKAGE_VERSION } from './package-info.js';
 
 import type { RuntimeHost } from './host.js';
 import { isAcpAuthRequired } from './errors.js';
@@ -48,6 +54,8 @@ export interface AcpTransportConnection extends AcpConnectionLike {
   authenticate?(params: { methodId: string }): Promise<unknown>;
   setSessionMode?(params: { sessionId: string; modeId: string }): Promise<unknown>;
   unstable_setSessionModel?(params: { sessionId: string; modelId: string }): Promise<unknown>;
+  listSessions?(params: ListSessionsRequest): Promise<ListSessionsResponse>;
+  unstable_closeSession?(params: { sessionId: string }): Promise<unknown>;
 }
 
 export interface AcpTransportSession {
@@ -170,6 +178,29 @@ export class AcpRuntime {
   /** True once the transport has connected and `initialize` completed. */
   get isReady(): boolean {
     return this.connectionState !== null;
+  }
+
+  /**
+   * List sessions known to the agent via ACP `session/list`. Requires the agent
+   * to advertise the `sessionCapabilities.list` capability
+   * (see {@link AcpRuntime.agentCapabilities}); throws otherwise.
+   *
+   * Pagination is cursor-based: pass the previous response's `nextCursor` to
+   * fetch the next page.
+   */
+  async listSessions(params: ListSessionsRequest = {}): Promise<ListSessionsResponse> {
+    const state = await this.connect();
+    const sessionCapabilities = state.initResponse.agentCapabilities?.sessionCapabilities;
+    if (!sessionCapabilities?.list) {
+      throw new Error(
+        `Agent "${this.profile.id}" does not advertise the session/list capability. `
+        + 'Inspect `acp.agentCapabilities.sessionCapabilities?.list` before calling listSessions().',
+      );
+    }
+    if (typeof state.connection.listSessions !== 'function') {
+      throw new Error('The ACP connection does not support listSessions.');
+    }
+    return state.connection.listSessions(params);
   }
 
   /**
@@ -378,13 +409,14 @@ export class AcpRuntime {
     });
 
     const startupTimeoutMs = this.profile.startupTimeoutMs || 30000;
+    const promptCapabilities = this.host.promptCapabilities;
     const initResponse = await withStartupDiagnostics(
       withTimeout(
         transportSession.connection.initialize({
           protocolVersion: PROTOCOL_VERSION,
           clientInfo: {
-            name: '@acp-kit/core',
-            version: '0.1.4',
+            name: CORE_PACKAGE_NAME,
+            version: CORE_PACKAGE_VERSION,
           },
           clientCapabilities: {
             fs: {
@@ -398,6 +430,13 @@ export class AcpRuntime {
               && this.host.killTerminal
               && this.host.releaseTerminal,
             ),
+            ...(promptCapabilities ? {
+              promptCapabilities: {
+                image: !!promptCapabilities.image,
+                audio: !!promptCapabilities.audio,
+                embeddedContext: !!promptCapabilities.embeddedContext,
+              },
+            } : {}),
           },
         }),
         startupTimeoutMs,

@@ -89,6 +89,19 @@ export interface RuntimeHost {
   waitForTerminalExit?(params: WaitForTerminalExitRequest): Promise<WaitForTerminalExitResponse>;
   killTerminal?(params: KillTerminalRequest): Promise<KillTerminalResponse>;
   releaseTerminal?(params: ReleaseTerminalRequest): Promise<ReleaseTerminalResponse>;
+  /**
+   * Prompt content the host can render. Forwarded to the agent during
+   * `initialize` as `clientCapabilities.promptCapabilities`. Omitted fields
+   * default to `false`. The agent uses this to decide whether to send images,
+   * audio, or embedded resource references inside `session/prompt` updates.
+   *
+   * Mirrors the upstream ACP `PromptCapabilities` type.
+   */
+  promptCapabilities?: {
+    image?: boolean;
+    audio?: boolean;
+    embeddedContext?: boolean;
+  };
   log?(entry: RuntimeLogEvent): void;
   /**
    * Koa-style middleware chain run for every ACP wire frame in either direction.

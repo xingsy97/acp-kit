@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per the SemVer 0.x convention). Patch versions remain backward compatible.
 
+## [0.4.0] - 2026-04-22
+
+Minor release. Aligns the runtime more closely with the upstream `agent-client-protocol` spec (currently v0.12.0, SDK ^0.18.0). No breaking changes for existing callers; only additive surface and one cosmetic correction.
+
+### Added
+
+- `RuntimeHost.promptCapabilities?: { image?, audio?, embeddedContext? }` &mdash; declared at construction; forwarded verbatim to the agent in `initialize.clientCapabilities.promptCapabilities`. Hosts that can render images, audio, or embedded resource references should opt in here so the agent is allowed to send those `ContentBlock` variants in `session/prompt` updates. Defaults to omitted (agent assumes text-only).
+- `AcpRuntime.listSessions(params?)` &mdash; thin wrapper over ACP `session/list`. Throws if the agent does not advertise `agentCapabilities.sessionCapabilities.list`. Cursor-based pagination via the request's `cursor` and the response's `nextCursor`.
+- `RuntimeSession.close()` &mdash; thin wrapper over ACP `session/close` (currently exposed by the SDK as `unstable_closeSession`). After the agent acknowledges, the session is also disposed locally. Falls back to `dispose()` when the agent does not advertise the capability, so it is safe to call unconditionally.
+- `AcpTransportConnection` and `AcpConnectionLike` gain optional `listSessions?` and `unstable_closeSession?` slots for custom transports.
+
+### Changed
+
+- `initialize.clientInfo` now reports the actual installed package name and version (read from this package's own `package.json` at runtime) instead of the previously hardcoded `'@acp-kit/core' / '0.1.4'` placeholder. Bundlers that strip `node:fs` will fall back to `'@acp-kit/core' / '0.0.0'`.
+
+### Removed
+
+- Dropped three `sessionUpdate` cases from the notification normalizer that were never produced by the spec: `config_options_update` (plural duplicate of `config_option_update`), `modes_update`, and `models_update`. Mode state changes still flow through `current_mode_update` (unchanged), and the initial mode/model state advertised by `newSession` / `loadSession` continues to be replayed via `session.modes.updated` / `session.models.updated` events. No caller in the example apps was subscribed to the dropped variants; if a custom agent really did emit them, they were already being silently dropped at one layer and re-emitted as `session.unknown` &mdash; this just removes the dead branches.
+
+### Why
+
+A pass over the upstream spec (schema v0.12.0, CHANGELOG through v0.11.7) flagged: stale `clientInfo`, no opt-in for prompt content beyond text, and no surface for the now-stable `session/list` and the preview-stage `session/close`. This release closes those gaps without introducing any of the still-experimental surfaces (`elicitation/*`, `providers/*`, `session/fork`, `session/resume`); those will get evaluated once they stabilize.
+
+### Migration
+
+No changes required. Hosts that want to advertise richer prompt content should set `promptCapabilities` on the host object passed to `createAcpRuntime`.
+
 ## [0.3.1] - 2026-04-22
 
 Patch release. Backwards compatible additions extracted from real daemon usage.

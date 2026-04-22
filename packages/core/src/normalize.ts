@@ -1,7 +1,5 @@
 import type {
   SessionConfigOption,
-  SessionModelState,
-  SessionModeState,
   SessionNotification,
 } from '@agentclientprotocol/sdk';
 
@@ -92,26 +90,6 @@ function readConfigOptions(update: RawUpdate): SessionConfigOption[] | null {
   }
   if (update.configOption && typeof update.configOption === 'object') {
     return [update.configOption as SessionConfigOption];
-  }
-  return null;
-}
-
-function readModeState(update: RawUpdate): SessionModeState | null {
-  if (Array.isArray(update.availableModes)) {
-    return update as unknown as SessionModeState;
-  }
-  if (update.modes && typeof update.modes === 'object' && Array.isArray((update.modes as { availableModes?: unknown[] }).availableModes)) {
-    return update.modes as SessionModeState;
-  }
-  return null;
-}
-
-function readModelState(update: RawUpdate): SessionModelState | null {
-  if (Array.isArray(update.availableModels)) {
-    return update as unknown as SessionModelState;
-  }
-  if (update.models && typeof update.models === 'object' && Array.isArray((update.models as { availableModels?: unknown[] }).availableModels)) {
-    return update.models as SessionModelState;
   }
   return null;
 }
@@ -233,8 +211,7 @@ export function normalizeAcpUpdate(
         cost: Number.isFinite(Number(update.cost)) ? Number(update.cost) : null,
       }];
     }
-    case 'config_option_update':
-    case 'config_options_update': {
+    case 'config_option_update': {
       const configOptions = readConfigOptions(update);
       if (!configOptions) return [];
       return [{
@@ -243,28 +220,6 @@ export function normalizeAcpUpdate(
         at,
         turnId,
         configOptions,
-      }];
-    }
-    case 'modes_update': {
-      const state = readModeState(update);
-      if (!state) return [];
-      return [{
-        type: 'session.modes.updated',
-        sessionId,
-        at,
-        turnId,
-        state,
-      }];
-    }
-    case 'models_update': {
-      const state = readModelState(update);
-      if (!state) return [];
-      return [{
-        type: 'session.models.updated',
-        sessionId,
-        at,
-        turnId,
-        state,
       }];
     }
     case 'session_error': {

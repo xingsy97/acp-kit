@@ -31,6 +31,7 @@ export interface AcpConnectionLike {
   cancel(params: { sessionId: string }): Promise<void>;
   setSessionMode?(params: { sessionId: string; modeId: string }): Promise<unknown>;
   unstable_setSessionModel?(params: { sessionId: string; modelId: string }): Promise<unknown>;
+  unstable_closeSession?(params: { sessionId: string }): Promise<unknown>;
   dispose?(): Promise<void>;
 }
 
@@ -297,6 +298,34 @@ export class RuntimeSession {
       throw new Error('The ACP connection does not support session/set_model.');
     }
     await this.connection.unstable_setSessionModel({ sessionId: this.sessionId, modelId });
+  }
+
+  /**
+   * Close this session via ACP `session/close` (currently exposed by the SDK as
+   * `unstable_closeSession`). The agent must cancel any in-flight work and
+   * release server-side state.
+   *
+   * Requires the agent to advertise the `sessionCapabilities.close` capability.
+   * After this resolves, the session is also disposed locally.
+   *
+   * If the agent does not advertise the capability, this falls back to
+   * {@link RuntimeSession.dispose} so callers can use it unconditionally.
+   */
+  async close(): Promise<void> {
+    if (this.status === 'disposed') {
+      return;
+    }
+    if (typeof this.connection.unstable_closeSession === 'function') {
+      try {
+        await this.connection.unstable_closeSession({ sessionId: this.sessionId });
+      } catch (error) {
+        // Bubble up the error so the caller can decide how to react, but still
+        // dispose locally so we don't leak the session slot.
+        await this.dispose();
+        throw error;
+      }
+    }
+    await this.dispose();
   }
 
   async dispose(): Promise<void> {

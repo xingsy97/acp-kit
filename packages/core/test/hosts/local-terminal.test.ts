@@ -11,8 +11,8 @@ const echoCommand = isWindows ? 'cmd.exe' : '/bin/sh';
 const echoArgs = (text: string) => (isWindows ? ['/c', `echo ${text}`] : ['-c', `echo ${text}`]);
 const failCommand = isWindows ? 'cmd.exe' : '/bin/sh';
 const failArgs = isWindows ? ['/c', 'exit 7'] : ['-c', 'exit 7'];
-const sleepCommand = isWindows ? 'cmd.exe' : '/bin/sh';
-const sleepArgs = isWindows ? ['/c', 'ping -n 60 127.0.0.1 >nul'] : ['-c', 'sleep 60'];
+const sleepCommand = isWindows ? 'cmd.exe' : 'sleep';
+const sleepArgs = isWindows ? ['/c', 'ping -n 60 127.0.0.1 >nul'] : ['60'];
 
 describe('createLocalTerminalHost', () => {
   let cwd: string;

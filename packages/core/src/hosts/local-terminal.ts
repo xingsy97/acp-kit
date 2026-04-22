@@ -190,6 +190,18 @@ export function createLocalTerminalHost(options: LocalTerminalHostOptions = {}):
         } catch {
           /* swallow — best-effort */
         }
+        // Some shells/processes ignore SIGTERM (or trap it). Escalate to
+        // SIGKILL after a short grace window so callers always observe exit.
+        const escalate = setTimeout(() => {
+          if (!record.exited) {
+            try {
+              record.process.kill('SIGKILL');
+            } catch {
+              /* already gone */
+            }
+          }
+        }, 2000);
+        escalate.unref?.();
       }
       return {};
     },

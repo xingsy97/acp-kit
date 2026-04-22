@@ -75,24 +75,47 @@ export function createLocalFileSystemHost(options: LocalFileSystemHostOptions): 
   // where `os.tmpdir()` may return an 8.3 short path like `RUNNER~1`) work
   // after we `realpath` children to their canonical long form. Falls back to
   // the lexical resolve when the root does not exist yet.
-  let normalizedRoot = resolve(root);
+  const lexicalRoot = resolve(root);
+  let cachedRealRoot: string | null = null;
   try {
-    normalizedRoot = realpathSync(normalizedRoot);
+    cachedRealRoot = realpathSync(lexicalRoot);
   } catch {
     /* root does not exist yet; lexical resolve is fine */
   }
+
+  // The async `fs.realpath` on Windows can return a different canonicalization
+  // than the sync `realpathSync` (e.g. 8.3 short-name expansion). To keep the
+  // post-realpath comparison apples-to-apples, lazily resolve the root through
+  // the async API on first use and cache it.
+  const getRealRoot = async (): Promise<string> => {
+    if (cachedRealRoot != null) {
+      try {
+        cachedRealRoot = await realpath(cachedRealRoot);
+      } catch {
+        /* keep the sync/lexical value */
+      }
+      return cachedRealRoot;
+    }
+    try {
+      cachedRealRoot = await realpath(lexicalRoot);
+    } catch {
+      cachedRealRoot = lexicalRoot;
+    }
+    return cachedRealRoot;
+  };
 
   const resolveWithinRoot = async (requested: string): Promise<string> => {
     if (typeof requested !== 'string' || requested.length === 0) {
       throw new Error('Path must be a non-empty string');
     }
-    const resolved = resolve(normalizedRoot, requested);
-    assertUnderRoot(normalizedRoot, resolved, requested);
+    const realRoot = await getRealRoot();
+    const resolved = resolve(realRoot, requested);
+    assertUnderRoot(realRoot, resolved, requested);
     if (!followSymlinksOutsideRoot) {
       // realpath the deepest existing ancestor; non-existent leaf is fine for write.
       try {
         const real = await realpath(resolved);
-        assertUnderRoot(normalizedRoot, real, requested);
+        assertUnderRoot(realRoot, real, requested);
       } catch (err) {
         // ENOENT on the leaf is expected for fresh writes — walk up.
         if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err;
@@ -101,7 +124,7 @@ export function createLocalFileSystemHost(options: LocalFileSystemHostOptions): 
           try {
             const realParent = await realpath(parent);
             const rebuilt = resolve(realParent, requested.split(/[\\/]/).pop() || '');
-            assertUnderRoot(normalizedRoot, rebuilt, requested);
+            assertUnderRoot(realRoot, rebuilt, requested);
           } catch (parentErr) {
             if ((parentErr as NodeJS.ErrnoException)?.code !== 'ENOENT') throw parentErr;
             // Parent doesn't exist either; lexical check above already passed.
@@ -114,10 +137,11 @@ export function createLocalFileSystemHost(options: LocalFileSystemHostOptions): 
 
   const emit = (op: 'read' | 'write', resolvedPath: string) => {
     if (!onAccess) return;
+    const root = cachedRealRoot ?? lexicalRoot;
     onAccess({
       op,
       path: resolvedPath,
-      relativePath: relative(normalizedRoot, resolvedPath),
+      relativePath: relative(root, resolvedPath),
     });
   };
 

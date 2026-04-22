@@ -1,4 +1,5 @@
 import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 
 import type {
@@ -70,7 +71,16 @@ export function createLocalFileSystemHost(options: LocalFileSystemHostOptions): 
   if (!isAbsolute(root)) {
     throw new TypeError(`createLocalFileSystemHost: \`root\` must be an absolute path (got ${root})`);
   }
-  const normalizedRoot = resolve(root);
+  // Resolve the root through `realpath` so that comparisons (e.g. on Windows
+  // where `os.tmpdir()` may return an 8.3 short path like `RUNNER~1`) work
+  // after we `realpath` children to their canonical long form. Falls back to
+  // the lexical resolve when the root does not exist yet.
+  let normalizedRoot = resolve(root);
+  try {
+    normalizedRoot = realpathSync(normalizedRoot);
+  } catch {
+    /* root does not exist yet; lexical resolve is fine */
+  }
 
   const resolveWithinRoot = async (requested: string): Promise<string> => {
     if (typeof requested !== 'string' || requested.length === 0) {

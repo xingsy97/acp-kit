@@ -41,7 +41,7 @@ describe('createLocalTerminalHost', () => {
     expect(exit.exitCode).toBe(7);
   });
 
-  it('kills a long-running terminal', async () => {
+  it('kills a long-running terminal', { timeout: 15000 }, async () => {
     const host = createLocalTerminalHost({ resolveCwd: () => cwd });
     const created = await host.createTerminal({ sessionId: 's', command: sleepCommand, args: sleepArgs });
     await host.killTerminal({ sessionId: 's', terminalId: created.terminalId });

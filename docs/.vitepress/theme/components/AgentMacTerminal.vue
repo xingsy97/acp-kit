@@ -76,12 +76,12 @@ ${eventLoop('  ')}
 );
 
 const advancedCode = computed(() =>
-  `${kw('import')} { ${fn('createAcpRuntime')} } ${kw('from')} ${str('@acp-kit/core')};
+  `${kw('import')} { ${fn('createAcpRuntime')}, ${fn('PermissionDecision')} } ${kw('from')} ${str('@acp-kit/core')};
 
 <span class="tk-comment">// One agent process, many sessions — reuse spawn cost.</span>
 ${kw('await using')} ${v('acp')} = ${fn('createAcpRuntime')}({
   ${p('profile')}: ${str(selected.value.id)},
-  ${p('host')}:    { ${p('requestPermission')}: ${kw('async')} () =&gt; ${str('allow_once')} }
+  ${p('host')}:    { ${p('requestPermission')}: ${kw('async')} () =&gt; ${fn('PermissionDecision')}.${p('AllowOnce')} }
 });
 
 ${kw('await using')} ${v('s1')} = ${kw('await')} ${v('acp')}.${fn('newSession')}({ ${p('cwd')}: ${v('process')}.${fn('cwd')}() });

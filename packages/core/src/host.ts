@@ -17,7 +17,13 @@ import type {
   WriteTextFileResponse,
 } from '@agentclientprotocol/sdk';
 
-export type PermissionDecision = 'allow_once' | 'allow_always' | 'deny';
+export const PermissionDecision = {
+  AllowOnce: 'allow_once',
+  AllowAlways: 'allow_always',
+  Deny: 'deny',
+} as const;
+
+export type PermissionDecision = typeof PermissionDecision[keyof typeof PermissionDecision];
 
 export interface RuntimeLogEvent {
   level: 'debug' | 'info' | 'warn' | 'error';

@@ -10,7 +10,7 @@
 import process from 'node:process';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { createAcpRuntime, GitHubCopilot, CodexCli } from '@acp-kit/core';
+import { createAcpRuntime, GitHubCopilot, CodexCli, PermissionDecision } from '@acp-kit/core';
 
 const cwd  = path.resolve(process.argv[2] || process.cwd());
 const task = process.argv[3] ||
@@ -72,7 +72,7 @@ async function openRole(role, { agent, model }) {
   const runtime = createAcpRuntime({
     agent,
     host: {
-      requestPermission: async () => 'allow_once',
+      requestPermission: async () => PermissionDecision.AllowOnce,
       chooseAuthMethod:  async ({ methods }) => methods[0]?.id ?? null,
     },
   });

@@ -96,6 +96,7 @@ interface RuntimeSessionOptions {
   host: RuntimeHost;
   connection: AcpConnectionLike;
   initialEvents?: RuntimeEvent[];
+  onEvent?: (event: RuntimeSessionEvent) => void;
 }
 
 export class RuntimeSession {
@@ -104,6 +105,7 @@ export class RuntimeSession {
 
   private readonly host: RuntimeHost;
   private readonly connection: AcpConnectionLike;
+  private readonly onEvent: ((event: RuntimeSessionEvent) => void) | undefined;
   private readonly listeners = new Map<string, Set<Listener>>();
   private readonly transcriptState = createTranscriptState();
 
@@ -118,6 +120,7 @@ export class RuntimeSession {
     this.agent = options.agent;
     this.host = options.host;
     this.connection = options.connection;
+    this.onEvent = options.onEvent;
 
     for (const event of options.initialEvents || []) {
       applyRuntimeEvent(this.transcriptState, event);
@@ -145,8 +148,8 @@ export class RuntimeSession {
    * ```ts
    * session.on({
    *   messageDelta:  (e) => process.stdout.write(e.delta),
-   *   toolStart:     (e) => console.log(`[${e.toolCallId}] ${e.title}`),
-   *   turnCompleted: (e) => console.log(`done: ${e.stopReason}`),
+  *   toolStart:     (e) => process.stdout.write(`[${e.toolCallId}] ${e.title}\n`),
+  *   turnCompleted: (e) => process.stdout.write(`done: ${e.stopReason}\n`),
    * });
    * ```
    */
@@ -395,6 +398,7 @@ export class RuntimeSession {
   private emitEvent(event: RuntimeSessionEvent): void {
     this.dispatch(event.type, event);
     this.dispatch('event', event);
+    this.onEvent?.(event);
   }
 
   private dispatch(type: string, event: RuntimeSessionEvent): void {

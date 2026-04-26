@@ -30,22 +30,19 @@ export interface RunOneShotPromptOptions {
  * For multi-turn, multi-session, or long-lived hosts use `createAcpRuntime` directly.
  *
  * ```ts
- * import { runOneShotPrompt, ClaudeCode } from '@acp-kit/core';
+ * import { runOneShotPrompt, onRuntimeEvent, ClaudeCode } from '@acp-kit/core';
  *
  * for await (const event of runOneShotPrompt({ agent: ClaudeCode, cwd, prompt: 'Hi' })) {
- *   if (event.type === 'message.delta') process.stdout.write(event.delta);
+ *   onRuntimeEvent(event, {
+ *     messageDelta: (e) => process.stdout.write(e.delta),
+ *   });
  * }
  * ```
  */
 export function runOneShotPrompt(options: RunOneShotPromptOptions): AsyncIterableIterator<RuntimeSessionEvent> {
-  const host: RuntimeHost = options.host ?? {
-    requestPermission: async () => 'allow_once',
-    chooseAuthMethod: async ({ methods }) => methods[0]?.id ?? null,
-  };
-
   const runtime = createAcpRuntime({
     agent: options.agent,
-    host,
+    host: options.host,
     transport: options.transport,
   });
 

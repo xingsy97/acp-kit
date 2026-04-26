@@ -19,10 +19,29 @@ import {
 // Updated when the package version changes; safe to read once at module init.
 import { CORE_PACKAGE_NAME, CORE_PACKAGE_VERSION } from './package-info.js';
 
-import type { RuntimeHost } from './host.js';
+import {
+  PermissionDecision,
+  type RuntimeHost,
+  type RuntimePermissionRequest,
+  type PermissionDecision as PermissionDecisionValue,
+} from './host.js';
 import { isAcpAuthRequired } from './errors.js';
 import { type AgentProfile } from './agents.js';
-import { RuntimeSession, createInitialSessionEvents, type AcpConnectionLike } from './session.js';
+import { RuntimeSession, createInitialSessionEvents, type AcpConnectionLike, type RuntimeSessionEvent } from './session.js';
+import {
+  createAcpStartupError,
+  type AcpStartupFailurePhase,
+  type AcpTransportDiagnostics,
+} from './diagnostics.js';
+import type { RuntimeInspector } from './inspector.js';
+import {
+  sessionEventToObservation,
+  type RuntimeApprovalQueue,
+  type RuntimeContext,
+  type RuntimeEventStore,
+  type RuntimeObservation,
+  type RuntimeObservabilityOptions,
+} from './enterprise-runtime.js';
 import type {
   AcpConnectionFactory,
   SpawnProcess,
@@ -61,7 +80,7 @@ export interface AcpTransportConnection extends AcpConnectionLike {
 export interface AcpTransportSession {
   connection: AcpTransportConnection;
   /** Optional diagnostic hook; the runtime calls this when enriching startup errors. */
-  getDiagnostics?(): { stderr: string; exitSummary: string | null };
+  getDiagnostics?(): AcpTransportDiagnostics;
 }
 
 /**
@@ -97,7 +116,23 @@ export interface RuntimeOptions {
    * If omitted, callers MUST provide `cwd` to every `newSession({ cwd })` call.
    */
   cwd?: string;
-  host: RuntimeHost;
+  /**
+   * Host capabilities and policy hooks. Defaults to approving tool permissions once and selecting
+   * the first offered auth method. Production applications should provide an explicit host policy.
+   */
+  host?: RuntimeHost;
+  /** Correlation context copied onto observations and durable event-store entries. */
+  context?: RuntimeContext;
+  /** Structured runtime observation sink for tracing, metrics, and audit pipelines. */
+  observability?: RuntimeObservabilityOptions;
+  /** Durable append-only store for observations and normalized session events. */
+  eventStore?: RuntimeEventStore;
+  /** Session recording store. Receives the same append-only entries as `eventStore` and is intended for replay/debugging. */
+  recording?: RuntimeEventStore;
+  /** Optional human approval queue used for ACP permission requests. */
+  approvals?: RuntimeApprovalQueue;
+  /** Runtime inspector that receives observations and, when enabled, ACP wire frames. */
+  inspector?: RuntimeInspector;
   /**
    * Pluggable transport. Defaults to the node child-process transport
    * (`@acp-kit/core/node` → `nodeChildProcessTransport`). Browser/Webview hosts
@@ -136,14 +171,43 @@ interface ConnectionState {
   sessionUpdateRouter: (notification: SessionNotification) => void;
 }
 
+const defaultRuntimeHost: RuntimeHost = {
+  requestPermission: async () => PermissionDecision.AllowOnce,
+  chooseAuthMethod: async ({ methods }) => methods[0]?.id ?? null,
+};
+
+function mergeInspectorHost(host: RuntimeHost, inspector: RuntimeInspector | undefined): RuntimeHost {
+  if (!inspector?.wireMiddleware) return host;
+  const existing = host.wireMiddleware;
+  return {
+    ...host,
+    wireMiddleware: existing
+      ? Array.isArray(existing) ? [...existing, inspector.wireMiddleware] : [existing, inspector.wireMiddleware]
+      : inspector.wireMiddleware,
+  };
+}
+
+function newRuntimeId(): string {
+  const cryptoApi = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  return cryptoApi?.randomUUID?.() ?? `runtime-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 /* ------------------------------------------------------------------------- */
 /* AcpRuntime                                                                 */
 /* ------------------------------------------------------------------------- */
 
 export class AcpRuntime {
+  readonly runtimeId: string;
+
   private readonly agent: AgentProfile;
   private readonly cwd: string | undefined;
   private readonly host: RuntimeHost;
+  private readonly context: RuntimeContext | undefined;
+  private readonly observability: RuntimeObservabilityOptions | undefined;
+  private readonly eventStore: RuntimeEventStore | undefined;
+  private readonly recording: RuntimeEventStore | undefined;
+  private readonly approvals: RuntimeApprovalQueue | undefined;
+  private readonly inspector: RuntimeInspector | undefined;
   private readonly explicitTransport: AcpTransport | undefined;
   private readonly legacySpawnProcess: SpawnProcess | undefined;
   private readonly legacyConnectionFactory: AcpConnectionFactory | undefined;
@@ -152,13 +216,20 @@ export class AcpRuntime {
   private shutdownStarted = false;
 
   constructor(options: RuntimeOptions) {
+    this.runtimeId = newRuntimeId();
     this.agent = {
       ...options.agent,
       args: [...options.agent.args],
       env: options.agent.env ? { ...options.agent.env } : undefined,
     };
     this.cwd = options.cwd;
-    this.host = options.host;
+    this.inspector = options.inspector;
+    this.host = mergeInspectorHost(options.host ?? defaultRuntimeHost, options.inspector);
+    this.context = options.context ? { ...options.context } : undefined;
+    this.observability = options.observability;
+    this.eventStore = options.eventStore;
+    this.recording = options.recording;
+    this.approvals = options.approvals;
     this.explicitTransport = options.transport;
     this.legacySpawnProcess = options.spawnProcess;
     this.legacyConnectionFactory = options.connectionFactory;
@@ -239,6 +310,8 @@ export class AcpRuntime {
         state.transportSession,
         this.agent,
         'ACP session/new',
+        'session-new',
+        cwd,
       ),
       authMethods: state.initResponse.authMethods || [],
       authenticate: state.connection.authenticate?.bind(state.connection),
@@ -254,6 +327,7 @@ export class AcpRuntime {
       modes: sessionResponse.modes,
       models: sessionResponse.models,
       configOptions: sessionResponse.configOptions,
+      cwd,
     });
   }
 
@@ -292,6 +366,8 @@ export class AcpRuntime {
         state.transportSession,
         this.agent,
         'ACP session/load',
+        'session-load',
+        cwd,
       ),
       authMethods: state.initResponse.authMethods || [],
       authenticate: state.connection.authenticate?.bind(state.connection),
@@ -307,6 +383,8 @@ export class AcpRuntime {
       modes: loadResponse?.modes,
       models: loadResponse?.models,
       configOptions: loadResponse?.configOptions,
+      loaded: true,
+      cwd,
     });
   }
 
@@ -334,7 +412,14 @@ export class AcpRuntime {
   async shutdown(): Promise<void> {
     if (this.shutdownStarted) return;
     this.shutdownStarted = true;
+    const startedAt = Date.now();
+    this.recordObservation({ type: 'runtime.shutdown.started', at: startedAt });
     await this.teardownConnection();
+    this.recordObservation({
+      type: 'runtime.shutdown.completed',
+      at: Date.now(),
+      durationMs: Date.now() - startedAt,
+    });
   }
 
   /** ES Explicit Resource Management: enables `await using acp = createAcpRuntime(...)`. */
@@ -397,6 +482,8 @@ export class AcpRuntime {
   }
 
   private async doConnect(): Promise<ConnectionState> {
+    const startedAt = Date.now();
+    this.recordObservation({ type: 'runtime.connect.started', at: startedAt });
     const sessionsById = new Map<string, RuntimeSession>();
     const sessionUpdateRouter = (notification: SessionNotification) => {
       const sessionId = (notification as { sessionId?: string }).sessionId;
@@ -404,68 +491,90 @@ export class AcpRuntime {
       sessionsById.get(sessionId)?.handleSessionUpdate(notification);
     };
 
-    const transport = await this.resolveTransport();
-    const client = createClientBridge({
-      host: this.host,
-      onSessionUpdate: sessionUpdateRouter,
-    });
+    try {
+      const transport = await this.resolveTransport();
+      const client = createClientBridge({
+        host: this.host,
+        runtimeId: this.runtimeId,
+        agent: this.agent,
+        context: this.context,
+        approvals: this.approvals,
+        observe: (observation) => this.recordObservation(observation),
+        onSessionUpdate: sessionUpdateRouter,
+      });
 
-    const transportSession = await transport.connect({
-      agent: this.agent,
-      host: this.host,
-      client,
-      cwd: this.cwd,
-      onSessionUpdate: sessionUpdateRouter,
-    });
+      const transportSession = await transport.connect({
+        agent: this.agent,
+        host: this.host,
+        client,
+        cwd: this.cwd,
+        onSessionUpdate: sessionUpdateRouter,
+      });
 
-    const startupTimeoutMs = this.agent.startupTimeoutMs || 30000;
-    const promptCapabilities = this.host.promptCapabilities;
-    const initResponse = await withStartupDiagnostics(
-      withTimeout(
-        transportSession.connection.initialize({
-          protocolVersion: PROTOCOL_VERSION,
-          clientInfo: {
-            name: CORE_PACKAGE_NAME,
-            version: CORE_PACKAGE_VERSION,
-          },
-          clientCapabilities: {
-            fs: {
-              readTextFile: typeof this.host.readTextFile === 'function',
-              writeTextFile: typeof this.host.writeTextFile === 'function',
+      const startupTimeoutMs = this.agent.startupTimeoutMs || 30000;
+      const promptCapabilities = this.host.promptCapabilities;
+      const initResponse = await withStartupDiagnostics(
+        withTimeout(
+          transportSession.connection.initialize({
+            protocolVersion: PROTOCOL_VERSION,
+            clientInfo: {
+              name: CORE_PACKAGE_NAME,
+              version: CORE_PACKAGE_VERSION,
             },
-            terminal: Boolean(
-              this.host.createTerminal
-              && this.host.terminalOutput
-              && this.host.waitForTerminalExit
-              && this.host.killTerminal
-              && this.host.releaseTerminal,
-            ),
-            ...(promptCapabilities ? {
-              promptCapabilities: {
-                image: !!promptCapabilities.image,
-                audio: !!promptCapabilities.audio,
-                embeddedContext: !!promptCapabilities.embeddedContext,
+            clientCapabilities: {
+              fs: {
+                readTextFile: typeof this.host.readTextFile === 'function',
+                writeTextFile: typeof this.host.writeTextFile === 'function',
               },
-            } : {}),
-          },
-        }),
-        startupTimeoutMs,
+              terminal: Boolean(
+                this.host.createTerminal
+                && this.host.terminalOutput
+                && this.host.waitForTerminalExit
+                && this.host.killTerminal
+                && this.host.releaseTerminal,
+              ),
+              ...(promptCapabilities ? {
+                promptCapabilities: {
+                  image: !!promptCapabilities.image,
+                  audio: !!promptCapabilities.audio,
+                  embeddedContext: !!promptCapabilities.embeddedContext,
+                },
+              } : {}),
+            },
+          }),
+          startupTimeoutMs,
+          'ACP initialize',
+        ),
+        transportSession,
+        this.agent,
         'ACP initialize',
-      ),
-      transportSession,
-      this.agent,
-      'ACP initialize',
-    );
+        'initialize',
+        this.cwd,
+      );
 
-    const state: ConnectionState = {
-      transportSession,
-      connection: transportSession.connection,
-      initResponse,
-      sessionsById,
-      sessionUpdateRouter,
-    };
-    this.connectionState = state;
-    return state;
+      const state: ConnectionState = {
+        transportSession,
+        connection: transportSession.connection,
+        initResponse,
+        sessionsById,
+        sessionUpdateRouter,
+      };
+      this.connectionState = state;
+      this.recordObservation({
+        type: 'runtime.connect.completed',
+        at: Date.now(),
+        durationMs: Date.now() - startedAt,
+      });
+      return state;
+    } catch (error) {
+      this.recordObservation({
+        type: 'runtime.connect.failed',
+        at: Date.now(),
+        durationMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
 
   private async resolveTransport(): Promise<AcpTransport> {
@@ -485,6 +594,8 @@ export class AcpRuntime {
     modes: unknown;
     models: unknown;
     configOptions: unknown;
+    loaded?: boolean;
+    cwd?: string;
   }): RuntimeSession {
     const initialEvents = createInitialSessionEvents({
       sessionId: params.sessionId,
@@ -499,6 +610,18 @@ export class AcpRuntime {
       host: this.host,
       connection: params.state.connection,
       initialEvents,
+      onEvent: (event) => this.recordSessionEvent(event),
+    });
+
+    for (const event of initialEvents) {
+      this.recordSessionEvent(event);
+    }
+
+    this.recordObservation({
+      type: params.loaded ? 'session.loaded' : 'session.created',
+      at: Date.now(),
+      sessionId: params.sessionId,
+      cwd: params.cwd,
     });
 
     params.state.sessionsById.set(params.sessionId, session);
@@ -508,10 +631,82 @@ export class AcpRuntime {
         await originalDispose();
       } finally {
         params.state.sessionsById.delete(params.sessionId);
+        this.recordObservation({
+          type: 'session.disposed',
+          at: Date.now(),
+          sessionId: params.sessionId,
+          cwd: params.cwd,
+        });
       }
     };
 
     return session;
+  }
+
+  private recordSessionEvent(event: RuntimeSessionEvent): void {
+    this.writeStore({
+      kind: 'session.event',
+      at: event.at,
+      runtimeId: this.runtimeId,
+      agentId: this.agent.id,
+      context: this.context,
+      sessionId: event.sessionId,
+      event,
+    });
+    const observation = sessionEventToObservation({
+      event,
+      runtimeId: this.runtimeId,
+      agent: this.agent,
+      context: this.context,
+    });
+    if (observation) this.recordObservation(observation);
+  }
+
+  private recordObservation(
+    observation: RuntimeObservation | ({ type: RuntimeObservation['type']; at: number } & Record<string, unknown>),
+  ): void {
+    const fullObservation = {
+      ...observation,
+      runtimeId: (observation as Partial<RuntimeObservation>).runtimeId ?? this.runtimeId,
+      agentId: (observation as Partial<RuntimeObservation>).agentId ?? this.agent.id,
+      context: (observation as Partial<RuntimeObservation>).context ?? this.context,
+    } as RuntimeObservation;
+    this.safeCall(() => this.observability?.sink?.(fullObservation), 'observability.sink');
+    this.safeCall(() => this.inspector?.observe(fullObservation), 'inspector.observe');
+    this.writeStore({
+      kind: 'observation',
+      at: fullObservation.at,
+      runtimeId: this.runtimeId,
+      agentId: this.agent.id,
+      context: this.context,
+      observation: fullObservation,
+    });
+  }
+
+  private writeStore(entry: Parameters<NonNullable<RuntimeEventStore['append']>>[0]): void {
+    this.safeCall(() => this.eventStore?.append(entry), 'eventStore.append');
+    if (this.recording && this.recording !== this.eventStore) {
+      this.safeCall(() => this.recording?.append(entry), 'recording.append');
+    }
+  }
+
+  private safeCall(operation: () => void | Promise<void> | undefined, label: string): void {
+    try {
+      const result = operation();
+      if (result && typeof (result as Promise<void>).catch === 'function') {
+        void (result as Promise<void>).catch((error) => this.host.log?.({
+          level: 'warn',
+          message: `${label} failed.`,
+          context: { error: error instanceof Error ? error.message : String(error) },
+        }));
+      }
+    } catch (error) {
+      this.host.log?.({
+        level: 'warn',
+        message: `${label} failed.`,
+        context: { error: error instanceof Error ? error.message : String(error) },
+      });
+    }
   }
 }
 
@@ -553,6 +748,7 @@ async function withAuthRetry<T>(params: AuthRetryParams<T>): Promise<T> {
       params.transportSession,
       params.agent,
       'ACP authenticate',
+      'authenticate',
     );
 
     return params.operation();
@@ -580,50 +776,33 @@ async function withStartupDiagnostics<T>(
   transportSession: AcpTransportSession,
   agent: AgentProfile,
   label: string,
+  phase?: AcpStartupFailurePhase,
+  cwd?: string,
 ): Promise<T> {
+  const startedAt = Date.now();
   try {
     return await promise;
   } catch (error) {
-    throw enhanceStartupError(error, transportSession, agent, label);
+    if (isAcpAuthRequired(error)) throw error;
+    throw createAcpStartupError({
+      agent,
+      label,
+      phase,
+      cwd,
+      startedAt,
+      error,
+      transportDiagnostics: transportSession.getDiagnostics?.(),
+    });
   }
-}
-
-function enhanceStartupError(
-  error: unknown,
-  transportSession: AcpTransportSession,
-  agent: AgentProfile,
-  label: string,
-): Error {
-  const baseMessage = error instanceof Error ? error.message : String(error);
-  const details: string[] = [
-    `${label} failed for agent "${agent.id}".`,
-    baseMessage,
-  ];
-
-  const diagnostics = transportSession.getDiagnostics?.();
-  if (diagnostics?.exitSummary) {
-    details.push(`Process: ${diagnostics.exitSummary}`);
-  }
-  if (diagnostics?.stderr) {
-    details.push(`stderr:\n${diagnostics.stderr}`);
-  }
-
-  if (error instanceof Error) {
-    error.message = details.join('\n\n');
-    return error;
-  }
-
-  const wrapped = new Error(details.join('\n\n')) as Error & { code?: unknown; data?: unknown };
-  if (error && typeof error === 'object') {
-    const source = error as { code?: unknown; data?: unknown };
-    if (source.code !== undefined) wrapped.code = source.code;
-    if (source.data !== undefined) wrapped.data = source.data;
-  }
-  return wrapped;
 }
 
 function createClientBridge(params: {
   host: RuntimeHost;
+  runtimeId: string;
+  agent: AgentProfile;
+  context?: RuntimeContext;
+  approvals?: RuntimeApprovalQueue;
+  observe: (observation: RuntimeObservation) => void;
   onSessionUpdate: (notification: SessionNotification) => void;
 }): Client {
   return {
@@ -632,6 +811,11 @@ function createClientBridge(params: {
     },
     requestPermission: async (request) => handlePermissionRequest(
       params.host,
+      params.runtimeId,
+      params.agent,
+      params.context,
+      params.approvals,
+      params.observe,
       (request as { sessionId?: string }).sessionId || '',
       request,
     ),
@@ -658,6 +842,11 @@ async function delegateOrThrow<TRequest, TResponse>(
 
 async function handlePermissionRequest(
   host: RuntimeHost,
+  runtimeId: string,
+  agent: AgentProfile,
+  context: RuntimeContext | undefined,
+  approvals: RuntimeApprovalQueue | undefined,
+  observe: (observation: RuntimeObservation) => void,
   sessionId: string,
   request: RequestPermissionRequest,
 ): Promise<RequestPermissionResponse> {
@@ -679,9 +868,25 @@ async function handlePermissionRequest(
   const toolName = toolCall?.toolName || toolCall?.kind || 'tool';
   const title = toolCall?.title || '';
   const input = toolCall?.input ?? toolCall?.arguments ?? toolCall?.content;
+  const requestedAt = Date.now();
+  const baseObservation = {
+    runtimeId,
+    agentId: agent.id,
+    context,
+    sessionId,
+    toolCallId,
+    toolName,
+  };
 
-  const decision = host.requestPermission
-    ? await host.requestPermission({
+  observe({
+    ...baseObservation,
+    type: 'permission.requested',
+    at: requestedAt,
+    title,
+  });
+
+  try {
+    const permissionRequest = {
       sessionId,
       toolCallId,
       toolName,
@@ -689,28 +894,105 @@ async function handlePermissionRequest(
       input,
       options,
       raw: request,
-    })
-    : 'deny';
+    };
+    const decision = approvals
+      ? await requestApprovalDecision({
+        approvals,
+        request: permissionRequest,
+        runtimeId,
+        agent,
+        context,
+        requestedAt,
+        observe,
+      })
+      : host.requestPermission
+        ? await host.requestPermission(permissionRequest)
+        : PermissionDecision.Deny;
 
-  return {
-    outcome: {
-      outcome: 'selected',
-      optionId: selectPermissionOptionId(decision, options),
-    },
+    observe({
+      ...baseObservation,
+      type: 'permission.decided',
+      at: Date.now(),
+      decision,
+    });
+
+    return {
+      outcome: {
+        outcome: 'selected',
+        optionId: selectPermissionOptionId(decision, options),
+      },
+    };
+  } catch (error) {
+    observe({
+      ...baseObservation,
+      type: 'permission.failed',
+      at: Date.now(),
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
+async function requestApprovalDecision(params: {
+  approvals: RuntimeApprovalQueue;
+  request: RuntimePermissionRequest;
+  runtimeId: string;
+  agent: AgentProfile;
+  context?: RuntimeContext;
+  requestedAt: number;
+  observe: (observation: RuntimeObservation) => void;
+}): Promise<PermissionDecisionValue> {
+  const approvalId = `approval:${params.request.toolCallId}:${params.requestedAt}`;
+  const approvalRequest = {
+    ...params.request,
+    approvalId,
+    runtimeId: params.runtimeId,
+    agentId: params.agent.id,
+    context: params.context,
+    requestedAt: params.requestedAt,
   };
+  const ticketLike = await params.approvals.request(approvalRequest);
+  const ticket = typeof ticketLike === 'string'
+    ? { approvalId: ticketLike }
+    : ticketLike ?? { approvalId };
+  params.observe({
+    type: 'approval.queued',
+    at: Date.now(),
+    runtimeId: params.runtimeId,
+    agentId: params.agent.id,
+    context: params.context,
+    sessionId: params.request.sessionId,
+    toolCallId: params.request.toolCallId,
+    toolName: params.request.toolName,
+    approvalId: ticket.approvalId,
+  });
+  const decision = await params.approvals.waitForDecision(ticket);
+  params.observe({
+    type: 'approval.decided',
+    at: Date.now(),
+    runtimeId: params.runtimeId,
+    agentId: params.agent.id,
+    context: params.context,
+    sessionId: params.request.sessionId,
+    toolCallId: params.request.toolCallId,
+    toolName: params.request.toolName,
+    approvalId: ticket.approvalId,
+    decision,
+  });
+  return decision;
 }
 
 function selectPermissionOptionId(
-  decision: 'allow_once' | 'allow_always' | 'deny',
+  decision: PermissionDecisionValue,
   options: Array<{ optionId?: string; name?: string }>,
 ): string {
-  const normalizedDecision = decision || 'deny';
-  if (normalizedDecision === 'allow_always') {
+  const normalizedDecision = decision || PermissionDecision.Deny;
+  if (normalizedDecision === PermissionDecision.AllowAlways) {
     return options.find((option) => option.optionId === 'proceed_always')?.optionId
       || options.find((option) => /always/i.test(option.name || ''))?.optionId
-      || selectPermissionOptionId('allow_once', options);
+      || selectPermissionOptionId(PermissionDecision.AllowOnce, options);
   }
-  if (normalizedDecision === 'allow_once') {
+  if (normalizedDecision === PermissionDecision.AllowOnce) {
     return options.find((option) => option.optionId === 'proceed_once')?.optionId
       || options.find((option) => /once/i.test(option.name || ''))?.optionId
       || options[0]?.optionId

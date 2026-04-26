@@ -20,3 +20,9 @@ export {
 } from './transports/node.js';
 
 export * from './hosts/index.js';
+export {
+  createFileSessionRecorder,
+  loadFileSessionRecording,
+  type FileSessionRecorder,
+  type FileSessionRecorderOptions,
+} from './recording-node.js';

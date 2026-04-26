@@ -14,10 +14,21 @@ import {
   normalizeWireMiddleware,
   // event dispatcher
   onRuntimeEvent,
+  createMemorySessionRecorder,
+  createRuntimeReplay,
+  createRuntimeInspector,
+  formatStartupDiagnostics,
+  isAcpStartupError,
+  loadSessionRecording,
+  loadRuntimeReplay,
+  PermissionDecision,
   RuntimeEventKind,
   // types
   type AgentProfile,
+  type RuntimeApprovalQueue,
+  type RuntimeEventStore,
   type RuntimeHost,
+  type RuntimeObservation,
   type RuntimeSession,
   type RuntimeSessionEvent,
   type PromptResult,
@@ -34,10 +45,18 @@ Create a runtime bound to one agent process. The process and the ACP `initialize
 await using acp = createAcpRuntime({
   agent: ClaudeCode,            // built-in or custom AgentProfile
   cwd: '/optional/default/cwd', // omit if you pass cwd to every newSession()
-  host: { /* RuntimeHost */ },
+  host: { /* optional RuntimeHost */ },
+  context: { tenantId: 'acme', userId: 'u_123', workspaceId: 'workspace-1' },
+  inspector: createRuntimeInspector({ includeWire: true }),
+  observability: { sink: (event) => traces.write(event) },
+  eventStore: { append: (entry) => eventLog.append(entry) },
+  recording: createMemorySessionRecorder(),
+  approvals: approvalQueue,
   transport: undefined,         // override only for browser/IPC transports
 });
 ```
+
+If `host` is omitted, ACP Kit uses a default host that approves tool permissions once and selects the first offered auth method. Provide a host when your product needs explicit policy, UI prompts, file system or terminal capabilities, logging, or wire middleware.
 
 ### `RuntimeHost`
 
@@ -46,13 +65,99 @@ The host is a plain object. Every method is optional. Whether the runtime advert
 | Field | When to provide |
 | --- | --- |
 | `chooseAuthMethod(req)` | Always recommended; called when `session/new` returns `auth_required`. Return the `id` of an offered method or `null` to abort. |
-| `requestPermission(req)` | Required if the agent uses tools that need user approval. Return `'allow_once' \| 'allow_always' \| 'deny_once' \| 'deny_always'`. |
+| `requestPermission(req)` | Required if the agent uses tools that need user approval. Return `PermissionDecision.AllowOnce`, `PermissionDecision.AllowAlways`, or `PermissionDecision.Deny`. Existing string literals (`'allow_once'`, `'allow_always'`, `'deny'`) remain supported. |
 | `readTextFile(req)` / `writeTextFile(req)` | Provide both to advertise file system capability. Use [`createLocalFileSystemHost({ root })`](https://github.com/AcpKit/acp-kit/blob/main/packages/core/src/hosts/local-fs.ts) for a sandboxed default. |
 | `createTerminal` / `terminalOutput` / `waitForTerminalExit` / `killTerminal` / `releaseTerminal` | All five must be provided together to advertise terminal capability. Use [`createLocalTerminalHost`](https://github.com/AcpKit/acp-kit/blob/main/packages/core/src/hosts/local-terminal.ts) as a starting point. |
 | `promptCapabilities` | Object with `image` / `audio` / `embeddedContext` booleans (default `false`). Tells the agent what content kinds your UI can render. |
 | `log(entry)` | Diagnostic hook. Receives connection / spawn / session lifecycle events as structured records. |
 | `wireMiddleware` | Single function or array. Each middleware sees every JSON-RPC frame in either direction with `next` continuation; can observe, mutate, or drop frames. |
 | `onAgentExit(info)` | Called by the default node transport when the child agent process exits unexpectedly. |
+
+### Enterprise runtime hooks
+
+ACP Kit emits structured facts that enterprise products can observe, persist, approve, and replay. These hooks are optional and share the same correlation fields (`runtimeId`, `agentId`, `sessionId`, `turnId`, `toolCallId`, plus your `context`).
+
+```ts
+const observations: RuntimeObservation[] = [];
+
+const eventStore: RuntimeEventStore = {
+  append: async (entry) => db.insert(entry),
+  load: async ({ sessionId }) => db.query({ sessionId }),
+};
+
+const approvals: RuntimeApprovalQueue = {
+  request: async (request) => approvalService.enqueue(request),
+  waitForDecision: async (ticket) => approvalService.wait(ticket.approvalId),
+};
+
+await using acp = createAcpRuntime({
+  agent: ClaudeCode,
+  cwd: process.cwd(),
+  context: { tenantId: 'acme', userId: 'u_123' },
+  observability: { sink: (event) => observations.push(event) },
+  eventStore,
+  approvals,
+});
+```
+
+- `observability.sink` receives runtime/session/turn/tool/permission/approval observations for tracing and metrics.
+- `eventStore.append` receives append-only `observation` and `session.event` entries for durable audit logs.
+- `inspector` receives the same observations and can capture redacted wire frames for local debugging.
+- `recording` receives append-only entries for session recording/replay; use `createMemorySessionRecorder()` in any runtime or `createFileSessionRecorder()` from `@acp-kit/core/node` to write JSONL files.
+- `approvals` routes ACP permission requests through an external human approval queue instead of an inline callback.
+- `createRuntimeReplay(...)` and `loadRuntimeReplay(...)` rebuild transcript state and replay stored `RuntimeSessionEvent`s through the normal handler-map API.
+
+```ts
+const replay = await loadRuntimeReplay(eventStore, { sessionId: 'session-123' });
+console.log(replay.transcript.blocks);
+replay.replay({ toolEnd: (event) => console.log(event.toolCallId, event.status) });
+```
+
+### Startup diagnostics, inspector, and recordings
+
+Startup failures throw `AcpStartupError` when ACP Kit can attach structured diagnostics. Use `isAcpStartupError(...)` and `formatStartupDiagnostics(...)` to turn command, phase, stderr tail, process exit, and suggested fixes into a supportable error report.
+
+```ts
+try {
+  await acp.ready();
+} catch (error) {
+  if (isAcpStartupError(error)) {
+    console.error(formatStartupDiagnostics(error.diagnostics));
+  }
+  throw error;
+}
+```
+
+`createRuntimeInspector({ includeWire: true })` records a local timeline of runtime observations plus redacted ACP JSON-RPC frames. Pass it as `inspector` to `createAcpRuntime(...)`; call `inspector.timeline()` or `inspector.toJSONL()` when you need to debug a stuck auth/session/permission flow.
+
+```ts
+const inspector = createRuntimeInspector({ includeWire: true });
+await using acp = createAcpRuntime({ agent: ClaudeCode, cwd: process.cwd(), inspector });
+```
+
+Session recorders use the same append-only entry shape as `eventStore`. `loadSessionRecording(...)` rebuilds transcript state and exposes a replay helper.
+
+```ts
+const recording = createMemorySessionRecorder();
+await using acp = createAcpRuntime({ agent: ClaudeCode, cwd: process.cwd(), recording });
+
+const session = await acp.newSession();
+await session.prompt('Summarize this repository.');
+
+const replay = await loadSessionRecording(recording, { sessionId: session.sessionId });
+console.log(replay.replay.transcript.blocks);
+```
+
+Node hosts can persist recordings as JSONL:
+
+```ts
+import { createFileSessionRecorder, loadFileSessionRecording } from '@acp-kit/core/node';
+
+const recording = createFileSessionRecorder({ dir: '.acp/recordings' });
+await using acp = createAcpRuntime({ agent: ClaudeCode, cwd: process.cwd(), recording });
+
+const saved = loadFileSessionRecording(recording.recordingPath);
+```
 
 ### Returned `AcpRuntime`
 
@@ -91,6 +196,8 @@ Returned by `acp.newSession(...)` / `acp.loadSession(...)`. One session = one AC
 | `session.setModel(modelId)` | ACP `session/set_model`. Throws if the agent does not implement it. |
 | `session[Symbol.asyncDispose]()` | Auto-called by `await using`. Equivalent to closing and detaching listeners. |
 
+Use `session.on(...)` when you have a `RuntimeSession`; it subscribes to future events and returns an unsubscribe function. Use `onRuntimeEvent(event, handlers)` only when you already have a single `RuntimeSessionEvent` value and want to dispatch it through the same camelCase handler map.
+
 ### `PromptResult`
 
 ```ts
@@ -103,20 +210,22 @@ interface PromptResult {
 
 ## `runOneShotPrompt(options)`
 
-Spawn the agent, run one prompt, yield each `RuntimeSessionEvent`, dispose everything when iteration completes.
+Spawn the agent, run one prompt, yield each `RuntimeSessionEvent`, dispose everything when iteration completes. Since this helper yields individual event values rather than exposing a `RuntimeSession`, pair it with `onRuntimeEvent(...)` for handler-map dispatch.
 
 ```ts
-import { runOneShotPrompt, ClaudeCode } from '@acp-kit/core';
+import { runOneShotPrompt, onRuntimeEvent, ClaudeCode } from '@acp-kit/core';
 
 for await (const event of runOneShotPrompt({
   agent: ClaudeCode,
   cwd: process.cwd(),
   prompt: 'Hi',
-  host,        // optional; defaults to allow_once + first auth method
+  host,        // optional; defaults to PermissionDecision.AllowOnce + first auth method
   mcpServers,  // optional; passed to newSession
   transport,   // optional; default node child-process transport
 })) {
-  if (event.type === 'message.delta') process.stdout.write(event.delta);
+  onRuntimeEvent(event, {
+    messageDelta: (e) => process.stdout.write(e.delta),
+  });
 }
 ```
 
@@ -167,7 +276,12 @@ if (event.type === RuntimeEventKind.ToolStart) { /* ... */ }
 Observe or mutate raw JSON-RPC traffic. Useful for protocol bridges, debug recorders, or vendor adapters that need to rewrite frames the runtime would otherwise pass through unchanged.
 
 ```ts
-import { composeWireMiddleware, normalizeWireMiddleware } from '@acp-kit/core';
+import {
+  composeWireMiddleware,
+  normalizeWireMiddleware,
+  PermissionDecision,
+  type RuntimeHost,
+} from '@acp-kit/core';
 
 const log = async (ctx, next) => {
   console.log(ctx.direction, ctx.frame.method ?? ctx.frame.id);
@@ -175,6 +289,7 @@ const log = async (ctx, next) => {
 };
 
 const host: RuntimeHost = {
+  requestPermission: async () => PermissionDecision.AllowOnce,
   wireMiddleware: composeWireMiddleware([log, normalizeWireMiddleware()]),
 };
 ```
@@ -200,6 +315,7 @@ import {
   createAcpRuntime,
   runOneShotPrompt,
   ClaudeCode,
+  PermissionDecision,
   type RuntimeHost,
   type RuntimeSessionEvent,
   type AgentProfile
@@ -212,7 +328,6 @@ import {
 await using acp = createAcpRuntime({
   agent: ClaudeCode,
   host: {
-    requestPermission: async () => 'allow_once',
     chooseAuthMethod: async ({ methods }) => methods[0]?.id ?? null,
     log: (event) => console.log(event)
   } satisfies RuntimeHost
@@ -227,8 +342,8 @@ await using session = await acp.newSession({ cwd: '/path/to/workspace' });
 // Subscribe to normalized events with a handler map
 session.on({
   messageDelta:  (e) => process.stdout.write(e.delta),
-  toolStart:     (e) => console.log(`[${e.toolCallId}] ${e.title ?? e.name}`),
-  turnCompleted: (e) => console.log(`done: ${e.stopReason}`),
+  toolStart:     (e) => process.stdout.write(`[${e.toolCallId}] ${e.title ?? e.name}\n`),
+  turnCompleted: (e) => process.stdout.write(`done: ${e.stopReason}\n`),
 });
 
 const result = await session.prompt('Refactor utils.ts'); // Promise<PromptResult>

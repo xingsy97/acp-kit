@@ -11,6 +11,7 @@ import {
   GeminiCli,
   QwenCode,
   OpenCode,
+  PermissionDecision,
 } from '@acp-kit/core';
 
 const agents = {
@@ -102,11 +103,15 @@ function createInteractiveHost(options) {
       }
       if (!process.stdin.isTTY) {
         console.log('[host] non-interactive terminal, defaulting to allow_once');
-        return 'allow_once';
+        return PermissionDecision.AllowOnce;
       }
 
       const input = await ask('Decision [1=allow_once, 2=allow_always, 3=deny] (default 1): ');
-      return ({ '1': 'allow_once', '2': 'allow_always', '3': 'deny' })[input] ?? 'allow_once';
+      return ({
+        '1': PermissionDecision.AllowOnce,
+        '2': PermissionDecision.AllowAlways,
+        '3': PermissionDecision.Deny,
+      })[input] ?? PermissionDecision.AllowOnce;
     },
 
     log(entry) {

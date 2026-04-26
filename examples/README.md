@@ -2,13 +2,13 @@
 
 Each example is a **standalone npm package** that depends on the published [`@acp-kit/core`](https://www.npmjs.com/package/@acp-kit/core). They are not part of the repository workspace, so they consume the same `@acp-kit/core` build any external user would.
 
-| Example | Runs without an agent installed | What it shows |
-| --- | :---: | --- |
-| [`quick-start/`](./quick-start/) | No | The minimum one-shot path: `runOneShotPrompt({ agent, cwd, prompt })` returning an async iterable of normalized `RuntimeSessionEvent`s (`message.delta`, `tool.start`, `turn.completed`, ...). Process is auto-disposed. |
-| [`pair-programming/`](./pair-programming/) | No | Two sessions in one runtime as AUTHOR + REVIEWER, looping until the reviewer says `APPROVED`. Demonstrates handler-map dispatch and multi-turn `session.prompt(...)` orchestration. |
-| [`mock-runtime/`](./mock-runtime/) | **Yes** | A fully self-contained mock ACP server so you can see the complete event flow (auth retry, permission, tool lifecycle, message / reasoning / usage updates, transcript snapshot) without installing any agent. |
-| [`real-agent-cli/`](./real-agent-cli/) | No | A small CLI that drives a real ACP agent (Copilot CLI, Claude ACP, Codex ACP) with an interactive host adapter for auth and permission prompts. |
-| [`web-daemon/`](./web-daemon/) | No | Tiny `node:http` + Server-Sent Events server: POST a prompt to `/prompt` and stream normalized events back to a browser or `curl -N`. |
+| Example | What it shows |
+| --- | --- |
+| [`quick-start/`](./quick-start/) | The minimum one-shot path: `runOneShotPrompt({ agent, cwd, prompt })` returning an async iterable of normalized `RuntimeSessionEvent`s (`message.delta`, `tool.start`, `turn.completed`, ...). Process is auto-disposed. |
+| [`pair-programming/`](./pair-programming/) | Two sessions in one runtime as AUTHOR + REVIEWER, looping until the reviewer says `APPROVED`. Demonstrates handler-map dispatch and multi-turn `session.prompt(...)` orchestration. |
+| [`mock-runtime/`](./mock-runtime/) | A fully self-contained mock ACP server so you can see the complete event flow (auth retry, permission, tool lifecycle, message / reasoning / usage updates, transcript snapshot) without installing any agent. |
+| [`real-agent-cli/`](./real-agent-cli/) | A small CLI that drives a real ACP agent (Copilot CLI, Claude ACP, Codex ACP) with an interactive host adapter for auth and permission prompts. |
+| [`web-daemon/`](./web-daemon/) | Tiny `node:http` + Server-Sent Events server: POST a prompt to `/prompt` and stream normalized events back to a browser or `curl -N`. |
 
 ## Running
 

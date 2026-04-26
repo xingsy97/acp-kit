@@ -3,7 +3,7 @@
 import { PassThrough } from 'node:stream';
 import process from 'node:process';
 
-import { createAcpRuntime } from '@acp-kit/core';
+import { createAcpRuntime, PermissionDecision } from '@acp-kit/core';
 
 const runtime = createAcpRuntime({
   agent: {
@@ -20,7 +20,7 @@ const runtime = createAcpRuntime({
     },
     requestPermission: async (request) => {
       console.log(`[host] permission requested for ${request.toolName}, auto-approving`);
-      return 'allow_once';
+      return PermissionDecision.AllowOnce;
     },
     log: (entry) => console.log(`[host:${entry.level}] ${entry.message}`),
   },

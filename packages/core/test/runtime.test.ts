@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createAcpRuntime,
+  PermissionDecision,
   runOneShotPrompt,
   type AcpConnectionFactory,
   type AcpTransport,
@@ -147,6 +148,44 @@ describe('AcpRuntime', () => {
     expect(newSession).toHaveBeenCalledTimes(2);
   });
 
+  it('uses a default host when none is provided', async () => {
+    let capturedClient: {
+      requestPermission(request: unknown): Promise<{ outcome: { optionId: string } }>;
+    } | null = null;
+
+    const connectionFactory: AcpConnectionFactory = {
+      create({ client }) {
+        capturedClient = client as typeof capturedClient;
+        return {
+          initialize: async () => ({ authMethods: [] }),
+          newSession: async () => ({ sessionId: 'session-default-host' }),
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+        } as never;
+      },
+    };
+
+    const runtime = createAcpRuntime({
+      agent: {
+        id: 'test',
+        displayName: 'Test Agent',
+        command: 'test-agent',
+        args: [],
+      },
+      cwd: 'C:/repo',
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+
+    await runtime.newSession();
+    const response = await capturedClient?.requestPermission({
+      toolCall: { id: 'tool-1', toolName: 'read_file' },
+      options: [{ optionId: 'proceed_once', name: 'Allow Once' }],
+    });
+
+    expect(response?.outcome.optionId).toBe('proceed_once');
+  });
+
   it('maps host permission decisions back to ACP option ids', async () => {
     let capturedClient: {
       requestPermission(request: unknown): Promise<{ outcome: { optionId: string } }>;
@@ -173,7 +212,7 @@ describe('AcpRuntime', () => {
       },
       cwd: 'C:/repo',
       host: {
-        requestPermission: async () => 'allow_always',
+        requestPermission: async () => PermissionDecision.AllowAlways,
       },
       spawnProcess: createFakeSpawn(),
       connectionFactory,
@@ -199,6 +238,115 @@ describe('AcpRuntime', () => {
         optionId: 'proceed_always',
       },
     });
+  });
+
+  it('records observations and durable session events', async () => {
+    let capturedClient: { sessionUpdate(notification: unknown): Promise<void> } | null = null;
+    const observations: string[] = [];
+    const storeEntries: string[] = [];
+
+    const connectionFactory: AcpConnectionFactory = {
+      create({ client }) {
+        capturedClient = client as typeof capturedClient;
+        return {
+          initialize: async () => ({ authMethods: [] }),
+          newSession: async () => ({ sessionId: 'session-observed' }),
+          prompt: async () => {
+            await capturedClient?.sessionUpdate({
+              sessionId: 'session-observed',
+              update: {
+                sessionUpdate: 'agent_message_chunk',
+                content: { type: 'text', text: 'observed' },
+              },
+            });
+            return { stopReason: 'end_turn' };
+          },
+          cancel: async () => undefined,
+        } as never;
+      },
+    };
+
+    const runtime = createAcpRuntime({
+      agent: { id: 'test', displayName: 'Test Agent', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      context: { tenantId: 'tenant-1' },
+      observability: {
+        sink: (event) => { observations.push(event.type); },
+      },
+      eventStore: {
+        append: (entry) => { storeEntries.push(entry.kind); },
+      },
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+
+    const session = await runtime.newSession();
+    await session.prompt('hello');
+
+    expect(observations).toContain('runtime.connect.started');
+    expect(observations).toContain('runtime.connect.completed');
+    expect(observations).toContain('session.created');
+    expect(observations).toContain('turn.started');
+    expect(observations).toContain('turn.completed');
+    expect(storeEntries).toContain('observation');
+    expect(storeEntries).toContain('session.event');
+  });
+
+  it('routes permission requests through an approval queue', async () => {
+    let capturedClient: {
+      requestPermission(request: unknown): Promise<{ outcome: { optionId: string } }>;
+    } | null = null;
+    const observations: string[] = [];
+    const approvalRequests: string[] = [];
+
+    const connectionFactory: AcpConnectionFactory = {
+      create({ client }) {
+        capturedClient = client as typeof capturedClient;
+        return {
+          initialize: async () => ({ authMethods: [] }),
+          newSession: async () => ({ sessionId: 'session-approval' }),
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+        } as never;
+      },
+    };
+
+    const runtime = createAcpRuntime({
+      agent: { id: 'test', displayName: 'Test Agent', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {
+        requestPermission: async () => PermissionDecision.AllowAlways,
+      },
+      approvals: {
+        request: async (request) => {
+          approvalRequests.push(request.approvalId);
+          return { approvalId: 'approval-1' };
+        },
+        waitForDecision: async () => PermissionDecision.Deny,
+      },
+      observability: {
+        sink: (event) => { observations.push(event.type); },
+      },
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+
+    await runtime.newSession();
+    const response = await capturedClient?.requestPermission({
+      toolCall: { id: 'tool-approval', toolName: 'write_file', input: { path: 'secret.txt' } },
+      options: [
+        { optionId: 'proceed_once', name: 'Allow Once' },
+        { optionId: 'cancel', name: 'Cancel' },
+      ],
+    });
+
+    expect(approvalRequests[0]).toMatch(/^approval:tool-approval:/);
+    expect(response?.outcome.optionId).toBe('cancel');
+    expect(observations).toContain('permission.requested');
+    expect(observations).toContain('approval.queued');
+    expect(observations).toContain('approval.decided');
+    expect(observations).toContain('permission.decided');
   });
 
   it('newSession throws when neither runtime nor call site provides cwd', async () => {

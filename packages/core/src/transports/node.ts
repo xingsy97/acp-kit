@@ -126,6 +126,8 @@ export function nodeChildProcessTransport(
           return {
             stderr: monitor.getStderr(),
             exitSummary: monitor.getExitSummary(),
+            exitCode: monitor.getExitCode(),
+            signal: monitor.getSignal(),
           };
         },
       };
@@ -324,11 +326,15 @@ function createFilteredReadable(source: Readable, filterLine: (line: string) => 
 interface ProcessMonitor {
   getStderr(): string;
   getExitSummary(): string | null;
+  getExitCode(): number | null | undefined;
+  getSignal(): NodeJS.Signals | null | undefined;
 }
 
 function monitorProcess(child: SpawnedProcess, host: RuntimeHost): ProcessMonitor {
   let stderrBuffer = '';
   let exitSummary: string | null = null;
+  let exitCode: number | null | undefined;
+  let exitSignal: NodeJS.Signals | null | undefined;
 
   child.stderr?.on('data', (chunk) => {
     const text = chunk.toString();
@@ -344,6 +350,8 @@ function monitorProcess(child: SpawnedProcess, host: RuntimeHost): ProcessMonito
   });
 
   const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    exitCode = code;
+    exitSignal = signal;
     exitSummary = `exit code=${code ?? 'null'}${signal ? ` signal=${signal}` : ''}`;
     host.log?.({
       level: code === 0 ? 'info' : 'warn',
@@ -364,6 +372,12 @@ function monitorProcess(child: SpawnedProcess, host: RuntimeHost): ProcessMonito
     },
     getExitSummary() {
       return exitSummary;
+    },
+    getExitCode() {
+      return exitCode;
+    },
+    getSignal() {
+      return exitSignal;
     },
   };
 }

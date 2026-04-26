@@ -15,7 +15,7 @@ npm install @acp-kit/core
 
 ## First session
 
-For a one-shot prompt, use `runOneShotPrompt` (yields normalized `RuntimeSessionEvent`s):
+For a one-shot prompt, use `runOneShotPrompt` (yields normalized `RuntimeSessionEvent`s). Because this helper gives you one event at a time, dispatch each event with `onRuntimeEvent(...)`:
 
 ```ts
 import { runOneShotPrompt, onRuntimeEvent, ClaudeCode } from '@acp-kit/core';
@@ -38,21 +38,24 @@ import { createAcpRuntime, ClaudeCode } from '@acp-kit/core';
 
 await using acp = createAcpRuntime({
   agent: ClaudeCode,
-  host: { requestPermission: async () => 'allow_once' },
 });
 
 await using session = await acp.newSession({ cwd: process.cwd() });
 
 session.on({
   messageDelta: (e) => process.stdout.write(e.delta),
-  toolStart:    (e) => console.log(`\n[tool ${e.toolCallId}] ${e.title ?? e.name}`),
-  toolEnd:      (e) => console.log(`[tool ${e.toolCallId}] ${e.status}`),
+  toolStart:    (e) => process.stdout.write(`\n[tool ${e.toolCallId}] ${e.title ?? e.name}\n`),
+  toolEnd:      (e) => process.stdout.write(`[tool ${e.toolCallId}] ${e.status}\n`),
 });
 
 await session.prompt('Explain what this repository does.');
 ```
 
+By default, the runtime approves tool permissions once and selects the first offered auth method. Pass a `host` when your application needs an explicit approval UI, auth picker, file system adapter, terminal adapter, logging, or wire middleware.
+
 ## Subscribing to events
+
+Use `session.on(...)` when you have a `RuntimeSession`; it subscribes to future events and returns an unsubscribe function. Use `onRuntimeEvent(event, handlers)` only when you already have a single `RuntimeSessionEvent` value and want to route it through the same camelCase handler map, such as inside `runOneShotPrompt(...)`, tests, or a custom event queue.
 
 `session.on(...)` is overloaded three ways:
 
@@ -188,15 +191,14 @@ import { createAcpRuntime, ClaudeCode } from '@acp-kit/core';
 
 await using acp = createAcpRuntime({
   agent: ClaudeCode,
-  host: { requestPermission: async () => 'allow_once' },
 });
 
 await using session = await acp.newSession({ cwd: process.cwd() });
 
 session.on({
   messageDelta: (e) => process.stdout.write(e.delta),
-  toolStart:    (e) => console.log(`\n[tool ${e.toolCallId}] ${e.title ?? e.name}`),
-  toolEnd:      (e) => console.log(`[tool ${e.toolCallId}] ${e.status}`),
+  toolStart:    (e) => process.stdout.write(`\n[tool ${e.toolCallId}] ${e.title ?? e.name}\n`),
+  toolEnd:      (e) => process.stdout.write(`[tool ${e.toolCallId}] ${e.status}\n`),
 });
 
 await session.prompt('Explain what this repository does.');

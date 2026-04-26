@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per the SemVer 0.x convention). Patch versions remain backward compatible.
 
+## [Unreleased]
+
+## [0.6.0] - 2026-04-26
+
+### Added
+
+- `createAcpRuntime({ agent })` now works without a `host`. The runtime defaults to approving tool permissions once and selecting the first offered auth method; pass an explicit host for production policy, UI prompts, file system/terminal capabilities, logging, or wire middleware.
+- `PermissionDecision` constants (`AllowOnce`, `AllowAlways`, `Deny`) for host permission decisions, while keeping the existing string literals backward compatible.
+- Enterprise runtime hooks: `observability.sink`, durable `eventStore.append/load`, external `approvals`, runtime correlation `context`, and replay helpers (`createRuntimeReplay`, `loadRuntimeReplay`, `replayRuntimeEvents`, `buildTranscriptFromRuntimeEvents`).
+- Startup diagnostics via `AcpStartupError`, `isAcpStartupError(...)`, and `formatStartupDiagnostics(...)`.
+- Runtime inspection via `createRuntimeInspector(...)` with optional redacted wire-frame capture.
+- Session recording via `createMemorySessionRecorder(...)`, `loadSessionRecording(...)`, and Node JSONL helpers (`createFileSessionRecorder(...)`, `loadFileSessionRecording(...)`).
+
+### Fixed
+
+- Corrected permission-decision docs to use the actual supported deny value (`'deny'`) instead of non-existent `deny_once` / `deny_always` variants.
+- Improved npm package metadata and README wording so searches for Agent Client Protocol framework/runtime terms can discover the package more reliably.
+
 ## [0.5.0] - 2026-04-22
 
 Minor release with **breaking API changes** (allowed by 0.x SemVer). Renames the agent-selection surface so that what you pass to the runtime reads as "which agent", not "which configuration preset". Also expands the set of agents that ship as built-in named constants from 3 to 6.

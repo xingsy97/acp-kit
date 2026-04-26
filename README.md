@@ -7,14 +7,15 @@
 [![Node](https://img.shields.io/badge/node-%3E%3D20.11-brightgreen.svg)](https://nodejs.org)
 [![Status](https://img.shields.io/badge/status-experimental-orange.svg)](#status)
 
-**ACP Kit is a runtime for building applications on top of the [Agent Client Protocol](https://agentclientprotocol.com/).**
+**ACP Kit is an Agent Client Protocol framework and runtime for building applications on top of [ACP](https://agentclientprotocol.com/).**
 
-It launches an ACP agent process, manages the protocol connection, handles authentication, exposes host adapters for permissions / files / terminals, and turns raw `session/update` traffic into normalized turn, message, reasoning, and tool events. Your application chooses an agent profile, attaches a host, opens a session, and consumes stable events.
+It launches an ACP agent process, manages the protocol connection, handles authentication, exposes host adapters for permissions / files / terminals, and turns raw `session/update` traffic into normalized turn, message, reasoning, and tool events. Use it when you need an agent client protocol framework for products such as editor extensions, desktop shells, web daemons, and CLIs. Your application chooses an agent profile, attaches a host, opens a session, and consumes stable events.
 
 **Why ACP Kit:**
 
 - **Stable events over messy `session/update`.** Per-message, per-tool, per-turn events with correlation ids (`messageId`, `toolCallId`, `turnId`) &mdash; drive UI state and transcripts without parsing raw protocol traffic.
 - **Lifecycle is handled for you.** Cross-platform process spawn, startup diagnostics, `auth_required` retry, `session.error` surfacing, vendor `_meta` pass-through, multiple sessions over one agent process.
+- **Enterprise runtime hooks.** Structured observations, startup diagnostics, runtime inspectors, session recordings, approval queues, and replay helpers let products audit and debug what an agent did.
 - **Six common agents, one import.** `import { ClaudeCode, GitHubCopilot, CodexCli, GeminiCli, QwenCode, OpenCode } from '@acp-kit/core'` &mdash; or drive any other ACP-capable agent via a custom `AgentProfile`.
 
 ## Install
@@ -32,37 +33,49 @@ import { createAcpRuntime, ClaudeCode } from '@acp-kit/core';
 
 await using acp = createAcpRuntime({
   agent: ClaudeCode,
-  host: {
-    requestPermission: async () => 'allow_once',
-    chooseAuthMethod:  async ({ methods }) => methods[0]?.id ?? null,
-  },
 });
 
 await using session = await acp.newSession({ cwd: process.cwd() });
 
 session.on({
   messageDelta:  (e) => process.stdout.write(e.delta),
-  toolStart:     (e) => console.log(`\n[tool ${e.toolCallId}] ${e.title ?? e.name}`),
-  toolEnd:       (e) => console.log(`[tool ${e.toolCallId}] ${e.status}`),
-  turnCompleted: (e) => console.log(`\n(turn ${e.turnId} done: ${e.stopReason})`),
+  toolStart:     (e) => process.stdout.write(`\n[tool ${e.toolCallId}] ${e.title ?? e.name}\n`),
+  toolEnd:       (e) => process.stdout.write(`[tool ${e.toolCallId}] ${e.status}\n`),
+  turnCompleted: (e) => process.stdout.write(`\n(turn ${e.turnId} done: ${e.stopReason})\n`),
 });
 
 await session.prompt('Summarize this repository.');
 ```
 
-`session.on(...)` accepts a camelCase handler map (shown above), a single `'tool.start'`-style event type for one listener, or `'event'` for the full union. Each callback is type-narrowed. See [Getting Started](docs/getting-started.md) for the full event vocabulary, multi-session use, and how to debug startup / auth failures.
+`createAcpRuntime(...)` defaults to approving tool permissions once and selecting the first offered auth method. See [Getting Started](docs/getting-started.md) for explicit host policy, the full event vocabulary, multi-session use, and how to debug startup / auth failures.
+
+For a one-shot prompt, the helper API handles session disposal and yields the same event stream. Use `onRuntimeEvent(...)` only when you already have an event value, such as inside this `for await` loop; when you have a `RuntimeSession`, prefer `session.on(...)`.
+
+```ts
+import { runOneShotPrompt, onRuntimeEvent, ClaudeCode } from '@acp-kit/core';
+
+for await (const event of runOneShotPrompt({
+  agent: ClaudeCode,
+  cwd: process.cwd(),
+  prompt: 'Summarize this repository.',
+})) {
+  onRuntimeEvent(event, {
+    messageDelta: (e) => process.stdout.write(e.delta),
+  });
+}
+```
 
 ## Examples
 
 The repository ships with five runnable examples under [`examples/`](examples/). Each one is a standalone npm package that installs the published `@acp-kit/core` from npm:
 
-| Example | Runs without an agent installed | What it shows |
-| --- | :---: | --- |
-| [`quick-start/`](examples/quick-start/) | No | Minimal single-prompt script. |
-| [`pair-programming/`](examples/pair-programming/) | No | Two sessions in one runtime as AUTHOR + REVIEWER, looping until the reviewer says `APPROVED`. |
-| [`mock-runtime/`](examples/mock-runtime/) | **Yes** | Self-contained mock ACP server. Use this to see the full event flow without installing an agent. |
-| [`real-agent-cli/`](examples/real-agent-cli/) | No | Interactive CLI driver for real agents (`copilot`, `claude`, `codex`, `gemini`, `qwen`, `opencode`) with prompts for auth and permission decisions. |
-| [`web-daemon/`](examples/web-daemon/) | No | Tiny `node:http` + Server-Sent Events demo: POST a prompt, stream normalized events back to a browser. |
+| Example | What it shows |
+| --- | --- |
+| [`quick-start/`](examples/quick-start/) | Minimal single-prompt script. |
+| [`pair-programming/`](examples/pair-programming/) | Two sessions in one runtime as AUTHOR + REVIEWER, looping until the reviewer says `APPROVED`. |
+| [`mock-runtime/`](examples/mock-runtime/) | Self-contained mock ACP server. Use this to see the full event flow without installing an agent. |
+| [`real-agent-cli/`](examples/real-agent-cli/) | Interactive CLI driver for real agents (`copilot`, `claude`, `codex`, `gemini`, `qwen`, `opencode`) with prompts for auth and permission decisions. |
+| [`web-daemon/`](examples/web-daemon/) | Tiny `node:http` + Server-Sent Events demo: POST a prompt, stream normalized events back to a browser. |
 
 ```bash
 cd examples/mock-runtime
@@ -93,12 +106,13 @@ ACP Kit packages all of that behind `createAcpRuntime({...}).newSession({ cwd })
 
 `RuntimeSession` emits **normalized `RuntimeSessionEvent`s**: stable per-message, per-tool, and per-turn events with correlation ids (`messageId`, `toolCallId`, `turnId`). They drive transcripts, UI state, and multi-agent orchestration. If you need raw protocol traffic (debuggers, protocol bridges), `composeWireMiddleware` / `normalizeWireMiddleware` let you observe the exact JSON-RPC frames.
 
-Create the runtime with an agent profile and a host that implements only the capabilities your application backs:
+Create the runtime with an agent profile. Add a host only for the capabilities and policy hooks your application backs:
 
 ```ts
 import {
   createAcpRuntime,
   ClaudeCode,
+  PermissionDecision,
   type RuntimeHost,
   type AgentProfile,
 } from '@acp-kit/core';
@@ -106,12 +120,38 @@ import {
 await using acp = createAcpRuntime({
   agent: ClaudeCode,           // built-in constant, or a custom AgentProfile literal
   host: {
-    requestPermission: async (req) => 'allow_once',
+    requestPermission: async (req) => PermissionDecision.AllowOnce,
     chooseAuthMethod:  async ({ methods }) => methods[0]?.id ?? null,
     // readTextFile / writeTextFile / createTerminal+friends are advertised to
     // the agent only when you provide them. See docs/api-overview.md.
   } satisfies RuntimeHost,
 });
+```
+
+Diagnostics and replay are first-class runtime features. Use an inspector while developing, and attach a recorder when you need a durable audit/debug artifact:
+
+```ts
+import {
+  createAcpRuntime,
+  createRuntimeInspector,
+  isAcpStartupError,
+  formatStartupDiagnostics,
+  ClaudeCode,
+} from '@acp-kit/core';
+import { createFileSessionRecorder } from '@acp-kit/core/node';
+
+const inspector = createRuntimeInspector({ includeWire: true });
+const recording = createFileSessionRecorder({ dir: '.acp/recordings' });
+
+try {
+  await using acp = createAcpRuntime({ agent: ClaudeCode, inspector, recording });
+  await acp.ready();
+} catch (error) {
+  if (isAcpStartupError(error)) {
+    console.error(formatStartupDiagnostics(error.diagnostics));
+  }
+  throw error;
+}
 ```
 
 Then open a session, subscribe to events, send prompts:
@@ -121,9 +161,9 @@ await using session = await acp.newSession({ cwd: '/path/to/workspace' });
 
 session.on({
   messageDelta:  (e) => process.stdout.write(e.delta),
-  toolStart:     (e) => console.log(`[tool ${e.toolCallId}] ${e.title ?? e.name}`),
-  toolEnd:       (e) => console.log(`[tool ${e.toolCallId}] ${e.status}`),
-  turnCompleted: (e) => console.log(`done: ${e.stopReason}`),
+  toolStart:     (e) => process.stdout.write(`[tool ${e.toolCallId}] ${e.title ?? e.name}\n`),
+  toolEnd:       (e) => process.stdout.write(`[tool ${e.toolCallId}] ${e.status}\n`),
+  turnCompleted: (e) => process.stdout.write(`done: ${e.stopReason}\n`),
 });
 
 const result = await session.prompt('Refactor utils.ts'); // Promise<PromptResult>

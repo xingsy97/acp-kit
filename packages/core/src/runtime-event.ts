@@ -54,8 +54,8 @@ type DotToCamel<S extends string> =
  * ```ts
  * session.on({
  *   messageDelta:  (e) => process.stdout.write(e.delta),
- *   toolStart:     (e) => console.log(`[${e.toolCallId}] ${e.title ?? e.name}`),
- *   turnCompleted: (e) => console.log(`done: ${e.stopReason}`),
+ *   toolStart:     (e) => process.stdout.write(`[${e.toolCallId}] ${e.title ?? e.name}\n`),
+ *   turnCompleted: (e) => process.stdout.write(`done: ${e.stopReason}\n`),
  * });
  * ```
  */

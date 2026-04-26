@@ -59,7 +59,7 @@ Contributors do not need to publish locally.
 
 ## Reporting Bugs
 
-Please use [GitHub Issues](https://github.com/xingsy97/acp-kit/issues). Include:
+Please use [GitHub Issues](https://github.com/AcpKit/acp-kit/issues). Include:
 
 - ACP Kit version
 - `@agentclientprotocol/sdk` version

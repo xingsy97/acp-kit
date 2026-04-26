@@ -252,6 +252,6 @@ Initial public release.
 - Transcript reducer with pending stream completion flushing for clean turn finalization.
 - Mock + real-agent runnable demo at `examples/runtime-demo.mjs`.
 
-[0.1.2]: https://github.com/xingsy97/acp-kit/releases/tag/v0.1.2
-[0.1.1]: https://github.com/xingsy97/acp-kit/releases/tag/v0.1.1
-[0.1.0]: https://github.com/xingsy97/acp-kit/releases/tag/v0.1.0
+[0.1.2]: https://github.com/AcpKit/acp-kit/releases/tag/v0.1.2
+[0.1.1]: https://github.com/AcpKit/acp-kit/releases/tag/v0.1.1
+[0.1.0]: https://github.com/AcpKit/acp-kit/releases/tag/v0.1.0

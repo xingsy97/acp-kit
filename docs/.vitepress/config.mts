@@ -13,7 +13,7 @@ export default defineConfig({
     logo: '/logo.svg',
     nav: [
       { text: 'Doc', link: '/getting-started' },
-      { text: 'GitHub', link: 'https://github.com/xingsy97/acp-kit' }
+      { text: 'GitHub', link: 'https://github.com/AcpKit/acp-kit' }
     ],
     sidebar: [
       {
@@ -35,7 +35,7 @@ export default defineConfig({
         ]
       }
     ],
-    socialLinks: [{ icon: 'github', link: 'https://github.com/xingsy97/acp-kit' }],
+    socialLinks: [{ icon: 'github', link: 'https://github.com/AcpKit/acp-kit' }],
     search: {
       provider: 'local'
     },
@@ -77,6 +77,6 @@ export default defineConfig({
     ]
   ],
   sitemap: {
-    hostname: 'https://xingsy97.github.io/acp-kit/'
+    hostname: 'https://acpkit.github.io/acp-kit/'
   }
 });

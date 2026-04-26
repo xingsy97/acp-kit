@@ -133,7 +133,7 @@ npm install
 npm start
 ```
 
-For the full list, see [examples/README.md](https://github.com/xingsy97/acp-kit/blob/main/examples/README.md).
+For the full list, see [examples/README.md](https://github.com/AcpKit/acp-kit/blob/main/examples/README.md).
 # Getting Started
 
 ACP Kit is a Node.js runtime for products that need to talk to ACP agents through a stable, high-level API.
@@ -212,4 +212,4 @@ npm install
 npm start
 ```
 
-For the full matrix, see [examples/README.md](https://github.com/xingsy97/acp-kit/blob/main/examples/README.md).
+For the full matrix, see [examples/README.md](https://github.com/AcpKit/acp-kit/blob/main/examples/README.md).

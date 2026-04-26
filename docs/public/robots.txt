@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://xingsy97.github.io/acp-kit/sitemap.xml
+Sitemap: https://acpkit.github.io/acp-kit/sitemap.xml

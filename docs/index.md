@@ -39,8 +39,8 @@ hero:
 
 ## Examples
 
-- [quick-start](https://github.com/xingsy97/acp-kit/tree/main/examples/quick-start)
-- [pair-programming](https://github.com/xingsy97/acp-kit/tree/main/examples/pair-programming)
-- [mock-runtime](https://github.com/xingsy97/acp-kit/tree/main/examples/mock-runtime)
-- [real-agent-cli](https://github.com/xingsy97/acp-kit/tree/main/examples/real-agent-cli)
-- [web-daemon](https://github.com/xingsy97/acp-kit/tree/main/examples/web-daemon)
+- [quick-start](https://github.com/AcpKit/acp-kit/tree/main/examples/quick-start)
+- [pair-programming](https://github.com/AcpKit/acp-kit/tree/main/examples/pair-programming)
+- [mock-runtime](https://github.com/AcpKit/acp-kit/tree/main/examples/mock-runtime)
+- [real-agent-cli](https://github.com/AcpKit/acp-kit/tree/main/examples/real-agent-cli)
+- [web-daemon](https://github.com/AcpKit/acp-kit/tree/main/examples/web-daemon)

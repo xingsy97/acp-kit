@@ -15,7 +15,7 @@ Please **do not** open a public GitHub issue for security-sensitive reports.
 
 Instead, use GitHub's private vulnerability reporting:
 
-1. Go to the [Security tab](https://github.com/xingsy97/acp-kit/security) of this repository.
+1. Go to the [Security tab](https://github.com/AcpKit/acp-kit/security) of this repository.
 2. Click "Report a vulnerability".
 3. Provide a description, reproduction steps, and impact assessment.
 

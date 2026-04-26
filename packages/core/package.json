@@ -41,12 +41,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xingsy97/acp-kit.git",
+    "url": "git+https://github.com/AcpKit/acp-kit.git",
     "directory": "packages/core"
   },
-  "homepage": "https://github.com/xingsy97/acp-kit#readme",
+  "homepage": "https://github.com/AcpKit/acp-kit#readme",
   "bugs": {
-    "url": "https://github.com/xingsy97/acp-kit/issues"
+    "url": "https://github.com/AcpKit/acp-kit/issues"
   },
   "author": "ACP Kit contributors",
   "license": "MIT",

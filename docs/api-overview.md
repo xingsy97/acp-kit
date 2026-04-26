@@ -47,8 +47,8 @@ The host is a plain object. Every method is optional. Whether the runtime advert
 | --- | --- |
 | `chooseAuthMethod(req)` | Always recommended; called when `session/new` returns `auth_required`. Return the `id` of an offered method or `null` to abort. |
 | `requestPermission(req)` | Required if the agent uses tools that need user approval. Return `'allow_once' \| 'allow_always' \| 'deny_once' \| 'deny_always'`. |
-| `readTextFile(req)` / `writeTextFile(req)` | Provide both to advertise file system capability. Use [`createLocalFileSystemHost({ root })`](https://github.com/xingsy97/acp-kit/blob/main/packages/core/src/hosts/local-fs.ts) for a sandboxed default. |
-| `createTerminal` / `terminalOutput` / `waitForTerminalExit` / `killTerminal` / `releaseTerminal` | All five must be provided together to advertise terminal capability. Use [`createLocalTerminalHost`](https://github.com/xingsy97/acp-kit/blob/main/packages/core/src/hosts/local-terminal.ts) as a starting point. |
+| `readTextFile(req)` / `writeTextFile(req)` | Provide both to advertise file system capability. Use [`createLocalFileSystemHost({ root })`](https://github.com/AcpKit/acp-kit/blob/main/packages/core/src/hosts/local-fs.ts) for a sandboxed default. |
+| `createTerminal` / `terminalOutput` / `waitForTerminalExit` / `killTerminal` / `releaseTerminal` | All five must be provided together to advertise terminal capability. Use [`createLocalTerminalHost`](https://github.com/AcpKit/acp-kit/blob/main/packages/core/src/hosts/local-terminal.ts) as a starting point. |
 | `promptCapabilities` | Object with `image` / `audio` / `embeddedContext` booleans (default `false`). Tells the agent what content kinds your UI can render. |
 | `log(entry)` | Diagnostic hook. Receives connection / spawn / session lifecycle events as structured records. |
 | `wireMiddleware` | Single function or array. Each middleware sees every JSON-RPC frame in either direction with `next` continuation; can observe, mutate, or drop frames. |

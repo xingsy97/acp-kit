@@ -40,7 +40,7 @@ hero:
 ## Examples
 
 - [quick-start](https://github.com/AcpKit/acp-kit/tree/main/examples/quick-start)
-- [pair-programming](https://github.com/AcpKit/acp-kit/tree/main/examples/pair-programming)
+- [author-reviewer-loop](https://github.com/AcpKit/acp-kit/tree/main/packages/author-reviewer-loop)
 - [mock-runtime](https://github.com/AcpKit/acp-kit/tree/main/examples/mock-runtime)
 - [real-agent-cli](https://github.com/AcpKit/acp-kit/tree/main/examples/real-agent-cli)
 - [web-daemon](https://github.com/AcpKit/acp-kit/tree/main/examples/web-daemon)

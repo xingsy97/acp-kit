@@ -20,7 +20,7 @@ npm start -- copilot "Summarize this"    # custom agent + prompt
 
 ## When to graduate to `createAcpRuntime`
 
-Use [`../pair-programming/`](../pair-programming/) once you need:
+Use [`@acp-kit/author-reviewer-loop`](../../packages/author-reviewer-loop/) once you need:
 
 - More than one prompt per agent process,
 - Multiple sessions with different working directories,

@@ -1,0 +1,49 @@
+{
+  "name": "@acp-kit/author-reviewer-loop",
+  "version": "0.6.0",
+  "description": "Split-context ACP Kit demo: one AUTHOR agent writes files, one REVIEWER agent inspects them in a separate context, and the loop continues until APPROVED.",
+  "type": "module",
+  "bin": {
+    "acp-author-reviewer-loop": "./bin/acp-author-reviewer-loop.mjs",
+    "author-reviewer-loop": "./bin/acp-author-reviewer-loop.mjs"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "keywords": [
+    "acp",
+    "acp-kit",
+    "agent-client-protocol",
+    "author-reviewer-loop",
+    "split-context",
+    "context-isolation",
+    "multi-agent",
+    "multi-agent-review",
+    "coding-agent",
+    "agent-runtime",
+    "copilot",
+    "codex"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AcpKit/acp-kit.git",
+    "directory": "packages/author-reviewer-loop"
+  },
+  "homepage": "https://github.com/AcpKit/acp-kit/tree/main/packages/author-reviewer-loop#readme",
+  "bugs": {
+    "url": "https://github.com/AcpKit/acp-kit/issues"
+  },
+  "author": "ACP Kit contributors",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=20.11"
+  },
+  "dependencies": {
+    "@acp-kit/core": "^0.6.0"
+  }
+}

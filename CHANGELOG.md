@@ -8,6 +8,17 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-04-27
+
+### Added
+
+- `detectInstalledAgents(...)` and `isCommandOnPath(...)` in `@acp-kit/core` for fast, side-effect-free agent availability checks.
+- `@acp-kit/author-reviewer-loop` now checks configured AUTHOR and REVIEWER agents before prompting or launching the loop, while preserving runtime fallback command behavior.
+
+### Changed
+
+- Author/reviewer loop success output is more visually distinct in both plain and TUI renderers.
+
 ## [0.6.3] - 2026-04-27
 
 ### Added

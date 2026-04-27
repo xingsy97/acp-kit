@@ -661,7 +661,7 @@ export async function runTui({ config }) {
             wrap: 'truncate-end',
           },
           state.result.approved
-            ? `Approved. Files under ${state.result.cwd}.`
+            ? `\u2705  APPROVED  \u2705  Files under ${state.result.cwd}.`
             : `Not approved after ${state.result.rounds}/${state.result.maxRounds} rounds.`,
         ),
         h(

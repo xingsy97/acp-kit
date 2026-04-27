@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { delimiter, isAbsolute, join } from 'node:path';
 import { PassThrough, Readable, Writable } from 'node:stream';
 
 import {
@@ -17,6 +16,7 @@ import type {
   AcpTransportSession,
 } from '../runtime.js';
 import { composeWireMiddleware, normalizeWireMiddleware } from '../wire-middleware.js';
+import { isCommandOnPath } from '../command-exists.js';
 
 /* ------------------------------------------------------------------------- */
 /* Public process types                                                      */
@@ -106,7 +106,7 @@ export function nodeChildProcessTransport(
         host,
       }) as AcpTransportConnection;
 
-      // NB: do NOT spread `baseConnection` &mdash; it is a class instance
+      // NB: do NOT spread `baseConnection` — it is a class instance
       // (`ClientSideConnection`) whose methods live on the prototype, so a
       // spread silently strips `initialize` / `prompt` / etc. Wrap `dispose`
       // by assigning onto the instance instead.
@@ -159,28 +159,6 @@ function resolveAgentLaunch(agent: AgentProfile, host: RuntimeHost): { command: 
     }
   }
   return agent;
-}
-
-function isCommandOnPath(command: string): boolean {
-  if (!command) return false;
-  if (command.includes('/') || command.includes('\\') || isAbsolute(command)) {
-    return existsSync(command);
-  }
-
-  const pathEnv = process.env.PATH || '';
-  const paths = pathEnv.split(delimiter).filter(Boolean);
-  const extensions = process.platform === 'win32'
-    ? (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
-    : [''];
-
-  for (const base of paths) {
-    const direct = join(base, command);
-    if (existsSync(direct)) return true;
-    for (const ext of extensions) {
-      if (existsSync(direct + ext.toLowerCase()) || existsSync(direct + ext.toUpperCase())) return true;
-    }
-  }
-  return false;
 }
 
 /* ------------------------------------------------------------------------- */

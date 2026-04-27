@@ -234,7 +234,7 @@ export function createPlainRenderer() {
             flushToolBurst();
             const { approved, feedback, maxRounds, cwd } = event.result;
             console.log('\n' + '='.repeat(64));
-            if (approved) console.log(`Approved. Files under ${cwd}.`);
+            if (approved) console.log(`\n\u2705  APPROVED  \u2705  Files under ${cwd}.\n`);
             else console.log(`Not approved after ${maxRounds} rounds.\nLast feedback:\n${feedback}`);
             return;
           }

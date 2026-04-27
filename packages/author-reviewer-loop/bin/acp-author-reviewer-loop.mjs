@@ -6,8 +6,25 @@ import { confirmRun } from '../lib/cli/confirm.mjs';
 import { createLoopEngine } from '../lib/engine.mjs';
 import { createPlainRenderer } from '../lib/renderers/plain.mjs';
 import { reportError } from '../lib/cli/error.mjs';
+import { detectInstalledAgents } from '@acp-kit/core';
 
 const config = parseRunConfig();
+
+// Pre-flight: ensure the configured agents are actually launchable.
+const agentsToCheck = [config.authorSettings.agent, config.reviewerSettings.agent];
+const unique = [...new Map(agentsToCheck.map((a) => [a.id, a])).values()];
+const missing = detectInstalledAgents(unique).filter((r) => !r.installed);
+if (missing.length > 0) {
+  for (const { agent } of missing) {
+    console.error(
+      `Error: agent "${agent.displayName}" is not available — neither "${agent.command}" nor any fallback command was found on PATH.`,
+    );
+  }
+  console.error(
+    '\nInstall the missing agent(s) or choose a different agent via AUTHOR_AGENT / REVIEWER_AGENT env vars.',
+  );
+  process.exit(1);
+}
 
 try {
   if (config.tui) {

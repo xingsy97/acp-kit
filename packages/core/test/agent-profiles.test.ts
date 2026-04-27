@@ -7,6 +7,7 @@ import {
   GitHubCopilot,
   OpenCode,
   QwenCode,
+  detectInstalledAgents,
   type AgentProfile,
 } from '../src/index.js';
 
@@ -91,5 +92,29 @@ describe('built-in agent profiles', () => {
     expect(ClaudeCode.startupTimeoutMs).toBe(original.startupTimeoutMs);
     expect(ClaudeCode.env).toBeUndefined();
     expect(custom.startupTimeoutMs).toBe(5000);
+  });
+
+  it('detectInstalledAgents matches fallback launch availability', () => {
+    const detected = detectInstalledAgents([
+      {
+        id: 'fallback-available',
+        displayName: 'Fallback Available',
+        command: 'acp-kit-definitely-missing-command',
+        args: [],
+        fallbackCommands: [{ command: process.execPath, args: [] }],
+      },
+      {
+        id: 'missing',
+        displayName: 'Missing',
+        command: 'acp-kit-definitely-missing-command',
+        args: [],
+        fallbackCommands: [{ command: 'acp-kit-definitely-missing-fallback', args: [] }],
+      },
+    ]);
+
+    expect(detected.map((result) => [result.agent.id, result.installed])).toEqual([
+      ['fallback-available', true],
+      ['missing', false],
+    ]);
   });
 });

@@ -21,7 +21,9 @@ export async function runTurn({ round, role, state, prompt, renderer }) {
             role,
             toolCallId: event.toolCallId,
             tag: tool?.tag ?? '#?',
+            name: event.name,
             title: event.title || event.name,
+            input: event.input,
           });
           return;
         }
@@ -32,8 +34,10 @@ export async function runTurn({ round, role, state, prompt, renderer }) {
             role,
             toolCallId: event.toolCallId,
             tag: tool?.tag ?? '#?',
+            title: event.title ?? tool?.title,
             status: event.status,
             chars: Math.max(tool?.inputChars ?? 0, tool?.outputChars ?? 0),
+            output: event.output,
           });
           return;
         }

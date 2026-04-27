@@ -7,7 +7,7 @@ labels: agent-compatibility
 **Agent**
 
 - Built-in profile (or `custom`): <!-- e.g. ClaudeCode / GitHubCopilot / CodexCli / GeminiCli / QwenCode / OpenCode / custom -->
-- Agent CLI command: <!-- e.g. `npx @zed-industries/claude-code-acp@latest` -->
+- Agent CLI command: <!-- e.g. `claude-code-acp` -->
 - Agent CLI version: <!-- e.g. claude-code-acp 0.4.2 -->
 
 **Environment**

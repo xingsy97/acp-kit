@@ -7,6 +7,19 @@ ACP Kit is a Node.js runtime for products that need to talk to ACP agents throug
 - Node.js >= 20.11 (uses `await using` / `Symbol.asyncDispose`)
 - A reachable ACP-capable agent CLI for real sessions (see [Supported Agents](./agents) for per-agent details)
 
+## Supported ACP agents
+
+ACP Kit can drive any agent that speaks the Agent Client Protocol over stdio. Six agents ship as named constants you import and pass as `agent: <Constant>`; any other ACP-capable agent works via a custom `AgentProfile` literal.
+
+| Agent | Constant |
+| --- | --- |
+| GitHub Copilot | `GitHubCopilot` |
+| Claude Code | `ClaudeCode` |
+| Codex CLI | `CodexCli` |
+| Gemini CLI | `GeminiCli` |
+| Qwen Code | `QwenCode` |
+| OpenCode | `OpenCode` |
+
 ## Installation
 
 ```bash
@@ -103,11 +116,11 @@ Most first-time failures fall into three buckets. Each one surfaces with a clear
 ### Agent CLI not on `PATH`
 
 ```text
-Failed to spawn agent "claude-code" (npx @zed-industries/claude-code-acp@latest):
-  spawn npx ENOENT
+Failed to spawn agent "claude-code" (claude-code-acp):
+  spawn claude-code-acp ENOENT
 ```
 
-The runtime tried to spawn the command in the agent profile and got `ENOENT`. Either install the agent's npm package globally (or rely on `npx` resolving from a registry, which means a working `node` + network), or override `command` / `args` to point at a binary that exists on `PATH`.
+The runtime tried to spawn the command in the agent profile and got `ENOENT`. Install the agent's npm package globally, or override `command` / `args` to point at a binary that exists on `PATH`.
 
 ### `auth_required` and no `chooseAuthMethod`
 
@@ -149,81 +162,3 @@ npm start
 ```
 
 For the full list, see [examples/README.md](https://github.com/AcpKit/acp-kit/blob/main/examples/README.md).
-# Getting Started
-
-ACP Kit is a Node.js runtime for products that need to talk to ACP agents through a stable, high-level API.
-
-## Prerequisites
-
-- Node.js >= 20.11 (uses `await using` / `Symbol.asyncDispose`)
-- A reachable ACP-capable agent CLI for real sessions (see [Supported ACP agents](#supported-acp-agents) below)
-
-## Supported ACP agents
-
-ACP Kit can drive any agent that speaks the Agent Client Protocol over stdio. Six agents ship as named constants you import and pass as `agent: <Constant>`; any other ACP-capable agent works via a custom `AgentProfile` literal.
-
-| Agent | Constant |
-| --- | --- |
-| GitHub Copilot | `GitHubCopilot` |
-| Claude Code | `ClaudeCode` |
-| Codex CLI | `CodexCli` |
-| Gemini CLI | `GeminiCli` |
-| Qwen Code | `QwenCode` |
-| OpenCode | `OpenCode` |
-
-## Installation
-
-```bash
-npm install @acp-kit/core
-```
-
-## First session
-
-For a one-shot prompt, use `runOneShotPrompt` (yields normalized `RuntimeSessionEvent`s):
-
-```ts
-import { runOneShotPrompt, onRuntimeEvent, ClaudeCode } from '@acp-kit/core';
-
-for await (const event of runOneShotPrompt({
-  agent: ClaudeCode,
-  cwd: process.cwd(),
-  prompt: 'Explain what this repository does.',
-})) {
-  onRuntimeEvent(event, {
-    messageDelta: (e) => process.stdout.write(e.delta),
-  });
-}
-```
-
-For multi-session apps, use `createAcpRuntime` with `await using` and pass a
-handler map directly to `session.on(...)`:
-
-```ts
-import { createAcpRuntime, ClaudeCode } from '@acp-kit/core';
-
-await using acp = createAcpRuntime({
-  agent: ClaudeCode,
-});
-
-await using session = await acp.newSession({ cwd: process.cwd() });
-
-session.on({
-  messageDelta: (e) => process.stdout.write(e.delta),
-  toolStart:    (e) => process.stdout.write(`\n[tool ${e.toolCallId}] ${e.title ?? e.name}\n`),
-  toolEnd:      (e) => process.stdout.write(`[tool ${e.toolCallId}] ${e.status}\n`),
-});
-
-await session.prompt('Explain what this repository does.');
-```
-
-## Run local examples
-
-Each example is a standalone npm package and depends on the published `@acp-kit/core` package:
-
-```bash
-cd examples/mock-runtime
-npm install
-npm start
-```
-
-For the full matrix, see [examples/README.md](https://github.com/AcpKit/acp-kit/blob/main/examples/README.md).

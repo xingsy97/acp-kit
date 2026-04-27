@@ -79,6 +79,21 @@ export async function runTui({ config }) {
     return 'gray';
   }
 
+  function toolStatusColor(status) {
+    if (status === 'failed' || status === 'error') return 'red';
+    if (status === 'completed' || status === 'done' || status === 'success') return 'green';
+    return 'yellow';
+  }
+
+  function toolStatusLabel(status) {
+    return status === 'completed' ? 'done' : status;
+  }
+
+  const paragraphPalette = ['white', 'cyan', 'green', 'yellow', 'magenta', 'blue'];
+  function paragraphColor(index) {
+    return paragraphPalette[index % paragraphPalette.length];
+  }
+
   function line(child, key) {
     return h(Box, { key, height: 1, overflow: 'hidden' }, child);
   }
@@ -89,6 +104,79 @@ export async function runTui({ config }) {
 
   function normalizeDisplayText(text) {
     return text.replace(/([.!?])(?=[A-Z`])/g, '$1 ');
+  }
+
+  function stringifyValue(value) {
+    if (value == null) return '';
+    if (typeof value === 'string') return value;
+    const seen = new WeakSet();
+    return JSON.stringify(value, (key, item) => {
+      if (typeof item === 'bigint') return String(item);
+      if (typeof item === 'object' && item !== null) {
+        if (seen.has(item)) return '[Circular]';
+        seen.add(item);
+      }
+      return item;
+    }) || '';
+  }
+
+  function compactWhitespace(text) {
+    return String(text || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function truncateText(text, max) {
+    const value = compactWhitespace(text);
+    if (value.length <= max) return value;
+    return `${value.slice(0, Math.max(0, max - 1))}\u2026`;
+  }
+
+  function findField(value, names, depth = 0) {
+    if (value == null || depth > 4) return '';
+    if (typeof value === 'string') return '';
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const found = findField(item, names, depth + 1);
+        if (found) return found;
+      }
+      return '';
+    }
+    if (typeof value !== 'object') return '';
+    for (const [key, item] of Object.entries(value)) {
+      if (names.includes(key) && (typeof item === 'string' || typeof item === 'number')) {
+        return String(item);
+      }
+    }
+    for (const item of Object.values(value)) {
+      const found = findField(item, names, depth + 1);
+      if (found) return found;
+    }
+    return '';
+  }
+
+  function summarizeValue(value, max = 90) {
+    if (value == null) return '';
+    const command = findField(value, ['command', 'cmd', 'shellCommand', 'script']);
+    if (command) return truncateText(command, max);
+    const text = stringifyValue(value);
+    return truncateText(text, max);
+  }
+
+  function summarizeTool(item, { compact = false } = {}) {
+    const status = toolStatusLabel(item.status || 'running');
+    const title = item.title || item.name || item.toolCallId || 'tool';
+    const input = summarizeValue(item.input, compact ? 44 : 80);
+    const output = summarizeValue(item.output, compact ? 36 : 70);
+    const parts = [`${item.tag || '#?'} ${status}`, title];
+    if (input) parts.push(`cmd: ${input}`);
+    if (output) parts.push(`out: ${output}`);
+    if (item.chars) parts.push(`${item.chars} chars`);
+    return parts.join(' - ');
+  }
+
+  function mergedToolStatus(items) {
+    if (items.some((item) => item.status === 'failed' || item.status === 'error')) return 'failed';
+    if (items.some((item) => item.status === 'running')) return 'running';
+    return items[items.length - 1]?.status || 'completed';
   }
 
   // Soft-wrap one logical line to display rows. Prefer word boundaries; only
@@ -108,28 +196,15 @@ export async function runTui({ config }) {
     return out;
   }
 
-  // Build the visible window of pane lines given an external scroll offset
-  // (0 = pin to bottom = follow). A positive offset scrolls up by N lines.
-  function visibleLines(pane, height, width, wrap) {
-    const all = pane.lines.map(normalizeDisplayText);
-    if (pane.current) all.push(normalizeDisplayText(pane.current) + '\u258F');
-    const expanded = wrap
-      ? all.flatMap((l) => (l === '' ? [''] : wrapLine(l, width)))
-      : all;
-    if (expanded.length <= height) {
-      while (expanded.length < height) expanded.push('');
-      return expanded;
-    }
-    return expanded;
-  }
-
   // -- view state (separate from engine state) -----------------------------
   const initialView = {
     selected: null,    // round number currently focused
     follow: true,      // auto-jump to latest round
     focus: 'AUTHOR',   // which pane is active for scrolling
+    screen: 'flow',     // flow | trace
     scrollAuthor: 0,   // 0 = bottom; positive = scrolled up by N lines
     scrollReviewer: 0,
+    scrollTrace: 0,
     wrap: true,        // soft wrap pane content
     showHelp: false,
     awaitingConfirm: !config.skipConfirm, // show confirm overlay first
@@ -162,14 +237,20 @@ export async function runTui({ config }) {
         if (!s.follow || a.order.length === 0) return s;
         return { ...s, selected: a.order[a.order.length - 1] };
       case 'scroll': {
-        const key = s.focus === 'AUTHOR' ? 'scrollAuthor' : 'scrollReviewer';
+        const key = s.screen === 'trace'
+          ? 'scrollTrace'
+          : s.focus === 'AUTHOR' ? 'scrollAuthor' : 'scrollReviewer';
         const next = Math.max(0, s[key] + a.delta);
         return { ...s, [key]: next };
       }
       case 'scrollEnd': {
-        const key = s.focus === 'AUTHOR' ? 'scrollAuthor' : 'scrollReviewer';
+        const key = s.screen === 'trace'
+          ? 'scrollTrace'
+          : s.focus === 'AUTHOR' ? 'scrollAuthor' : 'scrollReviewer';
         return { ...s, [key]: 0 };
       }
+      case 'toggleTrace':
+        return { ...s, screen: s.screen === 'trace' ? 'flow' : 'trace', scrollTrace: 0 };
       case 'toggleFocus':
         return { ...s, focus: s.focus === 'AUTHOR' ? 'REVIEWER' : 'AUTHOR' };
       case 'toggleWrap':
@@ -254,6 +335,7 @@ export async function runTui({ config }) {
       else if (input === 'k')   dispatchView({ type: 'scroll', delta: 1 });
       else if (input === 'j')   dispatchView({ type: 'scroll', delta: -1 });
       else if (key.tab || input === '\t') dispatchView({ type: 'toggleFocus' });
+      else if (input === 't')   dispatchView({ type: 'toggleTrace' });
       else if (input === 'w')   dispatchView({ type: 'toggleWrap' });
       else if (input === '?')   dispatchView({ type: 'toggleHelp' });
       else if (input === 'q' && runDone) {
@@ -300,8 +382,19 @@ export async function runTui({ config }) {
 
     // ---- header --------------------------------------------------------
     const taskRows = wrapLine(`task:     ${config.task}`, headerCols).slice(0, 2);
-    const statusLine = `AUTHOR: ${config.authorSettings.agent.displayName} (${config.authorSettings.model || 'default'}) ${state.statuses.AUTHOR}`
-      + ` | REVIEWER: ${config.reviewerSettings.agent.displayName} (${config.reviewerSettings.model || 'default'}) ${state.statuses.REVIEWER}`;
+    const statusLine = h(
+      Text,
+      { wrap: 'truncate-end' },
+      h(Text, { color: 'cyan', bold: true }, 'AUTHOR'),
+      h(Text, { color: 'cyan' }, `: ${config.authorSettings.agent.displayName}`),
+      h(Text, { dimColor: true }, ` (${config.authorSettings.model || 'default'}) `),
+      h(Text, { color: paneStatusColor(roleStatusToPaneStatus(state.statuses.AUTHOR)) }, state.statuses.AUTHOR),
+      h(Text, { dimColor: true }, ' | '),
+      h(Text, { color: 'magenta', bold: true }, 'REVIEWER'),
+      h(Text, { color: 'magenta' }, `: ${config.reviewerSettings.agent.displayName}`),
+      h(Text, { dimColor: true }, ` (${config.reviewerSettings.model || 'default'}) `),
+      h(Text, { color: paneStatusColor(roleStatusToPaneStatus(state.statuses.REVIEWER)) }, state.statuses.REVIEWER),
+    );
     const header = h(
       Box,
       {
@@ -315,14 +408,7 @@ export async function runTui({ config }) {
       line(h(Text, { dimColor: true, wrap: 'truncate-end' }, `cwd:      ${config.cwd}`), 'cwd'),
       ...taskRows.map((row, i) => line(h(Text, { dimColor: true, wrap: 'truncate-end' }, row), `task-${i}`)),
       line(h(Text, { dimColor: true, wrap: 'truncate-end' }, `rounds:   max ${config.maxRounds}`), 'rounds'),
-      line(
-        h(
-          Text,
-          { wrap: 'truncate-end' },
-          statusLine,
-        ),
-        'status',
-      ),
+      line(statusLine, 'status'),
     );
 
     // ---- panes ---------------------------------------------------------
@@ -331,12 +417,96 @@ export async function runTui({ config }) {
     const total = state.order.length;
     const idx = selectedRound == null ? -1 : state.order.indexOf(selectedRound);
 
+    function roleStatusToPaneStatus(status) {
+      if (status === 'ready') return PaneStatus.Completed;
+      if (String(status).startsWith('launching') || String(status).startsWith('session ready')) {
+        return PaneStatus.Running;
+      }
+      return PaneStatus.Pending;
+    }
+
+    function visibleFlowRows(pane, width) {
+      if (!pane) return [];
+      const rows = [];
+      let paragraph = 0;
+      let paragraphHasText = false;
+      const flow = pane.flow?.length
+        ? pane.flow
+        : [{ id: 'snapshot-text', kind: 'text', text: [...pane.lines, pane.current].join('\n') }];
+      for (let index = 0; index < flow.length; index += 1) {
+        const item = flow[index];
+        if (item.kind === 'tool') {
+          const run = [item];
+          while (flow[index + 1]?.kind === 'tool') {
+            run.push(flow[index + 1]);
+            index += 1;
+          }
+          if (run.length > 3) {
+            const status = mergedToolStatus(run);
+            const failed = run.filter((tool) => tool.status === 'failed' || tool.status === 'error').length;
+            const summary = `${run.length} continuous tool calls${failed ? ` (${failed} failed)` : ''}`;
+            rows.push({ kind: 'tool', status, text: summary });
+            run.slice(0, 3).forEach((tool) => {
+              const text = `  ${summarizeTool(tool, { compact: true })}`;
+              const parts = view.wrap ? wrapLine(text, width) : [text];
+              parts.forEach((part) => rows.push({ kind: 'tool', status: tool.status || status, text: part }));
+            });
+            if (run.length > 3) {
+              rows.push({ kind: 'tool', status, text: `  ... ${run.length - 3} more; press t for raw ACP details` });
+            }
+          } else {
+            for (const tool of run) {
+              const status = tool.status || 'running';
+              const text = summarizeTool(tool);
+              const parts = view.wrap ? wrapLine(text, width) : [text];
+              parts.forEach((part) => rows.push({ kind: 'tool', status, text: part }));
+            }
+          }
+          continue;
+        }
+        const normalized = normalizeDisplayText(item.text || '');
+        const logical = normalized.split('\n');
+        logical.forEach((part, i) => {
+          const isCursorLine = pane.status === PaneStatus.Running
+            && i === logical.length - 1
+            && item === flow[flow.length - 1];
+          const value = isCursorLine ? `${part}\u258F` : part;
+          const parts = view.wrap ? (value === '' ? [''] : wrapLine(value, width)) : [value];
+          parts.forEach((text) => rows.push({ kind: 'text', text, paragraph }));
+
+          if (part.trim() === '' && i < logical.length - 1) {
+            if (paragraphHasText) {
+              paragraph += 1;
+              paragraphHasText = false;
+            }
+          } else if (part.trim() !== '') {
+            paragraphHasText = true;
+          }
+        });
+      }
+      return rows;
+    }
+
+    function formatTraceRows(item) {
+      const { role, entry } = item;
+      if (entry.kind !== 'wire') return [];
+      const prefix = `${new Date(entry.at).toLocaleTimeString()} ${role} ${entry.direction}`;
+      const method = entry.method ? ` ${entry.method}` : '';
+      const id = entry.id !== undefined ? ` #${entry.id}` : '';
+      const header = `${prefix}${method}${id}`;
+      const body = stringifyValue(entry.frame);
+      if (!body) return [header];
+      try {
+        const pretty = JSON.stringify(JSON.parse(body), null, 2);
+        return [header, ...pretty.split('\n').map((line) => `  ${line}`)];
+      } catch {
+        return [header, `  ${body}`];
+      }
+    }
+
     function Pane({ role, color, pane, active }) {
       const status = pane?.status ?? PaneStatus.Pending;
-      const tools = pane?.tools ?? [];
-      // Reserve up to 4 lines at the bottom for tools/footers, the rest is text
-      const chrome = (tools.length > 0 ? Math.min(4, 1 + tools.length) : 0)
-        + (pane?.stopReason ? 1 : 0)
+      const chrome = (pane?.stopReason ? 1 : 0)
         + (pane?.error ? 1 : 0);
       // Never let textBudget exceed what the pane actually has room for; if
       // the terminal is so small there's no room left after chrome, drop
@@ -347,11 +517,11 @@ export async function runTui({ config }) {
       let visible;
       if (textBudget === 0) {
         visible = [];
-      } else if (!pane || (pane.lines.length === 0 && !pane.current)) {
-        visible = ['(no output yet)'];
-        while (visible.length < textBudget) visible.push('');
+      } else if (!pane || ((pane.flow?.length ?? 0) === 0 && pane.lines.length === 0 && !pane.current)) {
+        visible = [{ kind: 'text', text: '(no output yet)' }];
+        while (visible.length < textBudget) visible.push({ kind: 'text', text: '' });
       } else {
-        const expanded = visibleLines(pane, textBudget, paneCols, view.wrap);
+        const expanded = visibleFlowRows(pane, paneCols);
         // Scroll: 0 means pin to bottom (last `textBudget` lines visible).
         const end = Math.max(textBudget, expanded.length - scroll);
         const start = Math.max(0, end - textBudget);
@@ -382,28 +552,19 @@ export async function runTui({ config }) {
           ),
           `${role}-header`,
         ),
-        ...visible.map((line, i) =>
-          rowText(line === '' ? ' ' : line, `l${i}`),
-        ),
-        tools.length > 0
-          ? h(
-              Box,
-              { flexDirection: 'column', overflow: 'hidden' },
-              line(h(Text, { dimColor: true, wrap: 'truncate-end' }, 'Tools'), `${role}-tools-title`),
-              ...tools.slice(-3).map((t) =>
-                line(
-                  h(
-                    Text,
-                    { wrap: 'truncate-end' },
-                    `${t.tag} `,
-                    h(Text, { color: paneStatusColor(t.status) }, t.status),
-                    ` ${t.title} (${t.chars} chars)`,
-                  ),
-                  t.id,
-                ),
-              ),
-            )
-          : null,
+        ...visible.map((row, i) => {
+          const text = row.text === '' ? ' ' : row.text;
+          if (row.kind === 'tool') {
+            return line(
+              h(Text, { color: toolStatusColor(row.status), wrap: 'truncate-end' }, text),
+              `l${i}`,
+            );
+          }
+          return line(
+            h(Text, { color: paragraphColor(row.paragraph ?? 0), wrap: 'truncate-end' }, text),
+            `l${i}`,
+          );
+        }),
         pane?.stopReason
           ? line(h(Text, { dimColor: true, wrap: 'truncate-end' }, `done: ${pane.stopReason}`), `${role}-done`)
           : null,
@@ -421,6 +582,34 @@ export async function runTui({ config }) {
       h(Pane, { role: 'REVIEWER', color: 'magenta', pane: round?.REVIEWER, active: true }),
     );
 
+    function TraceView() {
+      const traceRows = state.trace
+        .flatMap(formatTraceRows)
+        .flatMap((row) => view.wrap ? wrapLine(row, Math.max(1, size.cols - 4)) : [row]);
+      const bodyBudget = Math.max(0, paneOuter - Math.min(3, paneOuter));
+      const end = Math.max(bodyBudget, traceRows.length - view.scrollTrace);
+      const start = Math.max(0, end - bodyBudget);
+      const visible = traceRows.length === 0
+        ? ['No ACP wire messages captured yet.']
+        : traceRows.slice(start, end);
+      while (visible.length < bodyBudget) visible.push('');
+      return h(
+        Box,
+        {
+          flexDirection: 'column',
+          borderStyle: 'round',
+          borderColor: 'yellow',
+          paddingX: 1,
+          height: paneOuter,
+          overflow: 'hidden',
+        },
+        line(h(Text, { bold: true, color: 'yellow' }, 'ACP Trace - raw redacted wire messages'), 'trace-header'),
+        ...visible.map((row, i) => rowText(row === '' ? ' ' : row, `trace-${i}`)),
+      );
+    }
+
+    const mainView = view.screen === 'trace' ? h(TraceView) : split;
+
     // ---- nav -----------------------------------------------------------
     const navText = total === 0
       ? 'Waiting for first round...'
@@ -428,6 +617,7 @@ export async function runTui({ config }) {
     const focusHint = `focus:${view.focus.toLowerCase()}`;
     const wrapHint = view.wrap ? 'wrap:on' : 'wrap:off';
     const followHint = view.follow ? 'follow:on' : 'follow:off';
+    const screenHint = view.screen === 'trace' ? 'trace:on' : 'trace:off';
     const nav = h(
       Box,
       {
@@ -439,11 +629,13 @@ export async function runTui({ config }) {
       h(
         Text,
         { dimColor: true, wrap: 'truncate-end' },
-        `${navText}   \u2190/\u2192 round  \u2191/\u2193 scroll  Tab focus  w wrap  g latest  ? help  q quit`,
+        `${navText}   \u2190/\u2192 round  \u2191/\u2193 scroll  Tab focus  t trace  w wrap  g latest  ? help  q quit`,
         '   ',
         h(Text, { color: view.follow ? 'green' : 'yellow' }, followHint),
         ' ',
         h(Text, { color: 'cyan' }, focusHint),
+        ' ',
+        h(Text, { color: view.screen === 'trace' ? 'yellow' : 'gray' }, screenHint),
         ' ',
         h(Text, { color: view.wrap ? 'green' : 'gray' }, wrapHint),
       ),
@@ -615,6 +807,7 @@ export async function runTui({ config }) {
           h(Text, null, '  Tab        Switch focused pane (AUTHOR \u2194 REVIEWER)'),
           h(Text, null, '  g          Jump to latest round, re-enable follow'),
           h(Text, null, '  G          Reset scroll to bottom in focused pane'),
+          h(Text, null, '  t          Toggle ACP trace view'),
           h(Text, null, '  w          Toggle soft wrap'),
           h(Text, null, '  ?          Toggle this help'),
           h(Text, null, '  q          Quit (only after the run completes)'),
@@ -633,7 +826,7 @@ export async function runTui({ config }) {
         overflow: 'hidden',
       },
       header,
-      split,
+      mainView,
       nav,
       footer,
     );

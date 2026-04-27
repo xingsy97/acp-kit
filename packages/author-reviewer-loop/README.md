@@ -21,6 +21,8 @@ npx @acp-kit/author-reviewer-loop .\demo-workspace "Create a Node.js CLI that co
 
 Use an empty or disposable directory. The AUTHOR agent is allowed to create and modify files under the target workspace.
 
+After the initial confirmation, the demo approves agent file-system and terminal requests for the selected workspace so the loop can run unattended. Use a disposable workspace and only run agents you trust.
+
 Before launching agents, the CLI prints the full run configuration and asks for confirmation. Pass `--yes` or set `ACP_REVIEW_YES=1` to skip the prompt in scripts.
 
 ## Requirements
@@ -69,6 +71,8 @@ Pass `--tui` (or set `ACP_REVIEW_TUI=1`) to render the loop in an Ink-based full
 - A split view shows AUTHOR on the left and REVIEWER on the right; each pane has a fixed height computed from the current terminal size and scrolls internally as new output arrives.
 - The header shows `cwd`, the task, max rounds, and a combined AUTHOR/REVIEWER status row with agent and model names.
 - Pane output soft-wraps by default and is pre-wrapped to whole words before rendering.
+- Tool-call rows include the command/input preview and output preview when available. Bursts of more than three continuous tool-call rows are collapsed into a compact summary so tool-heavy turns do not flood the pane.
+- The raw ACP trace view pretty-prints each wire frame as readable multi-line JSON instead of a single long line.
 - Resizing the terminal re-flows the layout immediately.
 
 Keybindings:
@@ -81,11 +85,12 @@ Keybindings:
 | `Tab` | Switch focus between AUTHOR and REVIEWER |
 | `g` | Jump to the latest round and re-enable follow-mode |
 | `G` | Reset scroll to the bottom of the focused pane |
+| `t` | Toggle the raw ACP trace view |
 | `w` | Toggle soft-wrap for long lines |
 | `?` | Toggle the help overlay |
 | `q` | Quit (only after the run has completed) |
 
-The plain console renderer remains the default.
+The plain console renderer remains the default. It also includes tool command/output previews and collapses continuous tool-event bursts after three lines.
 
 ## Architecture
 

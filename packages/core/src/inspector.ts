@@ -5,6 +5,8 @@ export type RuntimeInspectorEntry =
   | { kind: 'observation'; at: number; observation: RuntimeObservation }
   | { kind: 'wire'; at: number; direction: WireContext['direction']; method?: string; id?: string | number; frame?: unknown; redacted: boolean };
 
+export type RuntimeInspectorEntryListener = (entry: RuntimeInspectorEntry) => void;
+
 export interface RuntimeInspectorOptions {
   includeWire?: boolean;
   redact?: boolean | ((frame: unknown) => unknown);
@@ -16,12 +18,14 @@ export interface RuntimeInspector {
   wireMiddleware?: WireMiddleware;
   entries(): RuntimeInspectorEntry[];
   timeline(): RuntimeInspectorEntry[];
+  onEntry(listener: RuntimeInspectorEntryListener): () => void;
   clear(): void;
   toJSONL(): string;
 }
 
 export function createRuntimeInspector(options: RuntimeInspectorOptions = {}): RuntimeInspector {
   const entries: RuntimeInspectorEntry[] = [];
+  const listeners = new Set<RuntimeInspectorEntryListener>();
   const maxEntries = options.maxEntries ?? 10_000;
   const redact = options.redact ?? true;
 
@@ -29,6 +33,10 @@ export function createRuntimeInspector(options: RuntimeInspectorOptions = {}): R
     entries.push(entry);
     if (entries.length > maxEntries) {
       entries.splice(0, entries.length - maxEntries);
+    }
+    const snapshot = cloneForStorage(entry) as RuntimeInspectorEntry;
+    for (const listener of listeners) {
+      listener(snapshot);
     }
   };
 
@@ -41,6 +49,12 @@ export function createRuntimeInspector(options: RuntimeInspectorOptions = {}): R
     },
     timeline() {
       return this.entries();
+    },
+    onEntry(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
     },
     clear() {
       entries.length = 0;

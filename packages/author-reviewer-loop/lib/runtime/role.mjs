@@ -1,19 +1,31 @@
+import { isAbsolute, relative, resolve } from 'node:path';
 import {
   PermissionDecision,
   createAcpRuntime,
   createRuntimeInspector,
 } from '@acp-kit/core';
+import { createLocalFileSystemHost, createLocalTerminalHost } from '@acp-kit/core/node';
 import { formatEnvAssignment } from '../config/shell.mjs';
 
-export async function openRole({ role, settings, cwd, trace, renderer }) {
-  const inspector = createRuntimeInspector({ includeWire: trace });
-  renderer.onRoleStatus?.({ role, message: `launching ${settings.agent.displayName}...` });
+export async function openRole({ role, settings, cwd, trace, captureTrace, renderer }) {
+  const inspector = createRuntimeInspector({ includeWire: Boolean(trace || captureTrace) });
+  const unsubscribeTrace = renderer.onTraceEntry
+    ? inspector.onEntry((entry) => renderer.onTraceEntry({ role, entry }))
+    : () => {};
+  const fsHost = createLocalFileSystemHost({ root: cwd });
+  const terminalHost = createLocalTerminalHost({
+    resolveCwd: (requestedCwd) => resolveTerminalCwd(cwd, requestedCwd),
+  });
+  renderer.onRoleStatus?.({ role, message: 'launching...' });
 
   const runtime = createAcpRuntime({
     agent: settings.agent,
     inspector,
     host: {
-      requestPermission: async () => PermissionDecision.AllowOnce,
+      ...fsHost,
+      ...terminalHost,
+      // This demo is intentionally unattended after the initial CLI confirmation.
+      requestPermission: async () => PermissionDecision.AllowAlways,
       chooseAuthMethod: async ({ methods }) => methods[0]?.id ?? null,
     },
   });
@@ -32,17 +44,37 @@ export async function openRole({ role, settings, cwd, trace, renderer }) {
       inspector,
       session,
       close: async () => {
+        unsubscribeTrace();
+        for (const child of terminalHost.terminals.values()) {
+          if (!child.killed) child.kill('SIGKILL');
+        }
         await session.dispose();
         await runtime.shutdown();
       },
     };
   } catch (error) {
+    unsubscribeTrace();
     await runtime.shutdown().catch(() => undefined);
     if (trace) {
       console.error(inspector.toJSONL());
     }
     throw error;
   }
+}
+
+function resolveTerminalCwd(root, requestedCwd) {
+  const resolvedRoot = resolve(root);
+  const resolvedCwd = !requestedCwd
+    ? resolvedRoot
+    : isAbsolute(requestedCwd)
+      ? resolve(requestedCwd)
+      : resolve(resolvedRoot, requestedCwd);
+
+  const rel = relative(resolvedRoot, resolvedCwd);
+  if (rel && (rel === '..' || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`))) {
+    throw new Error(`Terminal cwd escapes workspace root: ${requestedCwd}`);
+  }
+  return resolvedCwd;
 }
 
 async function setRequiredModel({ role, session, settings }) {

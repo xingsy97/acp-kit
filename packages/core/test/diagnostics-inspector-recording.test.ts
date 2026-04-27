@@ -65,6 +65,10 @@ describe('diagnostics, inspector, and recording', () => {
 
   it('collects runtime observations with createRuntimeInspector', async () => {
     const inspector = createRuntimeInspector();
+    const liveEntries: string[] = [];
+    const unsubscribe = inspector.onEntry((entry) => {
+      if (entry.kind === 'observation') liveEntries.push(entry.observation.type);
+    });
     const runtime = createAcpRuntime({
       agent,
       cwd: 'C:/repo',
@@ -83,7 +87,13 @@ describe('diagnostics, inspector, and recording', () => {
     expect(observations).toContain('runtime.connect.completed');
     expect(observations).toContain('session.created');
     expect(observations).toContain('session.disposed');
+    expect(liveEntries).toContain('session.created');
     expect(inspector.toJSONL()).toContain('runtime.connect.completed');
+
+    unsubscribe();
+    const before = liveEntries.length;
+    inspector.observe({ type: 'runtime.connect.started', at: Date.now(), runtimeId: 'runtime-test', agentId: agent.id });
+    expect(liveEntries).toHaveLength(before);
   });
 
   it('records sessions in memory and replays normalized events', async () => {

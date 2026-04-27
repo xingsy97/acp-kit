@@ -8,6 +8,21 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-04-27
+
+### Added
+
+- Built-in agent profiles now launch local agent binaries first and fall back to their `npx ...@latest` commands when the binary is not on `PATH`.
+- `@acp-kit/author-reviewer-loop` now gives hosted demo agents local file-system and terminal capabilities rooted at the selected workspace, with trace capture available in both plain and TUI renderers.
+
+### Fixed
+
+- Node child-process transport now handles spawn errors such as `ENOENT` without crashing the host process and records the failure in startup diagnostics.
+
+### Changed
+
+- Agent docs and compatibility issue templates now document the fast local command names while noting the automatic `npx` fallback behavior.
+
 ## [0.6.2] - 2026-04-27
 
 ### Added

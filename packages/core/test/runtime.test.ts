@@ -240,6 +240,67 @@ describe('AcpRuntime', () => {
     });
   });
 
+  it('maps permission decisions by ACP option kind when option ids are agent-defined', async () => {
+    let capturedClient: {
+      requestPermission(request: unknown): Promise<{ outcome: { optionId: string } }>;
+    } | null = null;
+
+    const connectionFactory: AcpConnectionFactory = {
+      create({ client }) {
+        capturedClient = client as typeof capturedClient;
+        return {
+          initialize: async () => ({ authMethods: [] }),
+          newSession: async () => ({ sessionId: 'session-kind-options' }),
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+        } as never;
+      },
+    };
+
+    const options = [
+      { optionId: 'codex-allow-once', name: 'Allow once', kind: 'allow_once' },
+      { optionId: 'codex-allow-always', name: 'Allow always', kind: 'allow_always' },
+      { optionId: 'codex-reject-once', name: 'Reject', kind: 'reject_once' },
+    ];
+
+    const allowRuntime = createAcpRuntime({
+      agent: { id: 'test', displayName: 'Test Agent', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {
+        requestPermission: async () => PermissionDecision.AllowAlways,
+      },
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+
+    await allowRuntime.newSession();
+    const allowResponse = await capturedClient?.requestPermission({
+      toolCall: { id: 'tool-kind-allow', toolName: 'write_file', input: { path: 'README.md' } },
+      options,
+    });
+    await allowRuntime.shutdown();
+
+    const denyRuntime = createAcpRuntime({
+      agent: { id: 'test', displayName: 'Test Agent', command: 'test-agent', args: [] },
+      cwd: 'C:/repo',
+      host: {
+        requestPermission: async () => PermissionDecision.Deny,
+      },
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+
+    await denyRuntime.newSession();
+    const denyResponse = await capturedClient?.requestPermission({
+      toolCall: { id: 'tool-kind-deny', toolName: 'write_file', input: { path: 'README.md' } },
+      options,
+    });
+    await denyRuntime.shutdown();
+
+    expect(allowResponse?.outcome.optionId).toBe('codex-allow-always');
+    expect(denyResponse?.outcome.optionId).toBe('codex-reject-once');
+  });
+
   it('records observations and durable session events', async () => {
     let capturedClient: { sessionUpdate(notification: unknown): Promise<void> } | null = null;
     const observations: string[] = [];
@@ -416,6 +477,47 @@ describe('AcpRuntime', () => {
     expect(runtime.protocolVersion).toBe(1);
     expect(runtime.agentCapabilities?.loadSession).toBe(true);
     expect(runtime.authMethods).toHaveLength(1);
+
+    await runtime.shutdown();
+  });
+
+  it('uses a fallback launch command when the primary command is not on PATH', async () => {
+    const initialize = vi.fn().mockResolvedValue({ authMethods: [] });
+    const newSession = vi.fn().mockResolvedValue({ sessionId: 'fallback-session' });
+    const connectionFactory: AcpConnectionFactory = {
+      create() {
+        return {
+          initialize,
+          newSession,
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+        } as never;
+      },
+    };
+    const spawn = vi.fn(createFakeSpawn());
+    const log = vi.fn();
+    const runtime = createAcpRuntime({
+      agent: {
+        id: 'test',
+        displayName: 'Test',
+        command: 'acp-kit-definitely-missing-command',
+        args: ['--primary'],
+        fallbackCommands: [{ command: process.execPath, args: ['--fallback'] }],
+      },
+      cwd: 'C:/repo',
+      host: { log },
+      spawnProcess: spawn,
+      connectionFactory,
+    });
+
+    const session = await runtime.newSession();
+
+    expect(session.sessionId).toBe('fallback-session');
+    expect(spawn).toHaveBeenCalledWith(process.execPath, ['--fallback'], expect.any(Object));
+    expect(log).toHaveBeenCalledWith(expect.objectContaining({
+      level: 'warn',
+      message: 'ACP agent primary command was not found; using fallback command',
+    }));
 
     await runtime.shutdown();
   });

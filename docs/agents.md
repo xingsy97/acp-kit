@@ -2,6 +2,8 @@
 
 ACP Kit ships six built-in `AgentProfile` constants. Each one is a small object describing how to spawn the corresponding ACP-capable CLI. You can use them directly, spread them to override one field, or write your own `AgentProfile` literal for any other agent that speaks ACP over stdio.
 
+Built-in profiles spawn the CLI binary from `PATH` instead of `npx <package>@latest`. This avoids an npm registry/version-resolution step on every agent launch; install the corresponding npm package globally or override `command` / `args` if you prefer a pinned local wrapper. When the primary command is not found on `PATH`, built-in profiles include `fallbackCommands` that attempt `npx <package>@latest` automatically.
+
 ```ts
 import { createAcpRuntime, ClaudeCode } from '@acp-kit/core';
 
@@ -22,8 +24,8 @@ import { ClaudeCode } from '@acp-kit/core';
 | --- | --- |
 | `id` | `claude-code` |
 | `displayName` | `Claude Code` |
-| `command` | `npx` |
-| `args` | `['@zed-industries/claude-code-acp@latest']` |
+| `command` | `claude-code-acp` |
+| `args` | `[]` |
 | `startupTimeoutMs` | `90000` |
 | Login | Anthropic API key in `ANTHROPIC_API_KEY`, or interactive Claude.ai login on first run |
 | Upstream | [`@zed-industries/claude-code-acp`](https://www.npmjs.com/package/@zed-industries/claude-code-acp) |
@@ -42,8 +44,8 @@ import { GitHubCopilot } from '@acp-kit/core';
 | --- | --- |
 | `id` | `github-copilot` |
 | `displayName` | `GitHub Copilot` |
-| `command` | `npx` |
-| `args` | `['@github/copilot-language-server@latest', '--acp']` |
+| `command` | `copilot-language-server` |
+| `args` | `['--acp']` |
 | `startupTimeoutMs` | `90000` |
 | Login | GitHub OAuth device flow on first run; token cached by the language server |
 | Upstream | [`@github/copilot-language-server`](https://www.npmjs.com/package/@github/copilot-language-server) |
@@ -62,8 +64,8 @@ import { CodexCli } from '@acp-kit/core';
 | --- | --- |
 | `id` | `codex-cli` |
 | `displayName` | `Codex CLI` |
-| `command` | `npx` |
-| `args` | `['@zed-industries/codex-acp@latest']` |
+| `command` | `codex-acp` |
+| `args` | `[]` |
 | `startupTimeoutMs` | `90000` |
 | Login | OpenAI API key in `OPENAI_API_KEY` |
 | Upstream | [`@zed-industries/codex-acp`](https://www.npmjs.com/package/@zed-industries/codex-acp) |
@@ -82,8 +84,8 @@ import { GeminiCli } from '@acp-kit/core';
 | --- | --- |
 | `id` | `gemini-cli` |
 | `displayName` | `Gemini CLI` |
-| `command` | `npx` |
-| `args` | `['@google/gemini-cli@latest', '--experimental-acp']` |
+| `command` | `gemini` |
+| `args` | `['--experimental-acp']` |
 | `startupTimeoutMs` | `90000` |
 | Login | Google API key in `GEMINI_API_KEY`, or `gcloud auth` for ADC |
 | Upstream | [`@google/gemini-cli`](https://www.npmjs.com/package/@google/gemini-cli) |
@@ -102,8 +104,8 @@ import { QwenCode } from '@acp-kit/core';
 | --- | --- |
 | `id` | `qwen-code` |
 | `displayName` | `Qwen Code` |
-| `command` | `npx` |
-| `args` | `['@qwen-code/qwen-code@latest', '--acp', '--experimental-skills']` |
+| `command` | `qwen` |
+| `args` | `['--acp', '--experimental-skills']` |
 | `startupTimeoutMs` | `90000` |
 | Login | Alibaba DashScope API key in `DASHSCOPE_API_KEY` (or the CLI's interactive setup) |
 | Upstream | [`@qwen-code/qwen-code`](https://www.npmjs.com/package/@qwen-code/qwen-code) |
@@ -122,8 +124,8 @@ import { OpenCode } from '@acp-kit/core';
 | --- | --- |
 | `id` | `opencode` |
 | `displayName` | `OpenCode` |
-| `command` | `npx` |
-| `args` | `['opencode-ai@latest', 'acp']` |
+| `command` | `opencode` |
+| `args` | `['acp']` |
 | `startupTimeoutMs` | `90000` |
 | Login | Provider keys configured via `opencode auth login` (multi-provider; reads from OpenCode's config) |
 | Upstream | [`opencode-ai`](https://www.npmjs.com/package/opencode-ai) |
@@ -159,6 +161,7 @@ interface AgentProfile {
   displayName: string;              // human-readable name
   command: string;                  // executable, resolved through PATH
   args: string[];
+  fallbackCommands?: Array<{ command: string; args: string[] }>; // slower fallback launches
   env?: Record<string, string>;     // merged onto process.env
   startupTimeoutMs?: number;        // default 30000
   filterStdoutLine?: (line: string) => string | null; // drop chatty banners

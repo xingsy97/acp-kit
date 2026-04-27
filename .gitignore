@@ -3,9 +3,9 @@ dist/
 coverage/
 .env
 .npmrc
+.claude/
 
 *.tsbuildinfo
 
 docs/.vitepress/cache/
 docs/.vitepress/dist/
-

@@ -984,22 +984,31 @@ async function requestApprovalDecision(params: {
 
 function selectPermissionOptionId(
   decision: PermissionDecisionValue,
-  options: Array<{ optionId?: string; name?: string }>,
+  options: Array<{ optionId?: string; name?: string; kind?: string }>,
 ): string {
   const normalizedDecision = decision || PermissionDecision.Deny;
+  const byKind = (kind: string) => options.find((option) => option.kind === kind)?.optionId;
+  const byOptionId = (...ids: string[]) =>
+    options.find((option) => option.optionId && ids.includes(option.optionId))?.optionId;
+  const byName = (pattern: RegExp) => options.find((option) => pattern.test(option.name || ''))?.optionId;
+
   if (normalizedDecision === PermissionDecision.AllowAlways) {
-    return options.find((option) => option.optionId === 'proceed_always')?.optionId
-      || options.find((option) => /always/i.test(option.name || ''))?.optionId
+    return byKind('allow_always')
+      || byOptionId('allow_always', 'proceed_always')
+      || byName(/\balways\b/i)
       || selectPermissionOptionId(PermissionDecision.AllowOnce, options);
   }
   if (normalizedDecision === PermissionDecision.AllowOnce) {
-    return options.find((option) => option.optionId === 'proceed_once')?.optionId
-      || options.find((option) => /once/i.test(option.name || ''))?.optionId
+    return byKind('allow_once')
+      || byOptionId('allow_once', 'proceed_once')
+      || byName(/\bonce\b|allow|proceed/i)
       || options[0]?.optionId
       || 'proceed_once';
   }
-  return options.find((option) => option.optionId === 'cancel')?.optionId
-    || options.find((option) => /cancel|deny/i.test(option.name || ''))?.optionId
+  return byOptionId('cancel', 'deny', 'reject_once', 'reject_always')
+    || byKind('reject_once')
+    || byKind('reject_always')
+    || byName(/cancel|deny|reject/i)
     || 'cancel';
 }
 

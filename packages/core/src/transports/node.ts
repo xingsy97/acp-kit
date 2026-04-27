@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { delimiter, isAbsolute, join } from 'node:path';
 import { PassThrough, Readable, Writable } from 'node:stream';
 
 import {
@@ -86,7 +87,11 @@ export function nodeChildProcessTransport(
 
   return {
     async connect({ agent, host, client, cwd }) {
-      const child = spawnProcess(agent.command, agent.args, {
+      const launch = resolveAgentLaunch(agent, host);
+      const launchAgent = launch === agent
+        ? agent
+        : { ...agent, command: launch.command, args: launch.args };
+      const child = spawnProcess(launchAgent.command, launchAgent.args, {
         cwd: cwd ?? process.cwd(),
         env: {
           ...process.env,
@@ -97,7 +102,7 @@ export function nodeChildProcessTransport(
       const baseConnection = connectionFactory.create({
         client,
         process: child,
-        agent,
+        agent: launchAgent,
         host,
       }) as AcpTransportConnection;
 
@@ -134,6 +139,48 @@ export function nodeChildProcessTransport(
       return session;
     },
   };
+}
+
+function resolveAgentLaunch(agent: AgentProfile, host: RuntimeHost): { command: string; args: string[] } | AgentProfile {
+  if (isCommandOnPath(agent.command)) return agent;
+  for (const fallback of agent.fallbackCommands ?? []) {
+    if (isCommandOnPath(fallback.command)) {
+      host.log?.({
+        level: 'warn',
+        message: 'ACP agent primary command was not found; using fallback command',
+        context: {
+          agentId: agent.id,
+          missingCommand: agent.command,
+          fallbackCommand: fallback.command,
+          fallbackArgs: fallback.args,
+        },
+      });
+      return fallback;
+    }
+  }
+  return agent;
+}
+
+function isCommandOnPath(command: string): boolean {
+  if (!command) return false;
+  if (command.includes('/') || command.includes('\\') || isAbsolute(command)) {
+    return existsSync(command);
+  }
+
+  const pathEnv = process.env.PATH || '';
+  const paths = pathEnv.split(delimiter).filter(Boolean);
+  const extensions = process.platform === 'win32'
+    ? (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+    : [''];
+
+  for (const base of paths) {
+    const direct = join(base, command);
+    if (existsSync(direct)) return true;
+    for (const ext of extensions) {
+      if (existsSync(direct + ext.toLowerCase()) || existsSync(direct + ext.toUpperCase())) return true;
+    }
+  }
+  return false;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -365,6 +412,21 @@ function monitorProcess(child: SpawnedProcess, host: RuntimeHost): ProcessMonito
     on?: (event: string, listener: (...args: never[]) => void) => void;
   };
   childWithEvents.on?.('close', onExit as never);
+  childWithEvents.on?.('error', ((error: NodeJS.ErrnoException) => {
+    exitCode = undefined;
+    exitSignal = undefined;
+    exitSummary = `spawn error=${error.code ?? error.message}`;
+    stderrBuffer += `${stderrBuffer ? '\n' : ''}${error.message}`;
+    if (stderrBuffer.length > 32_768) {
+      stderrBuffer = stderrBuffer.slice(-32_768);
+    }
+    host.log?.({
+      level: 'error',
+      message: 'ACP child process failed to spawn',
+      context: { code: error.code, message: error.message, path: error.path, syscall: error.syscall },
+    });
+    host.onAgentExit?.({ code: null, signal: null, stderr: stderrBuffer.trim() });
+  }) as never);
 
   return {
     getStderr() {

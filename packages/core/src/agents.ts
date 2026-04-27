@@ -13,6 +13,8 @@ export interface AgentProfile {
   command: string;
   /** Argument vector passed to {@link AgentProfile.command}. */
   args: string[];
+  /** Slower fallback launch commands, tried when the primary command is not on PATH. */
+  fallbackCommands?: Array<{ command: string; args: string[] }>;
   /** Extra environment variables merged on top of `process.env`. */
   env?: Record<string, string>;
   /** Override the default 30s startup timeout (initialize / newSession / loadSession). */
@@ -28,77 +30,83 @@ export interface AgentProfile {
 /**
  * GitHub Copilot in ACP mode.
  *
- * Launches `npx @github/copilot-language-server@latest --acp`.
+ * Launches `copilot-language-server --acp`.
  */
 export const GitHubCopilot: AgentProfile = {
   id: 'github-copilot',
   displayName: 'GitHub Copilot',
-  command: 'npx',
-  args: ['@github/copilot-language-server@latest', '--acp'],
+  command: 'copilot-language-server',
+  args: ['--acp'],
+  fallbackCommands: [{ command: 'npx', args: ['@github/copilot-language-server@latest', '--acp'] }],
   startupTimeoutMs: 90000,
 };
 
 /**
  * Anthropic Claude Code via the Zed-maintained ACP wrapper.
  *
- * Launches `npx @zed-industries/claude-code-acp@latest`.
+ * Launches `claude-code-acp`.
  */
 export const ClaudeCode: AgentProfile = {
   id: 'claude-code',
   displayName: 'Claude Code',
-  command: 'npx',
-  args: ['@zed-industries/claude-code-acp@latest'],
+  command: 'claude-code-acp',
+  args: [],
+  fallbackCommands: [{ command: 'npx', args: ['@zed-industries/claude-code-acp@latest'] }],
   startupTimeoutMs: 90000,
 };
 
 /**
  * OpenAI Codex CLI via the Zed-maintained ACP wrapper.
  *
- * Launches `npx @zed-industries/codex-acp@latest`.
+ * Launches `codex-acp`.
  */
 export const CodexCli: AgentProfile = {
   id: 'codex-cli',
   displayName: 'Codex CLI',
-  command: 'npx',
-  args: ['@zed-industries/codex-acp@latest'],
+  command: 'codex-acp',
+  args: [],
+  fallbackCommands: [{ command: 'npx', args: ['@zed-industries/codex-acp@latest'] }],
   startupTimeoutMs: 90000,
 };
 
 /**
  * Google Gemini CLI in experimental ACP mode.
  *
- * Launches `npx @google/gemini-cli@latest --experimental-acp`.
+ * Launches `gemini --experimental-acp`.
  */
 export const GeminiCli: AgentProfile = {
   id: 'gemini-cli',
   displayName: 'Gemini CLI',
-  command: 'npx',
-  args: ['@google/gemini-cli@latest', '--experimental-acp'],
+  command: 'gemini',
+  args: ['--experimental-acp'],
+  fallbackCommands: [{ command: 'npx', args: ['@google/gemini-cli@latest', '--experimental-acp'] }],
   startupTimeoutMs: 90000,
 };
 
 /**
  * Alibaba Qwen Code in ACP mode.
  *
- * Launches `npx @qwen-code/qwen-code@latest --acp --experimental-skills`.
+ * Launches `qwen --acp --experimental-skills`.
  */
 export const QwenCode: AgentProfile = {
   id: 'qwen-code',
   displayName: 'Qwen Code',
-  command: 'npx',
-  args: ['@qwen-code/qwen-code@latest', '--acp', '--experimental-skills'],
+  command: 'qwen',
+  args: ['--acp', '--experimental-skills'],
+  fallbackCommands: [{ command: 'npx', args: ['@qwen-code/qwen-code@latest', '--acp', '--experimental-skills'] }],
   startupTimeoutMs: 90000,
 };
 
 /**
  * OpenCode CLI in ACP mode.
  *
- * Launches `npx opencode-ai@latest acp`.
+ * Launches `opencode acp`.
  */
 export const OpenCode: AgentProfile = {
   id: 'opencode',
   displayName: 'OpenCode',
-  command: 'npx',
-  args: ['opencode-ai@latest', 'acp'],
+  command: 'opencode',
+  args: ['acp'],
+  fallbackCommands: [{ command: 'npx', args: ['opencode-ai@latest', 'acp'] }],
   startupTimeoutMs: 90000,
 };

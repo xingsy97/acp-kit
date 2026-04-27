@@ -8,6 +8,8 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-04-27
+
 ### Added
 
 - New `@acp-kit/author-reviewer-loop` package, a runnable split-context `npx` demo where an AUTHOR agent modifies files and a REVIEWER agent inspects them in a separate context until `APPROVED`.

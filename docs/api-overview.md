@@ -17,6 +17,7 @@ import {
   createMemorySessionRecorder,
   createRuntimeReplay,
   createRuntimeInspector,
+  collectTurnResult,
   formatStartupDiagnostics,
   isAcpStartupError,
   loadSessionRecording,
@@ -230,6 +231,40 @@ for await (const event of runOneShotPrompt({
 ```
 
 The agent process is killed on `for await` completion, early `break` / `return`, or turn failure / cancellation.
+
+---
+
+## `collectTurnResult(session, prompt, options?)`
+
+Run one prompt on an existing `RuntimeSession` and collect the streaming events into a single result object. Use this when an application wants a turn-level API (`text`, `tools`, `status`, `stopReason`, `error`) without losing live UI updates.
+
+```ts
+import { collectTurnResult } from '@acp-kit/core';
+
+const result = await collectTurnResult(session, 'Review this workspace.', {
+  onUpdate: (snapshot) => ui.renderTurn(snapshot),
+  onEvent: (event, snapshot) => audit.write({ event, snapshot }),
+});
+
+console.log(result.text);
+console.log(result.tools.map((tool) => `${tool.tag} ${tool.status} ${tool.title}`));
+```
+
+`collectTurnResult` subscribes before calling `session.prompt(...)` and unsubscribes in a `finally` block. It is intentionally scoped to one session turn; multi-agent loops, retries, approval logic, and renderer state remain application code.
+
+```ts
+interface CollectedTurnResult {
+  text: string;
+  tools: CollectedToolRun[];
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  stopReason: string | null;
+  error: string | null;
+  promptResult: PromptResult | null;
+  events?: RuntimeSessionEvent[];
+}
+```
+
+Pass `includeEvents: true` when you need the returned result to include the raw normalized `RuntimeSessionEvent[]` history for that turn.
 
 ---
 

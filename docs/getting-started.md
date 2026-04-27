@@ -53,6 +53,18 @@ await session.prompt('Explain what this repository does.');
 
 By default, the runtime approves tool permissions once and selects the first offered auth method. Pass a `host` when your application needs an explicit approval UI, auth picker, file system adapter, terminal adapter, logging, or wire middleware.
 
+If your UI wants a single turn result while it streams, use `collectTurnResult(...)` instead of manually reducing `messageDelta`, `toolStart`, `toolEnd`, and turn boundary events yourself:
+
+```ts
+import { collectTurnResult } from '@acp-kit/core';
+
+const result = await collectTurnResult(session, 'Explain what this repository does.', {
+  onUpdate: (snapshot) => render(snapshot.text, snapshot.tools),
+});
+
+console.log(result.status, result.stopReason);
+```
+
 ## Subscribing to events
 
 Use `session.on(...)` when you have a `RuntimeSession`; it subscribes to future events and returns an unsubscribe function. Use `onRuntimeEvent(event, handlers)` only when you already have a single `RuntimeSessionEvent` value and want to route it through the same camelCase handler map, such as inside `runOneShotPrompt(...)`, tests, or a custom event queue.

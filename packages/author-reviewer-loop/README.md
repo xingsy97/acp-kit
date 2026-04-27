@@ -39,17 +39,68 @@ Defaults:
 Override with environment variables:
 
 ```bash
-AUTHOR_AGENT=copilot AUTHOR_MODEL=claude-opus-4.7 REVIEWER_AGENT=codex REVIEWER_MODEL=gpt-5.5 \
+AUTHOR_AGENT='copilot' AUTHOR_MODEL='claude-opus-4.7' REVIEWER_AGENT='codex' REVIEWER_MODEL='gpt-5.5' \
   npx @acp-kit/author-reviewer-loop ./demo-workspace "Build a small CLI"
 ```
+
+PowerShell:
+
+```powershell
+$Env:AUTHOR_AGENT='copilot'
+$Env:AUTHOR_MODEL='claude-opus-4.7'
+$Env:REVIEWER_AGENT='codex'
+$Env:REVIEWER_MODEL='gpt-5.5'
+npx @acp-kit/author-reviewer-loop .\demo-workspace "Build a small CLI"
+```
+
+Set `AUTHOR_MODEL=''` or `REVIEWER_MODEL=''` to use that agent's default model. When an agent reports its available models, the CLI validates the configured model before Round 1 starts. If the configured model is not available, startup fails with the agent's model list and an environment variable example formatted for the current shell (`$Env:NAME='value'` in PowerShell, `export NAME='value'` in Unix-like shells).
 
 Supported built-in agent ids: `copilot`, `claude`, `codex`, `gemini`, `qwen`, `opencode`.
 
 ## Options
 
 ```bash
-npx @acp-kit/author-reviewer-loop <cwd> <task> [--yes]
+npx @acp-kit/author-reviewer-loop <cwd> <task> [--yes] [--tui]
 ```
+
+Pass `--tui` (or set `ACP_REVIEW_TUI=1`) to render the loop in an Ink-based fullscreen TUI:
+
+- The TUI uses the terminal's alternate screen buffer, so it always occupies the entire visible viewport and never grows past the bottom of the screen. Your scrollback is restored on exit.
+- A split view shows AUTHOR on the left and REVIEWER on the right; each pane has a fixed height computed from the current terminal size and scrolls internally as new output arrives.
+- The header shows `cwd`, the task, max rounds, and a combined AUTHOR/REVIEWER status row with agent and model names.
+- Pane output soft-wraps by default and is pre-wrapped to whole words before rendering.
+- Resizing the terminal re-flows the layout immediately.
+
+Keybindings:
+
+| Key | Action |
+| --- | --- |
+| `←` / `→` | Move between rounds |
+| `↑` / `↓` (or `j`/`k`) | Scroll the focused pane by one line |
+| `PgUp` / `PgDn` | Scroll the focused pane by ten lines |
+| `Tab` | Switch focus between AUTHOR and REVIEWER |
+| `g` | Jump to the latest round and re-enable follow-mode |
+| `G` | Reset scroll to the bottom of the focused pane |
+| `w` | Toggle soft-wrap for long lines |
+| `?` | Toggle the help overlay |
+| `q` | Quit (only after the run has completed) |
+
+The plain console renderer remains the default.
+
+## Architecture
+
+The package is split into a renderer-agnostic engine and a thin renderer layer:
+
+- `lib/engine.mjs` exposes `createLoopEngine({ config })`, which owns the AUTHOR/REVIEWER business loop, normalized event stream, and a reduced state tree (`engine.getState()` / `engine.subscribe(fn)` / `engine.onEvent(fn)`). It contains no presentation logic.
+- `lib/renderers/plain.mjs` subscribes to engine events and prints them as a scrolling line log.
+- `lib/renderers/tui.mjs` subscribes to engine events and state and draws a fullscreen Ink view.
+- `lib/cli/` contains argument parsing, env parsing, confirmation, run summaries, and error formatting.
+- `lib/runtime/` contains ACP role/session startup and per-turn event normalization.
+- `lib/config/` contains built-in agent/default settings.
+- `lib/config/shell.mjs` formats shell-appropriate environment variable examples for startup errors.
+- `lib/runtime/loop.mjs` keeps the legacy `runAuthorReviewerLoop({ config, renderer })` signature working for callers that pass a renderer object with `onTurnStart`, `onMessageDelta`, etc.
+
+To add a new renderer (HTML report, JSONL log, web dashboard), subscribe to `engine.onEvent` and/or read `engine.getState()`. No engine changes are needed.
 
 Environment variables:
 
@@ -61,6 +112,7 @@ Environment variables:
 | `REVIEWER_MODEL` | `gpt-5.5` | Model id passed via ACP `session/set_model`; set empty to skip. |
 | `MAX_ROUNDS` | `10` | Maximum author/reviewer iterations. |
 | `ACP_REVIEW_YES` | unset | Set to `1` to skip the confirmation prompt. |
+| `ACP_REVIEW_TUI` | unset | Set to `1` to use the Ink TUI renderer (same as `--tui`). |
 | `ACP_REVIEW_TRACE` | unset | Set to `1` to print the runtime inspector JSONL trace on startup failures. |
 
 ## What It Shows
@@ -68,7 +120,9 @@ Environment variables:
 - Two `createAcpRuntime(...)` instances, one per agent process.
 - Two sessions pointed at the same `cwd`, with separate author/reviewer contexts.
 - Per-session model selection via ACP `session/set_model`.
+- Startup model validation against each agent's advertised model list when available.
 - Handler-map dispatch over normalized `RuntimeSessionEvent`s.
+- `collectTurnResult(...)` from `@acp-kit/core`, used to collect a single streamed turn into text/tool/status snapshots for renderers.
 - Startup diagnostics through `isAcpStartupError(...)` and `formatStartupDiagnostics(...)`.
 - Runtime inspectors for supportable debugging without adding ad hoc logs.
 

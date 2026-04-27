@@ -10,4 +10,5 @@ export * from './enterprise-runtime.js';
 export * from './diagnostics.js';
 export * from './inspector.js';
 export * from './recording.js';
+export * from './turn-result.js';
 export { composeWireMiddleware, normalizeWireMiddleware } from './wire-middleware.js';

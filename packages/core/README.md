@@ -47,6 +47,18 @@ session.on({
 await session.prompt('Summarize this repository.');
 ```
 
+If your application wants a single turn object while preserving live streaming updates, use `collectTurnResult(...)`:
+
+```ts
+import { collectTurnResult } from '@acp-kit/core';
+
+const result = await collectTurnResult(session, 'Summarize this repository.', {
+  onUpdate: (snapshot) => render(snapshot.text, snapshot.tools),
+});
+
+console.log(result.text);
+```
+
 `createAcpRuntime(...)` defaults to approving tool permissions once and selecting the first offered auth method. See [Getting Started](docs/getting-started.md) for explicit host policy, the full event vocabulary, multi-session use, and how to debug startup / auth failures.
 
 For a one-shot prompt, the helper API handles session disposal and yields the same event stream. Use `onRuntimeEvent(...)` only when you already have an event value, such as inside this `for await` loop; when you have a `RuntimeSession`, prefer `session.on(...)`.

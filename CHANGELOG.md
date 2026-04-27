@@ -8,6 +8,20 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-04-27
+
+### Added
+
+- `collectTurnResult(session, prompt, options)` in `@acp-kit/core`, a turn-level helper that collects streaming session events into one result object while still exposing live `onEvent` and `onUpdate` callbacks for UIs.
+- `@acp-kit/author-reviewer-loop` now has a renderer-agnostic loop engine plus plain and Ink TUI renderers.
+- `@acp-kit/author-reviewer-loop --tui` for a fullscreen split-pane AUTHOR/REVIEWER view with round navigation, pane scrolling, and soft wrapping.
+
+### Changed
+
+- `@acp-kit/author-reviewer-loop` now uses `commander` for CLI parsing and keeps CLI, config, runtime, engine, and renderer code in separate modules.
+- The author/reviewer loop validates configured models during startup. If an agent reports available models and the configured model is invalid, the CLI fails before the first turn and prints the available model ids plus shell-appropriate environment variable examples.
+- The TUI header now combines author/reviewer agent, model, and status into one status row; long task text and pane output are wrapped for readability.
+
 ## [0.6.1] - 2026-04-27
 
 ### Added

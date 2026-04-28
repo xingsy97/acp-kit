@@ -8,6 +8,12 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.6.9] - 2026-04-29
+
+### Fixed
+
+- `@acp-kit/author-reviewer-loop` TUI no longer crashes with `RangeError: Invalid array length` when a pane's flow ends on a tool item. `isBlankTextFlow(undefined)` previously returned `true`, causing the tool-run coalescing loop in `visibleFlowRows` to never terminate at end-of-flow and grow `skipped` until allocation failed. The helper now returns `false` for missing items so the loop stops at the array boundary.
+
 ## [0.6.8] - 2026-04-29
 
 ### Added

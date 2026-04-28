@@ -1468,7 +1468,8 @@ export async function runTui({ config }) {
     }
 
     function isBlankTextFlow(item) {
-      return item?.kind !== 'tool' && String(item?.text ?? '').trim() === '';
+      if (!item) return false;
+      return item.kind !== 'tool' && String(item.text ?? '').trim() === '';
     }
 
     function formatTraceRows(item) {

@@ -316,11 +316,12 @@ export async function runTui({ config }) {
     const safeCols = Math.max(1, cols);
     const rows = wrapLine(`${prefix}${taskSummary(task)}`, safeCols);
     if (rows.length <= maxRows) return { rows, truncated: false };
-    const hint = ' … [v view full task]';
+    const hint = ' … [v view full task, e edit]';
     const visible = rows.slice(0, maxRows);
     const lastIndex = visible.length - 1;
-    const room = Math.max(1, safeCols - hint.length);
-    visible[lastIndex] = `${visible[lastIndex].slice(0, room).trimEnd()}${hint}`;
+    const hintWidth = displayWidth(hint);
+    const room = Math.max(1, safeCols - hintWidth);
+    visible[lastIndex] = `${fitText(visible[lastIndex], room, { ellipsis: true }).text.trimEnd()}${hint}`;
     return { rows: visible, truncated: true };
   }
 
@@ -471,6 +472,11 @@ export async function runTui({ config }) {
       return Math.max(0, end - pane.startedAt);
     }
     return null;
+  }
+
+  function animationLabel(status, frame) {
+    if (status !== PaneStatus.Running && status !== PaneStatus.Pending) return '';
+    return ` ${TUI_PROGRESS_FRAMES[frame % TUI_PROGRESS_FRAMES.length]}`;
   }
 
   // Soft-wrap one logical line to display rows. Prefer word boundaries; only
@@ -1455,8 +1461,9 @@ export async function runTui({ config }) {
             && i === logical.length - 1
             && item === flow[flow.length - 1];
           const value = isCursorLine ? `${part}\u258F` : part;
-          const prefix = item.kind === 'reasoning' ? '💭 ' : '';
-          const parts = view.wrap ? (value === '' ? [''] : wrapLine(value, width)) : [value];
+          const prefix = item.kind === 'reasoning' ? 'think: ' : '';
+          const contentWidth = Math.max(1, width - displayWidth(prefix));
+          const parts = view.wrap ? (value === '' ? [''] : wrapLine(value, contentWidth)) : [value];
           parts.forEach((text, partIndex) => rows.push({
             key: `${item.id || `flow-${index}`}-${i}-${partIndex}`,
             kind: item.kind === 'reasoning' ? 'reasoning' : 'text',
@@ -1520,8 +1527,7 @@ export async function runTui({ config }) {
       const settings = role === 'AUTHOR' ? config.authorSettings : config.reviewerSettings;
       const agent = agentName(settings);
       const model = settings.model || 'default';
-      const animated = status === PaneStatus.Running || status === PaneStatus.Pending;
-      const progress = animated ? ` ${TUI_PROGRESS_FRAMES[animationFrame % TUI_PROGRESS_FRAMES.length]}` : '';
+      const progress = animationLabel(status, animationFrame);
       const headerLabel = `${role} \u2014 Round ${selectedRound ?? '-'} ${status}${progress} \u00B7 ${agent} (${model})`;
       const usageLabel = formatUsage(pane?.usage);
       const timingLabel = formatDuration(paneElapsedMs(pane));
@@ -1572,10 +1578,10 @@ export async function runTui({ config }) {
 
     function paneBorderTop(label, color, focused, width) {
       const safeWidth = Math.max(4, width);
-      const labelWidth = Math.max(0, safeWidth - 6);
+      const labelWidth = Math.max(0, safeWidth - 4);
       const fitted = fitText(label, labelWidth, { ellipsis: true });
       const labelText = ` ${fitted.text} `;
-      const fill = Math.max(0, safeWidth - fitted.width - 4);
+      const fill = Math.max(0, safeWidth - displayWidth(labelText) - 2);
       return line(
         h(
           Text,
@@ -1614,7 +1620,7 @@ export async function runTui({ config }) {
       const fittedTiming = timingLabel ? fitText(timingLabel, maxTimingWidth, { ellipsis: true }) : { text: '', width: 0 };
       const usageText = fittedUsage.text ? ` ${fittedUsage.text} ` : '';
       const timingText = fittedTiming.text ? ` ${fittedTiming.text} ` : '';
-      const labelWidth = (usageText ? fittedUsage.width + 2 : 0) + (timingText ? fittedTiming.width + 2 : 0);
+      const labelWidth = displayWidth(usageText) + displayWidth(timingText);
       const fill = Math.max(0, safeWidth - labelWidth - 2);
       return line(
         h(

@@ -142,24 +142,28 @@ function paneFromTurnSnapshot(snapshot, previous = emptyPane(), cumulativeUsage 
   const parts = text.split('\n');
   const current = parts.pop() ?? '';
   const status = normalizeSnapshotStatus(snapshot.status, previous.status);
+  const previousToolsById = new Map(previous.tools.map((tool) => [tool.id, tool]));
+  const snapshotTools = tools.map((tool) => {
+    const previousTool = previousToolsById.get(tool.id);
+    return {
+      id: tool.id,
+      tag: tool.tag ?? previousTool?.tag,
+      name: tool.name ?? previousTool?.name,
+      title: tool.title || tool.name || previousTool?.title || tool.id,
+      status: tool.status ?? previousTool?.status,
+      chars: Math.max(maxFinite(tool.inputChars, tool.outputChars), previousTool?.chars ?? 0),
+      input: tool.input ?? previousTool?.input,
+      output: tool.output ?? previousTool?.output,
+    };
+  });
+  const snapshotIds = new Set(snapshotTools.map((tool) => tool.id));
+  const preservedLiveTools = previous.tools.filter((tool) => !snapshotIds.has(tool.id));
   return {
     status,
     lines: parts,
     current,
     flow: previous.flow,
-    tools: tools.map((tool) => {
-      const previousTool = previous.tools.find((item) => item.id === tool.id);
-      return {
-        id: tool.id,
-        tag: tool.tag ?? previousTool?.tag,
-        name: tool.name ?? previousTool?.name,
-        title: tool.title || tool.name || previousTool?.title || tool.id,
-        status: tool.status ?? previousTool?.status,
-        chars: Math.max(maxFinite(tool.inputChars, tool.outputChars), previousTool?.chars ?? 0),
-        input: previousTool?.input,
-        output: previousTool?.output,
-      };
-    }),
+    tools: [...snapshotTools, ...preservedLiveTools],
     usage: cumulativeUsage ?? previous.usage,
     turnUsage: snapshot.usage ?? previous.turnUsage,
     stopReason: snapshot.stopReason,
@@ -185,17 +189,21 @@ function maxFinite(...values) {
 function appendTextFlow(pane, delta, flowId, kind = 'text') {
   if (!delta) return pane;
   const flow = [...pane.flow];
-  const last = flow[flow.length - 1];
-  if (last?.kind === kind && (kind !== 'reasoning' || !flowId || last.sourceId === flowId)) {
-    flow[flow.length - 1] = { ...last, text: last.text + delta };
+  const sourceId = kind === 'reasoning' ? (flowId ?? 'default-reasoning') : flowId;
+  const targetIndex = kind === 'reasoning'
+    ? flow.findLastIndex((item) => item.kind === kind && item.sourceId === sourceId)
+    : flow.length - 1;
+  const target = flow[targetIndex];
+  if (target?.kind === kind && (kind !== 'reasoning' || target.sourceId === sourceId)) {
+    flow[targetIndex] = { ...target, text: target.text + delta };
   } else {
-    flow.push({ id: `flow-${flowId}`, sourceId: flowId, kind, text: delta });
+    flow.push({ id: `flow-${sourceId ?? flow.length + 1}`, sourceId, kind, text: delta });
   }
   return { ...pane, flow };
 }
 
 function appendOrUpdateToolFlow(pane, event, flowId) {
-  const toolCallId = event.toolCallId || `tool-event-${flowId ?? pane.tools.length + 1}`;
+  const toolCallId = normalizeToolCallId(event, pane, flowId);
   const flow = [...pane.flow];
   const index = flow.findIndex((item) => item.kind === 'tool' && item.toolCallId === toolCallId);
   const previous = index >= 0 ? flow[index] : null;
@@ -232,6 +240,20 @@ function appendOrUpdateToolFlow(pane, event, flowId) {
   else tools.push(tool);
 
   return { ...pane, flow, tools };
+}
+
+function normalizeToolCallId(event, pane, flowId) {
+  if (event.toolCallId) return event.toolCallId;
+  const title = event.title || event.name;
+  const reusable = [...pane.tools].reverse().find((tool) => {
+    if (!tool?.id || !String(tool.id).startsWith('tool-event-')) return false;
+    if (event.name && tool.name && event.name !== tool.name) return false;
+    if (title && tool.title && title !== tool.title) return false;
+    return tool.status === PaneStatus.Running || event.type !== 'toolStart';
+  });
+  if (reusable) return reusable.id;
+  const stableTitle = String(title || 'tool').replace(/\s+/g, ' ').trim().slice(0, 48);
+  return `tool-event-${stableTitle || 'tool'}-${flowId ?? pane.tools.length + 1}`;
 }
 
 function pushTrace(state, action) {

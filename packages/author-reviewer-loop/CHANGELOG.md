@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.10] - 2026-04-29
+
+### Fixed
+
+- TUI no longer crashes with `ReferenceError: animationFrame is not defined` on first render. The `animationLabel` helper had been hoisted out of the `App` component scope but still referenced the React `useState` value `animationFrame`; it now takes the frame as an explicit argument and the `Pane` component passes it in.
+- Engine reducer now indexes the previous pane's tool calls by id with a `Map` instead of a linear `find` per tool, and preserves tool calls that were live in earlier snapshots but missing from the latest snapshot, so long-running tool entries no longer disappear from the TUI when the agent emits a snapshot that omits them. New `tool.input` / `tool.output` from the snapshot now win over the previously cached values instead of being dropped.
+- Engine reducer now merges streaming reasoning deltas into the correct existing reasoning block by `sourceId` using `findLastIndex`, so reasoning chunks that arrive after intervening text or tool flow items are appended to the originating block instead of starting a new orphan block.
+- TUI task header now measures the truncation hint with `displayWidth` and `fitText` so wide / CJK characters in the task title no longer push the `[v view full task, e edit]` hint past the terminal edge.
+- TUI reasoning rows now use a plain-text `think:` prefix instead of an emoji, and the wrapping width is reduced by the prefix width so long reasoning lines wrap correctly inside the pane.
+- TUI pane border (top label and bottom usage / timing label) now uses `displayWidth` for fill calculation so wide labels no longer leave gaps or overflow the border row.
+
 ## [0.6.9] - 2026-04-29
 
 ### Fixed

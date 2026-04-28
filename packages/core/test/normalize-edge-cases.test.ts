@@ -48,6 +48,24 @@ describe('normalizeAcpUpdate – edge cases', () => {
     expect(events[0]).toMatchObject({ type: 'message.delta', delta: 'raw string' });
   });
 
+  it('normalizes thinking aliases and nested text arrays as reasoning', () => {
+    const events = normalizeAcpUpdate(
+      { sessionId: 'session-1', update: { sessionUpdate: 'thinking_chunk', content: [{ thinking: 'look ' }, { text: 'ahead' }] } } as never,
+      ctx,
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'reasoning.delta', delta: 'look ahead' });
+  });
+
+  it('normalizes thinking completion aliases as reasoning completed', () => {
+    const events = normalizeAcpUpdate(
+      { sessionId: 'session-1', update: { sessionUpdate: 'thinking_completed', content: { text: 'done thinking' } } } as never,
+      ctx,
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'reasoning.completed', content: 'done thinking' });
+  });
+
   it('handles content with non-text object (no text field)', () => {
     const events = normalizeAcpUpdate(
       { sessionId: 'session-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'image', url: 'x' } } } as never,

@@ -15,6 +15,7 @@ Use this skill before shipping a new `@acp-kit/core` / `@acp-kit/author-reviewer
 - The workflow publishes both packages, so `packages/core/package.json` and `packages/author-reviewer-loop/package.json` must both match the tag version.
 - GitHub Release notes are extracted from the matching section in root `CHANGELOG.md`.
 - For stable versions, npm publishes with `latest`; prerelease versions publish with `next`.
+- **Releases ride on top of normal development history.** Do not create a dedicated "Release X.Y.Z" commit. Instead, fold the version bumps and changelog updates into the regular feature/fix commit they belong to (or whatever in-progress commit the work logically lives in), then tag that commit. Tagging a normal commit is what triggers the release.
 
 ## 1. Inspect Current State
 
@@ -128,12 +129,23 @@ Confirm:
 
 ## 7. Commit, Tag, And Push
 
-Use one release commit unless the user asks for a different history shape:
+Fold the version bump, changelog, README/docs, and `package-lock.json` updates into the regular development commit they belong to &mdash; do **not** create a dedicated "Release X.Y.Z" commit. The tag itself is what marks the release.
+
+Typical flow:
 
 ```bash
+# Stage everything that belongs in the next commit, including the version bumps.
 git add -A
 git diff --cached --stat
-git commit -m "Release $version"
+
+# Either amend the in-progress commit that the release rides on...
+git commit --amend --no-edit
+
+# ...or create a normal commit describing the actual change (not the release).
+# Example: a fix-focused message, not "Release 0.6.7".
+git commit -m "author-reviewer-loop: pass author reply into reviewer prompt"
+
+# Tag that commit and push.
 git tag "v$version"
 git push origin main
 git push origin "v$version"

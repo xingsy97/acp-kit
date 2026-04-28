@@ -16,10 +16,61 @@ export const agents = {
   qwen: QwenCode,
 };
 
+export const agentChoices = Object.freeze(Object.entries(agents).map(([id, agent]) => ({
+  id,
+  agent,
+})));
+
+export const modelChoices = Object.freeze({
+  claude: [
+    { id: 'opus', label: 'opus', value: 'opus' },
+    { id: 'default', label: 'default (agent default)', value: null },
+  ],
+  codex: [
+    { id: 'gpt-5.4', label: 'gpt-5.4', value: 'gpt-5.4' },
+    { id: 'gpt-5.4/medium', label: 'gpt-5.4/medium', value: 'gpt-5.4/medium' },
+    { id: 'gpt-5.4/xhigh', label: 'gpt-5.4/xhigh', value: 'gpt-5.4/xhigh' },
+  ],
+  copilot: [
+    { id: 'gpt-5.4', label: 'gpt-5.4', value: 'gpt-5.4' },
+    { id: 'gpt-5.5', label: 'gpt-5.5', value: 'gpt-5.5' },
+    { id: 'claude-sonnet-4.6', label: 'claude-sonnet-4.6', value: 'claude-sonnet-4.6' },
+    { id: 'claude-opus-4.7', label: 'claude-opus-4.7', value: 'claude-opus-4.7' },
+    { id: 'claude-opus-4.7-1m', label: 'claude-opus-4.7-1m', value: 'claude-opus-4.7-1m' },
+  ],
+  gemini: [
+    { id: 'default', label: 'default (agent default)', value: null },
+  ],
+  opencode: [
+    { id: 'default', label: 'default (agent default)', value: null },
+  ],
+  qwen: [
+    { id: 'default', label: 'default (agent default)', value: null },
+  ],
+});
+
 export const defaults = {
   authorAgent: 'copilot',
-  authorModel: 'claude-opus-4.7',
+  authorModel: 'gpt-5.4',
   reviewerAgent: 'codex',
-  reviewerModel: 'gpt-5.5',
+  reviewerModel: 'gpt-5.4',
   maxRounds: 10,
 };
+
+export function defaultModelForAgent(agentId) {
+  return modelChoices[agentId]?.[0]?.value ?? null;
+}
+
+export function modelChoicesForAgent(agentId, currentModel) {
+  const choices = [...(modelChoices[agentId] ?? [{ id: 'default', label: 'default (agent default)', value: null }])];
+  const hasCurrent = choices.some((choice) => choice.value === currentModel);
+  if (!hasCurrent && currentModel != null && String(currentModel).length > 0) {
+    choices.unshift({
+      id: `custom:${currentModel}`,
+      label: `${currentModel} (custom)`,
+      value: currentModel,
+      custom: true,
+    });
+  }
+  return choices;
+}

@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-04-29
+
+### Added
+
+- TUI now ships an in-app agent and model picker for AUTHOR and REVIEWER, persisting the selection to `~/.acp-author-reviewer-loop.json` so later runs reuse the same choices unless overridden by `AUTHOR_AGENT` / `AUTHOR_MODEL` / `REVIEWER_AGENT` / `REVIEWER_MODEL` env vars. CLI mode still uses built-in defaults; TUI mode no longer hard-codes them.
+- New exports from the agents config module: `agentChoices`, `modelChoices`, `defaultModelForAgent`, `modelChoicesForAgent`, and `applyRoleSelection`, shared by the TUI selection screen and tests.
+- Engine now forwards `reasoningDelta` and `reasoningCompleted` events to the renderer, and threads `turnCompleted` / `turnFailed` / `turnEnd` through the trace pipeline so the TUI can display per-flow turn lifecycle markers.
+- Engine state now tracks pane `startedAt` / `finishedAt` / `durationMs` and uses dedicated `launching` / `waiting` statuses for clearer TUI run state.
+- New documentation page [docs/author-reviewer-loop](https://acpkit.github.io/acp-kit/author-reviewer-loop) describing the demo, why single-agent self-review fails, the renderers, and the diagnostics env vars. Package `homepage` now points at it.
+
+### Changed
+
+- Default CLI models updated to `gpt-5.4` for both AUTHOR and REVIEWER.
+- Plain and TUI renderers now display token usage as `ctx X/Y Tk` (context window from `usage_update`) and `Σ in:N out:N` (cumulative session totals from `PromptResponse.usage`), joined with `·`, instead of the previous ambiguous `In/Out` / `Used` labels. A header comment in each renderer documents the two ACP sources.
+- Reviewer prompt now asks for actionable suggestions with concrete fix guidance; author prompt reminds the AUTHOR to fix root causes and validate when practical.
+
+### Fixed
+
+- Agent availability pre-flight is now skipped when the relevant role has not been chosen yet (TUI selection mode) and runs at TUI launch time once the choice is made.
+- Engine reducer tolerates partial pane snapshots and missing duration fields without throwing.
+
 ## [0.6.7] - 2026-04-28
 
 ### Fixed

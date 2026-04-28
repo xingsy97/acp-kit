@@ -5,7 +5,7 @@ import { collectTurnResult } from '@acp-kit/core';
  * a turn result; this adapter only adds round/role metadata for renderers.
  */
 export async function runTurn({ round, role, state, prompt, renderer }) {
-  renderer.onTurnStart?.({ round, role });
+  renderer.onTurnStart?.({ round, role, at: Date.now() });
   let failureEmitted = false;
 
   try {
@@ -17,6 +17,12 @@ export async function runTurn({ round, role, state, prompt, renderer }) {
           case 'message.delta':
             renderer.onMessageDelta?.({ round, role, delta: event.delta });
             return;
+          case 'reasoning.delta':
+            renderer.onReasoningDelta?.({ round, role, delta: event.delta, reasoningId: event.reasoningId });
+            return;
+          case 'reasoning.completed':
+            renderer.onReasoningCompleted?.({ round, role, reasoningId: event.reasoningId });
+            return;
           case 'tool.start': {
             const tool = tools.find((item) => item.id === event.toolCallId);
             renderer.onToolStart?.({
@@ -27,6 +33,20 @@ export async function runTurn({ round, role, state, prompt, renderer }) {
               name: event.name,
               title: event.title || event.name,
               input: event.input,
+            });
+            return;
+          }
+          case 'tool.update': {
+            const tool = tools.find((item) => item.id === event.toolCallId);
+            renderer.onToolUpdate?.({
+              round,
+              role,
+              toolCallId: event.toolCallId,
+              tag: tool?.tag ?? '#?',
+              title: event.title ?? tool?.title,
+              status: event.status,
+              chars: maxFinite(tool?.inputChars, tool?.outputChars),
+              output: event.output,
             });
             return;
           }
@@ -45,15 +65,15 @@ export async function runTurn({ round, role, state, prompt, renderer }) {
             return;
           }
           case 'turn.completed':
-            renderer.onTurnCompleted?.({ round, role, stopReason: event.stopReason ?? 'unknown' });
+            renderer.onTurnCompleted?.({ round, role, stopReason: event.stopReason ?? 'unknown', at: event.at ?? Date.now() });
             return;
           case 'turn.failed':
             failureEmitted = true;
-            renderer.onTurnFailed?.({ round, role, error: event.error });
+            renderer.onTurnFailed?.({ round, role, error: event.error, at: event.at ?? Date.now() });
             return;
           case 'turn.cancelled':
             failureEmitted = true;
-            renderer.onTurnFailed?.({ round, role, error: event.reason });
+            renderer.onTurnFailed?.({ round, role, error: event.reason, at: event.at ?? Date.now() });
             return;
           default:
             return;
@@ -65,11 +85,11 @@ export async function runTurn({ round, role, state, prompt, renderer }) {
     return typeof result.text === 'string' ? result.text : '';
   } catch (error) {
     if (!failureEmitted) {
-      renderer.onTurnFailed?.({ round, role, error: formatError(error) });
+      renderer.onTurnFailed?.({ round, role, error: formatError(error), at: Date.now() });
     }
     throw error;
   } finally {
-    renderer.onTurnEnd?.({ round, role });
+    renderer.onTurnEnd?.({ round, role, at: Date.now() });
   }
 }
 

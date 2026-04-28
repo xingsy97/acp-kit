@@ -11,29 +11,14 @@ import { detectInstalledAgents } from '@acp-kit/core';
 try {
   const config = parseRunConfig();
 
-  // Pre-flight: ensure the configured agents are actually launchable.
-  const agentsToCheck = [config.authorSettings.agent, config.reviewerSettings.agent];
-  const unique = [...new Map(agentsToCheck.map((a) => [a.id, a])).values()];
-  const missing = detectInstalledAgents(unique).filter((r) => !r.installed);
-  if (missing.length > 0) {
-    for (const { agent } of missing) {
-      console.error(
-        `Error: agent "${agent.displayName}" is not available — neither "${agent.command}" nor any fallback command was found on PATH.`,
-      );
-    }
-    console.error(
-      '\nInstall the missing agent(s) or choose a different agent via AUTHOR_AGENT / REVIEWER_AGENT env vars.',
-    );
-    process.exit(1);
-  }
-
   if (config.tui) {
     // TUI mode owns the screen end-to-end: the run summary is shown inside
-    // the TUI header and confirmation is an in-TUI overlay, so we must NOT
-    // print to stdout or read from stdin via readline before launching it.
+    // the TUI header and setup/confirmation are in-TUI overlays, so we must
+    // NOT print to stdout or read from stdin via readline before launching it.
     const { runTui } = await import('../lib/renderers/tui.mjs');
     process.exitCode = await runTui({ config });
   } else {
+    ensureConfiguredAgentsAvailable(config);
     printRunSummary(config);
     if (!config.skipConfirm && !(await confirmRun())) {
       console.log('Cancelled.');
@@ -47,4 +32,32 @@ try {
 } catch (error) {
   reportError(error);
   process.exitCode = 1;
+}
+
+function ensureConfiguredAgentsAvailable(config) {
+  if (!config.authorSettings.agent || !config.reviewerSettings.agent) {
+    throw createConfigurationError('AUTHOR_AGENT and REVIEWER_AGENT are required in --cli mode.');
+  }
+
+  // Pre-flight: ensure the configured agents are actually launchable.
+  const agentsToCheck = [config.authorSettings.agent, config.reviewerSettings.agent];
+  const unique = [...new Map(agentsToCheck.map((a) => [a.id, a])).values()];
+  const missing = detectInstalledAgents(unique).filter((r) => !r.installed);
+  if (missing.length === 0) return;
+
+  for (const { agent } of missing) {
+    console.error(
+      `Error: agent "${agent.displayName}" is not available - neither "${agent.command}" nor any fallback command was found on PATH.`,
+    );
+  }
+  console.error(
+    '\nInstall the missing agent(s) or choose a different agent via AUTHOR_AGENT / REVIEWER_AGENT env vars.',
+  );
+  process.exit(1);
+}
+
+function createConfigurationError(message) {
+  const error = new Error(message);
+  error.name = 'ConfigurationError';
+  return error;
 }

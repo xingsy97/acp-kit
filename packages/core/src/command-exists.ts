@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { constants, existsSync, statSync } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
 
 export interface ResolveCommandOptions {
@@ -12,7 +12,7 @@ export interface ResolveCommandOptions {
  *
  * Handles:
  * - Absolute paths and paths containing slashes (checked via `existsSync`)
- * - Windows `PATHEXT` extensions (`.COM`, `.EXE`, `.BAT`, `.CMD`, …)
+ * - Windows executable/script extensions (`.COM`, `.EXE`, `.CMD`, `.BAT`, `.PS1`)
  * - Plain command names looked up across every `PATH` directory
  *
  * This is intentionally **synchronous** and side-effect free — no process is
@@ -25,9 +25,9 @@ export function isCommandOnPath(command: string): boolean {
 /**
  * Resolve a command to the concrete file that will be launched.
  *
- * On Windows this includes PATHEXT lookup, so npm-installed shims such as
- * `copilot-language-server.cmd` are returned with their real extension instead
- * of the extensionless command name.
+ * On Windows this checks the common executable/script shim extensions directly
+ * instead of trusting PATHEXT alone. npm/nvm installations can expose only a
+ * PowerShell shim (`.ps1`), and PATHEXT often omits `.PS1`.
  */
 export function resolveCommandOnPath(command: string, options: ResolveCommandOptions = {}): string | null {
   if (!command) return null;
@@ -40,14 +40,14 @@ export function resolveCommandOnPath(command: string, options: ResolveCommandOpt
   const pathDelimiter = platform === 'win32' ? ';' : delimiter;
   const paths = pathEnv.split(pathDelimiter).filter(Boolean);
   const extensions = platform === 'win32'
-    ? (options.pathext ?? process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+    ? windowsCommandExtensions(options.pathext ?? process.env.PATHEXT)
     : [''];
 
   for (const base of paths) {
     const direct = join(base, command);
     const directExists = existsSync(direct);
     if (platform !== 'win32') {
-      if (directExists) return direct;
+      if (isExecutableFile(direct)) return direct;
       continue;
     }
     const lowerDirect = direct.toLowerCase();
@@ -62,4 +62,30 @@ export function resolveCommandOnPath(command: string, options: ResolveCommandOpt
     if (directExists) return direct;
   }
   return null;
+}
+
+function windowsCommandExtensions(pathext: string | undefined): string[] {
+  const defaults = ['.COM', '.EXE', '.CMD', '.BAT', '.PS1'];
+  const configured = (pathext ?? '').split(';').filter(Boolean);
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const ext of [...configured, ...defaults]) {
+    const normalized = ext.startsWith('.') ? ext : `.${ext}`;
+    const key = normalized.toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function isExecutableFile(filePath: string): boolean {
+  try {
+    const stat = statSync(filePath);
+    if (!stat.isFile()) return false;
+    if (process.platform === 'win32') return true;
+    return Boolean(stat.mode & (constants.S_IXUSR | constants.S_IXGRP | constants.S_IXOTH));
+  } catch {
+    return false;
+  }
 }

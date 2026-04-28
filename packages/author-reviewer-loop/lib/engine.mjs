@@ -46,6 +46,11 @@ export function createLoopEngine({ config }) {
       { type: 'delta', ...event },
       { type: 'delta', flowId: nextFlowId++, ...event },
     ),
+    onReasoningDelta: (event) => publish(
+      { type: 'reasoningDelta', ...event },
+      { type: 'reasoningDelta', flowId: nextFlowId++, ...event },
+    ),
+    onReasoningCompleted: (event) => publish({ type: 'reasoningCompleted', ...event }, null),
     onToolStart: (event) => publish(
       { type: 'toolStart', ...event },
       { type: 'toolStart', status: PaneStatus.Running, flowId: nextFlowId++, ...event },
@@ -62,14 +67,14 @@ export function createLoopEngine({ config }) {
       { type: 'usageUpdate', ...event },
       { type: 'usageUpdate', ...event },
     ),
-    onTurnCompleted: (event) => publish({ type: 'turnCompleted', ...event }, null),
-    onTurnFailed: (event) => publish({ type: 'turnFailed', ...event }, null),
-    onTurnEnd: (event) => publish({ type: 'turnEnd', ...event }, null),
+    onTurnCompleted: (event) => publish({ type: 'turnCompleted', ...event }, { type: 'turnCompleted', ...event }),
+    onTurnFailed: (event) => publish({ type: 'turnFailed', ...event }, { type: 'turnFailed', ...event }),
+    onTurnEnd: (event) => publish({ type: 'turnEnd', ...event }, { type: 'turnEnd', ...event }),
     onResult: (result) => publish({ type: 'result', result }, { type: 'result', result }),
   };
 
   async function run() {
-    const { cwd, maxRounds, trace, authorSettings, reviewerSettings } = config;
+    const { cwd, maxRounds, trace, tui, authorSettings, reviewerSettings } = config;
     await fs.mkdir(cwd, { recursive: true });
     innerRenderer.onLaunching();
 
@@ -81,7 +86,7 @@ export function createLoopEngine({ config }) {
         reviewerSettings,
         cwd,
         trace,
-        captureTrace: trace,
+        captureTrace: Boolean(trace || tui),
         renderer: innerRenderer,
       });
 

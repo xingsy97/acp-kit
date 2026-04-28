@@ -33,12 +33,35 @@ Before launching agents, the CLI shows the full run configuration and asks for c
 - ACP-capable agent CLIs available on `PATH`
 - Login/auth already completed for the selected agents
 
-Defaults:
+Plain CLI defaults:
 
 | Role | Agent | Model |
 | --- | --- | --- |
-| AUTHOR | GitHub Copilot | `claude-opus-4.7` |
-| REVIEWER | Codex | `gpt-5.5` |
+| AUTHOR | GitHub Copilot | `gpt-5.4` |
+| REVIEWER | Codex | `gpt-5.4` |
+
+TUI mode opens a startup screen before the first run unless `--yes` / `ACP_REVIEW_YES=1` is set. The screen combines confirmation and setup: use `Tab` to switch AUTHOR/REVIEWER, `↑` / `↓` to pick an agent, `Space` to assign it to the active role, `m` to change that role's model, `e` to edit the task, `s` to toggle saving defaults, and `Enter` to start.
+
+Agent status is intentionally user-facing:
+
+| Status | Meaning |
+| --- | --- |
+| `Ready` | The agent can start immediately from a local command. |
+| `Will prepare` | The agent can be prepared automatically on first launch; network access may be needed. |
+| `Unavailable` | The agent cannot be launched in this environment. |
+
+Implementation details such as the exact helper package or fallback command are kept internal; the TUI only shows whether the agent is ready, can be prepared automatically, or is unavailable.
+
+TUI model choices are predefined per agent:
+
+| Agent id | Model choices |
+| --- | --- |
+| `codex` | `gpt-5.4`, `gpt-5.5` |
+| `claude` | `opus`, `default (agent default)` |
+| `copilot` | `gpt-5.4`, `gpt-5.5`, `claude-sonnet-4.6`, `claude-opus-4.7`, `claude-opus-4.7-1m` |
+| `gemini`, `qwen`, `opencode` | `default (agent default)` |
+
+The first listed model is the TUI default for that agent. If a model from the environment or saved config is not in the predefined list, the TUI keeps it as a selected custom option instead of discarding it.
 
 Override with environment variables:
 
@@ -59,6 +82,12 @@ npx @acp-kit/author-reviewer-loop .\demo-workspace "Build a small CLI"
 
 Set `AUTHOR_MODEL=''` or `REVIEWER_MODEL=''` to use that agent's default model. When an agent reports its available models, the CLI validates the configured model before Round 1 starts. If the configured model is not available, startup fails with the agent's model list and an environment variable example formatted for the current shell (`$Env:NAME='value'` in PowerShell, `export NAME='value'` in Unix-like shells).
 
+After a TUI setup selection, the startup screen can save the selection to `~/.acp-author-reviewer-loop.json`. Startup precedence is:
+
+1. Environment variables (`AUTHOR_AGENT`, `AUTHOR_MODEL`, `REVIEWER_AGENT`, `REVIEWER_MODEL`)
+2. `~/.acp-author-reviewer-loop.json`
+3. Built-in defaults (plain `--cli` mode only for agent/model)
+
 Supported built-in agent ids: `copilot`, `claude`, `codex`, `gemini`, `qwen`, `opencode`.
 
 ## Options
@@ -72,11 +101,16 @@ The Ink-based fullscreen TUI is the default renderer. Pass `--cli` (or set `ACP_
 - The TUI uses the terminal's alternate screen buffer, so it always occupies the entire visible viewport and never grows past the bottom of the screen. Your scrollback is restored on exit.
 - A split view shows AUTHOR on the left and REVIEWER on the right; each pane has a fixed height computed from the current terminal size and scrolls internally as new output arrives.
 - The header shows `cwd`, the task, max rounds, and a combined AUTHOR/REVIEWER status row with agent and model names.
-- Each AUTHOR/REVIEWER pane header shows cumulative input/output token usage as `In/Out 10.53M/0.5M Tk` when the agent reports ACP prompt usage.
+- Each AUTHOR/REVIEWER pane header shows the agent's reported token usage. Two distinct numbers can appear:
+  - `ctx 12K/200K Tk` &mdash; current **context-window** usage from ACP `usage_update` (tokens currently in context vs. context window size).
+  - `Σ in:1.2K out:3.4K` &mdash; **cumulative session totals** from ACP `PromptResponse.usage` (sum of input/output tokens across all turns so far).
+
+  When both are reported they are shown together: `ctx 12K/200K Tk · Σ in:1.2K out:3.4K`. The plain renderer prints the same string on a `[role usage] …` line.
 - Pane output soft-wraps by default and is pre-wrapped to whole words before rendering.
 - Tool-call rows include the command/input preview and output preview when available. Bursts of more than three continuous tool-call rows are collapsed into a compact success/failure summary so tool-heavy turns do not flood the pane.
 - Press `[` / `]` to select a concrete tool call in the focused pane, then `Enter` or `d` to inspect its full input and output. `Esc` or `q` returns to the flow view.
 - The raw ACP trace view pretty-prints each wire frame as readable multi-line JSON instead of a single long line.
+- TUI mode captures ACP wire messages for the trace view automatically; `ACP_REVIEW_TRACE=1` is only needed when you also want startup-failure traces printed to stderr.
 - Resizing the terminal re-flows the layout immediately.
 
 Keybindings:
@@ -119,10 +153,10 @@ Environment variables:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `AUTHOR_AGENT` | `copilot` | Agent that writes/modifies files. |
-| `AUTHOR_MODEL` | `claude-opus-4.7` | Model id passed via ACP `session/set_model`; set empty to skip. |
-| `REVIEWER_AGENT` | `codex` | Agent that reviews the working tree. |
-| `REVIEWER_MODEL` | `gpt-5.5` | Model id passed via ACP `session/set_model`; set empty to skip. |
+| `AUTHOR_AGENT` | TUI: saved/choose; CLI: `copilot` | Agent that writes/modifies files. |
+| `AUTHOR_MODEL` | TUI: saved/choose; CLI: `gpt-5.4` | Model id passed via ACP `session/set_model`; set empty to skip. |
+| `REVIEWER_AGENT` | TUI: saved/choose; CLI: `codex` | Agent that reviews the working tree. |
+| `REVIEWER_MODEL` | TUI: saved/choose; CLI: `gpt-5.4` | Model id passed via ACP `session/set_model`; set empty to skip. |
 | `MAX_ROUNDS` | `10` | Maximum author/reviewer iterations. |
 | `ACP_REVIEW_YES` | unset | Set to `1` to skip the confirmation prompt. |
 | `ACP_REVIEW_CLI` | unset | Set to `1` to use the plain line-based renderer (same as `--cli`). |

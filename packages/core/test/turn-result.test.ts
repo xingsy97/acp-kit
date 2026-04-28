@@ -56,6 +56,30 @@ describe('collectTurnResult', () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
+  it('forwards reasoning events to callbacks without mixing them into message text', async () => {
+    const { session } = createSession([
+      { type: 'reasoning.delta', sessionId: 's1', at: 1, reasoningId: 'r1', delta: 'Think first.' },
+      { type: 'reasoning.completed', sessionId: 's1', at: 2, reasoningId: 'r1', content: 'Think first.' },
+      { type: 'message.delta', sessionId: 's1', at: 3, messageId: 'm1', delta: 'Final' },
+      { type: 'turn.completed', sessionId: 's1', at: 4, turnId: 'turn1', stopReason: 'end_turn' },
+    ]);
+    const eventTypes: string[] = [];
+
+    const result = await collectTurnResult(session as never, 'review', {
+      includeEvents: true,
+      onEvent: (event) => eventTypes.push(event.type),
+    });
+
+    expect(result.text).toBe('Final');
+    expect(eventTypes).toEqual([
+      'reasoning.delta',
+      'reasoning.completed',
+      'message.delta',
+      'turn.completed',
+    ]);
+    expect(result.events?.map((event) => event.type)).toContain('reasoning.delta');
+  });
+
   it('collects partial token usage updates', async () => {
     const { session } = createSession([
       { type: 'session.usage.updated', sessionId: 's1', at: 1, inputTokens: 20 } as RuntimeSessionEvent,

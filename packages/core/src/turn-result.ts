@@ -83,12 +83,29 @@ export async function collectTurnResult(
       if (!state.text) state.text = event.content;
       notify(event);
     },
+    reasoningDelta: (event) => {
+      if (options.includeEvents) events.push(event);
+      notify(event);
+    },
+    reasoningCompleted: (event) => {
+      if (options.includeEvents) events.push(event);
+      notify(event);
+    },
     toolStart: (event) => {
       if (options.includeEvents) events.push(event);
       const tool = ensureTool(event.toolCallId, countChars(event.input));
       tool.name = event.name;
       tool.title = event.title;
       tool.status = 'running';
+      state.tools = [...tools.values()];
+      notify(event);
+    },
+    toolUpdate: (event) => {
+      if (options.includeEvents) events.push(event);
+      const tool = ensureTool(event.toolCallId);
+      tool.title = event.title ?? tool.title;
+      tool.status = event.status === 'pending' ? 'running' : event.status;
+      tool.outputChars = Math.max(tool.outputChars, countChars(event.output));
       state.tools = [...tools.values()];
       notify(event);
     },

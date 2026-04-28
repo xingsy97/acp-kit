@@ -23,6 +23,7 @@ export default defineConfig({
           { text: 'Getting Started', link: '/getting-started' },
           { text: 'API Overview', link: '/api-overview' },
           { text: 'Supported Agents', link: '/agents' },
+          { text: 'Author/Reviewer Loop', link: '/author-reviewer-loop' },
           { text: 'SDK vs Runtime', link: '/acp-sdk-vs-runtime' }
         ]
       },

@@ -16,7 +16,7 @@ import type {
   AcpTransportSession,
 } from '../runtime.js';
 import { composeWireMiddleware, normalizeWireMiddleware } from '../wire-middleware.js';
-import { isCommandOnPath } from '../command-exists.js';
+import { isCommandOnPath, resolveCommandOnPath } from '../command-exists.js';
 
 /* ------------------------------------------------------------------------- */
 /* Public process types                                                      */
@@ -142,9 +142,11 @@ export function nodeChildProcessTransport(
 }
 
 function resolveAgentLaunch(agent: AgentProfile, host: RuntimeHost): { command: string; args: string[] } | AgentProfile {
-  if (isCommandOnPath(agent.command)) return agent;
+  const primaryCommand = resolveCommandOnPath(agent.command);
+  if (primaryCommand) return { ...agent, command: primaryCommand };
   for (const fallback of agent.fallbackCommands ?? []) {
-    if (isCommandOnPath(fallback.command)) {
+    const fallbackCommand = resolveCommandOnPath(fallback.command);
+    if (fallbackCommand) {
       host.log?.({
         level: 'warn',
         message: 'ACP agent primary command was not found; using fallback command',
@@ -155,7 +157,7 @@ function resolveAgentLaunch(agent: AgentProfile, host: RuntimeHost): { command: 
           fallbackArgs: fallback.args,
         },
       });
-      return fallback;
+      return { command: fallbackCommand, args: fallback.args };
     }
   }
   return agent;
@@ -226,9 +228,15 @@ function quoteWindowsArgument(value: string): string {
   return `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, '$1$1')}"`;
 }
 
-function resolveLaunch(command: string, args: string[]): { command: string; args: string[] } {
-  if (process.platform !== 'win32') {
+export function resolveLaunch(command: string, args: string[], platform: NodeJS.Platform = process.platform): { command: string; args: string[] } {
+  if (platform !== 'win32') {
     return { command, args };
+  }
+  if (/\.ps1$/i.test(command)) {
+    return {
+      command: 'powershell.exe',
+      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', command, ...args],
+    };
   }
   const requiresCmd = command === 'npm' || command === 'npx' || /\.(cmd|bat)$/i.test(command);
   if (!requiresCmd) {

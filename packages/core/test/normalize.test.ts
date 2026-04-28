@@ -56,6 +56,31 @@ describe('normalizeAcpUpdate', () => {
     ]);
   });
 
+  it('reads nested reasoning text from array content blocks', () => {
+    const sessionId = 'session-reasoning-blocks';
+    const events = normalizeAcpUpdate(
+      {
+        sessionId,
+        update: {
+          sessionUpdate: 'thinking_chunk',
+          content: [
+            { type: 'thinking', thinking: 'first ' },
+            { type: 'reasoning', reasoning: [{ type: 'text', text: 'second' }] },
+          ],
+        },
+      } as never,
+      { sessionId, turnId: 'turn-1', reasoningId: 'reason-1' },
+    );
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'reasoning.delta',
+        reasoningId: 'reason-1',
+        delta: 'first second',
+      }),
+    ]);
+  });
+
   it('maps tool lifecycle updates', () => {
     const sessionId = 'session-2';
     const started = normalizeAcpUpdate(

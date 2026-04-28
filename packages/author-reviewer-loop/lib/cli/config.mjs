@@ -1,10 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import process from 'node:process';
 import { Command } from 'commander';
 import { agents, defaults } from '../config/agents.mjs';
-import { env, envChoice, envFlag, envPositiveInt } from './env.mjs';
+import { readPreferences, normalizePreferences, preferencesFilePath as defaultPreferencesFilePath } from '../config/preferences.mjs';
+import { env, envFlag, envPositiveInt } from './env.mjs';
 
-export function parseRunConfig({ argv } = {}) {
+export function parseRunConfig({ argv, preferences, preferencesPath } = {}) {
   let parsedArgs;
   const program = new Command()
     .name('author-reviewer-loop')
@@ -17,11 +19,12 @@ export function parseRunConfig({ argv } = {}) {
     .option('--tui', 'use the Ink TUI renderer (default; kept for compatibility)')
     .addHelpText('after', `
 Environment:
-  AUTHOR_AGENT=copilot|claude|codex|gemini|qwen|opencode   default: ${defaults.authorAgent}
-  AUTHOR_MODEL=<model-id>                                  default: ${defaults.authorModel}
-  REVIEWER_AGENT=copilot|claude|codex|gemini|qwen|opencode default: ${defaults.reviewerAgent}
-  REVIEWER_MODEL=<model-id>                                default: ${defaults.reviewerModel}
+  AUTHOR_AGENT=copilot|claude|codex|gemini|qwen|opencode   TUI: no built-in default; CLI default: ${defaults.authorAgent}
+  AUTHOR_MODEL=<model-id>                                  TUI: chosen per agent; CLI default: ${defaults.authorModel}
+  REVIEWER_AGENT=copilot|claude|codex|gemini|qwen|opencode TUI: no built-in default; CLI default: ${defaults.reviewerAgent}
+  REVIEWER_MODEL=<model-id>                                TUI: chosen per agent; CLI default: ${defaults.reviewerModel}
   MAX_ROUNDS=<n>                                            default: ${defaults.maxRounds}
+  Saved config: ${defaultPreferencesFilePath()}
   ACP_REVIEW_YES=1                                          skip confirmation prompt
   ACP_REVIEW_CLI=1                                          use the plain line-based renderer
   ACP_REVIEW_TUI=1                                          use the Ink TUI renderer (default)
@@ -39,6 +42,28 @@ Environment:
   const { task, taskSource } = resolveTask(parsedArgs.taskParts);
   const opts = program.opts();
   const tui = resolveRendererMode(opts);
+  const resolvedPreferencesPath = preferencesPath ?? defaultPreferencesFilePath();
+  const saved = normalizePreferences(preferences ?? readPreferences({ filePath: resolvedPreferencesPath }));
+  const authorResolved = resolveRoleConfig({
+    role: 'author',
+    agentEnvName: 'AUTHOR_AGENT',
+    modelEnvName: 'AUTHOR_MODEL',
+    preferencesPath: resolvedPreferencesPath,
+    saved,
+    defaultAgent: defaults.authorAgent,
+    defaultModel: defaults.authorModel,
+    useBuiltInDefaults: !tui,
+  });
+  const reviewerResolved = resolveRoleConfig({
+    role: 'reviewer',
+    agentEnvName: 'REVIEWER_AGENT',
+    modelEnvName: 'REVIEWER_MODEL',
+    preferencesPath: resolvedPreferencesPath,
+    saved,
+    defaultAgent: defaults.reviewerAgent,
+    defaultModel: defaults.reviewerModel,
+    useBuiltInDefaults: !tui,
+  });
 
   const config = {
     cwd,
@@ -48,19 +73,27 @@ Environment:
     trace: envFlag('ACP_REVIEW_TRACE'),
     skipConfirm: Boolean(opts.yes) || envFlag('ACP_REVIEW_YES'),
     tui,
+    preferencesPath: resolvedPreferencesPath,
     authorSettings: {
-      agent: envChoice('AUTHOR_AGENT', agents, defaults.authorAgent),
-      model: env('AUTHOR_MODEL', defaults.authorModel, { empty: null }),
+      agent: authorResolved.agent,
+      agentId: authorResolved.agentId,
+      agentSource: authorResolved.agentSource,
+      model: authorResolved.model,
+      modelSource: authorResolved.modelSource,
       modelEnvName: 'AUTHOR_MODEL',
       prompt: ({ round, feedback }) => round === 1
         ? `You are the AUTHOR. Working dir: ${cwd}\n\nTask: ${config.task}\n\n`
-          + 'Use your filesystem tools to create or modify files on disk. Do not paste code.'
+          + 'Use your filesystem tools to create or modify files on disk. Do not paste code. '
+          + 'Fix root causes, keep changes focused, and validate when practical.'
         : `You are the AUTHOR. Working dir: ${cwd}\n\nCurrent task: ${config.task}\n\n`
           + `REVIEWER feedback:\n${feedback}\n\nUpdate the files in ${cwd} to address every point.`,
     },
     reviewerSettings: {
-      agent: envChoice('REVIEWER_AGENT', agents, defaults.reviewerAgent),
-      model: env('REVIEWER_MODEL', defaults.reviewerModel, { empty: null }),
+      agent: reviewerResolved.agent,
+      agentId: reviewerResolved.agentId,
+      agentSource: reviewerResolved.agentSource,
+      model: reviewerResolved.model,
+      modelSource: reviewerResolved.modelSource,
       modelEnvName: 'REVIEWER_MODEL',
       prompt: ({ round, feedback, authorReply }) =>
         `You are the REVIEWER. Round: ${round}\n\nOriginal task: ${config.task}\n\n`
@@ -70,10 +103,76 @@ Environment:
         + 'Re-read every file the AUTHOR claims to have changed before judging; '
         + 'do not assume nothing changed just because earlier rounds looked different. '
         + 'Reply APPROVED on its own line if it fully solves the task with no obvious bugs; '
-        + 'otherwise reply with a terse numbered list of issues.',
+        + 'otherwise reply with a terse numbered list of issues, each with concrete fix guidance when useful. '
+        + 'Prefer actionable suggestions over questions; mention exact files or behavior that still needs work.',
     },
   };
   return config;
+}
+
+export function applyRoleSelection(config, { author, reviewer }) {
+  applyOneRole(config.authorSettings, author);
+  applyOneRole(config.reviewerSettings, reviewer);
+}
+
+function applyOneRole(settings, selection) {
+  const agent = agents[selection?.agentId];
+  if (!agent) {
+    throw createConfigurationError(`Selected agent "${selection?.agentId}" is not supported.`);
+  }
+  settings.agent = agent;
+  settings.agentId = selection.agentId;
+  settings.agentSource = selection.agentSource ?? 'tui';
+  settings.model = selection.model ?? null;
+  settings.modelSource = selection.modelSource ?? 'tui';
+}
+
+function resolveRoleConfig({
+  role,
+  agentEnvName,
+  modelEnvName,
+  preferencesPath,
+  saved,
+  defaultAgent,
+  defaultModel,
+  useBuiltInDefaults,
+}) {
+  const savedRole = saved[role] ?? {};
+  const agentValue = valueWithSource({
+    envName: agentEnvName,
+    savedValue: savedRole.agent,
+    defaultValue: useBuiltInDefaults ? defaultAgent : undefined,
+  });
+  const modelValue = valueWithSource({
+    envName: modelEnvName,
+    savedValue: savedRole.model,
+    defaultValue: useBuiltInDefaults ? defaultModel : undefined,
+    emptyEnvValue: null,
+  });
+  const agentId = agentValue.value ? String(agentValue.value).toLowerCase() : undefined;
+  if (agentId && !agents[agentId]) {
+    throw createConfigurationError(
+      `${agentValue.source === 'env' ? agentEnvName : `${role}.agent in ${preferencesPath}`}=${agentId} is not supported. Use one of: ${Object.keys(agents).join(', ')}.`,
+    );
+  }
+
+  return {
+    agent: agentId ? agents[agentId] : null,
+    agentId,
+    agentSource: agentValue.source,
+    model: modelValue.value,
+    modelSource: modelValue.source,
+  };
+}
+
+function valueWithSource({ envName, savedValue, defaultValue, emptyEnvValue }) {
+  if (envName in process.env) {
+    const raw = process.env[envName]?.trim();
+    return { value: raw || emptyEnvValue, source: 'env' };
+  }
+  if (savedValue !== undefined) return { value: savedValue, source: 'config' };
+  if (defaultValue !== undefined) return { value: defaultValue, source: 'default' };
+  return { value: undefined, source: 'unset' };
 }
 
 function previousFeedbackSection(feedback) {
@@ -117,4 +216,10 @@ function isReadableFile(filePath) {
   } catch {
     return false;
   }
+}
+
+function createConfigurationError(message) {
+  const error = new Error(message);
+  error.name = 'ConfigurationError';
+  return error;
 }

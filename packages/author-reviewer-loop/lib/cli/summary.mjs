@@ -3,14 +3,19 @@ export function formatRunSummary({ cwd, task, taskSource, authorSettings, review
   cwd:            ${cwd}
   task source:    ${taskSource?.kind === 'file' ? taskSource.path : '(inline text)'}
   task:           ${task}
-  author:         ${authorSettings.agent.displayName} (${authorSettings.agent.id})
+  author:         ${formatAgent(authorSettings)}
   author model:   ${authorSettings.model || '(agent default)'}
-  reviewer:       ${reviewerSettings.agent.displayName} (${reviewerSettings.agent.id})
+  reviewer:       ${formatAgent(reviewerSettings)}
   reviewer model: ${reviewerSettings.model || '(agent default)'}
   max rounds:     ${maxRounds}
   trace:          ${trace ? 'enabled' : 'disabled'}
   renderer:       ${tui ? 'tui (ink)' : 'plain'}
 `;
+}
+
+function formatAgent(settings) {
+  if (!settings.agent) return '(choose in TUI)';
+  return `${settings.agent.displayName} (${settings.agent.id})`;
 }
 
 export function printRunSummary(config) {

@@ -43,6 +43,13 @@ export function createPlainRenderer() {
   };
 
   const toolStatusLabel = (status) => status === 'completed' ? 'done' : status;
+  const divider = (label = '') => {
+    const width = Math.max(32, Math.min(80, process.stdout.columns || 80));
+    const text = label ? ` ${label} ` : '';
+    const fill = Math.max(0, width - text.length);
+    const left = Math.floor(fill / 2);
+    return `${'─'.repeat(left)}${text}${'─'.repeat(fill - left)}`;
+  };
   let toolBurstCount = 0;
   let toolBurstHidden = 0;
   const lastUsageByRole = new Map();
@@ -165,14 +172,25 @@ export function createPlainRenderer() {
     return String(tokens);
   };
 
+  // Two distinct numbers can arrive for one role:
+  //   * inputTokens / outputTokens are CUMULATIVE session totals reported by
+  //     ACP `PromptResponse.usage` (sum across all turns so far).
+  //   * used / size are a CONTEXT-WINDOW snapshot reported by ACP
+  //     `usage_update` (tokens currently in context vs. context window size).
+  // Show whichever is available; show both when both are.
   const formatUsage = (usage) => {
-    const input = Number.isFinite(usage?.inputTokens) ? usage.inputTokens : 0;
-    const output = Number.isFinite(usage?.outputTokens) ? usage.outputTokens : 0;
-    if (input > 0 || output > 0) return `In/Out ${formatTokenCount(input)}/${formatTokenCount(output)} Tk`;
+    const parts = [];
     const used = Number.isFinite(usage?.used) ? usage.used : 0;
     const size = Number.isFinite(usage?.size) ? usage.size : 0;
-    if (used > 0 || size > 0) return `Used ${formatTokenCount(used)}/${formatTokenCount(size)} Tk`;
-    return '';
+    if (used > 0 || size > 0) {
+      parts.push(`ctx ${formatTokenCount(used)}/${formatTokenCount(size)} Tk`);
+    }
+    const input = Number.isFinite(usage?.inputTokens) ? usage.inputTokens : 0;
+    const output = Number.isFinite(usage?.outputTokens) ? usage.outputTokens : 0;
+    if (input > 0 || output > 0) {
+      parts.push(`\u03A3 in:${formatTokenCount(input)} out:${formatTokenCount(output)}`);
+    }
+    return parts.join(' \u00B7 ');
   };
 
   const logUsage = ({ role, usage }) => {
@@ -183,6 +201,13 @@ export function createPlainRenderer() {
     lastUsageByRole.set(role, label);
     lineFeed();
     console.log(color('gray', `  [${role.toLowerCase()} usage] ${label}`));
+  };
+
+  const writeReasoningDelta = (event) => {
+    if (!event.delta) return;
+    if (!midLine) process.stdout.write(color('gray', `\n  [${event.role.toLowerCase()} thinking] `));
+    process.stdout.write(color('gray', event.delta.replace(/\n/g, '\n  [thinking] ')));
+    midLine = !event.delta.endsWith('\n');
   };
 
   const writeTextDelta = (delta) => {
@@ -221,7 +246,8 @@ export function createPlainRenderer() {
         switch (event.type) {
           case 'launching':
             flushToolBurst();
-            console.log('Launching agents in parallel (this can take a few seconds on cold start)...');
+            console.log(color('cyan', divider('ACP Author/Reviewer Loop')));
+            console.log(color('gray', 'Launching agents in parallel. Cold starts can take a few seconds.'));
             return;
           case 'roleStatus':
             flushToolBurst();
@@ -229,11 +255,18 @@ export function createPlainRenderer() {
             return;
           case 'turnStart':
             flushToolBurst();
-            console.log(`\n${'-'.repeat(64)}\nRound ${event.round} - ${event.role}\n${'-'.repeat(64)}`);
+            console.log(`\n${color('cyan', divider(`Round ${event.round} · ${event.role}`))}`);
             return;
           case 'delta':
             flushToolBurst();
             writeTextDelta(event.delta);
+            return;
+          case 'reasoningDelta':
+            flushToolBurst();
+            writeReasoningDelta(event);
+            return;
+          case 'reasoningCompleted':
+            lineFeed();
             return;
           case 'toolStart':
             lineFeed();
@@ -264,9 +297,9 @@ export function createPlainRenderer() {
           case 'result': {
             flushToolBurst();
             const { approved, feedback, maxRounds, cwd } = event.result;
-            console.log('\n' + '='.repeat(64));
-            if (approved) console.log(`\n\u2705  APPROVED  \u2705  Files under ${cwd}.\n`);
-            else console.log(`Not approved after ${maxRounds} rounds.\nLast feedback:\n${feedback}`);
+            console.log(`\n${color(approved ? 'green' : 'yellow', divider(approved ? 'APPROVED' : 'NOT APPROVED'))}`);
+            if (approved) console.log(`${color('green', '✓ Approved')} · Files under ${cwd}.\n`);
+            else console.log(`${color('yellow', `Not approved after ${maxRounds} rounds.`)}\nLast feedback:\n${feedback}`);
             return;
           }
           default:

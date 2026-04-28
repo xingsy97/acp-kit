@@ -22,15 +22,14 @@ function resolveAt(context: NormalizeUpdateContext): number {
 }
 
 function readTextPayload(value: unknown): string {
-  if (typeof value === 'string') {
-    return value;
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(readTextPayload).join('');
+  if (!value || typeof value !== 'object') return '';
+  const record = value as Record<string, unknown>;
+  for (const key of ['text', 'content', 'delta', 'thinking', 'reasoning']) {
+    if (typeof record[key] === 'string' || Array.isArray(record[key])) return readTextPayload(record[key]);
   }
-  if (!value || typeof value !== 'object') {
-    return '';
-  }
-  return typeof (value as { text?: unknown }).text === 'string'
-    ? (value as { text: string }).text
-    : '';
+  return '';
 }
 
 function normalizeToolStatus(status: unknown): RuntimeToolStatus {
@@ -124,7 +123,10 @@ export function normalizeAcpUpdate(
         delta,
       }];
     }
-    case 'agent_thought_chunk': {
+    case 'agent_thought_chunk':
+    case 'agent_reasoning_chunk':
+    case 'reasoning_chunk':
+    case 'thinking_chunk': {
       const delta = readTextPayload(update.content);
       if (!delta) return [];
       return [{
@@ -134,6 +136,20 @@ export function normalizeAcpUpdate(
         turnId,
         reasoningId: context.reasoningId || turnId || 'reasoning',
         delta,
+      }];
+    }
+    case 'agent_thought_completed':
+    case 'agent_reasoning_completed':
+    case 'reasoning_completed':
+    case 'thinking_completed': {
+      const content = readTextPayload(update.content);
+      return [{
+        type: 'reasoning.completed',
+        sessionId,
+        at,
+        turnId,
+        reasoningId: context.reasoningId || turnId || 'reasoning',
+        content,
       }];
     }
     case 'tool_call': {

@@ -1,5 +1,5 @@
 export const PaneStatus = Object.freeze({
-  Pending: 'pending',
+  Pending: 'waiting',
   Running: 'running',
   Completed: 'completed',
   Failed: 'failed',
@@ -43,6 +43,9 @@ function emptyPane() {
     stopReason: null,
     error: null,
     chars: 0,
+    startedAt: null,
+    finishedAt: null,
+    durationMs: null,
   };
 }
 
@@ -53,7 +56,7 @@ function emptyRound() {
 export function initialState() {
   return {
     phase: Phase.Idle,
-    statuses: { AUTHOR: 'pending', REVIEWER: 'pending' },
+    statuses: { AUTHOR: 'launching', REVIEWER: 'launching' },
     rounds: new Map(),
     order: [],
     trace: [],
@@ -138,46 +141,55 @@ function paneFromTurnSnapshot(snapshot, previous = emptyPane(), cumulativeUsage 
   const tools = Array.isArray(snapshot.tools) ? snapshot.tools : [];
   const parts = text.split('\n');
   const current = parts.pop() ?? '';
-  const status = snapshot.status === 'completed'
-    ? PaneStatus.Completed
-    : snapshot.status === 'failed' || snapshot.status === 'cancelled'
-      ? PaneStatus.Failed
-      : PaneStatus.Running;
+  const status = normalizeSnapshotStatus(snapshot.status, previous.status);
   return {
     status,
     lines: parts,
     current,
     flow: previous.flow,
-    tools: tools.map((tool) => ({
-      id: tool.id,
-      tag: tool.tag,
-      name: tool.name,
-      title: tool.title || tool.name || tool.id,
-      status: tool.status,
-      chars: maxFinite(tool.inputChars, tool.outputChars),
-      input: previous.tools.find((item) => item.id === tool.id)?.input,
-      output: previous.tools.find((item) => item.id === tool.id)?.output,
-    })),
+    tools: tools.map((tool) => {
+      const previousTool = previous.tools.find((item) => item.id === tool.id);
+      return {
+        id: tool.id,
+        tag: tool.tag ?? previousTool?.tag,
+        name: tool.name ?? previousTool?.name,
+        title: tool.title || tool.name || previousTool?.title || tool.id,
+        status: tool.status ?? previousTool?.status,
+        chars: Math.max(maxFinite(tool.inputChars, tool.outputChars), previousTool?.chars ?? 0),
+        input: previousTool?.input,
+        output: previousTool?.output,
+      };
+    }),
     usage: cumulativeUsage ?? previous.usage,
     turnUsage: snapshot.usage ?? previous.turnUsage,
     stopReason: snapshot.stopReason,
     error: snapshot.error,
     chars: text.length,
+    startedAt: previous.startedAt,
+    finishedAt: previous.finishedAt,
+    durationMs: previous.durationMs,
   };
+}
+
+function normalizeSnapshotStatus(status, fallback) {
+  if (status === 'completed') return PaneStatus.Completed;
+  if (status === 'failed' || status === 'cancelled') return PaneStatus.Failed;
+  if (status === 'running') return PaneStatus.Running;
+  return fallback;
 }
 
 function maxFinite(...values) {
   return values.reduce((max, value) => Number.isFinite(value) ? Math.max(max, value) : max, 0);
 }
 
-function appendTextFlow(pane, delta, flowId) {
+function appendTextFlow(pane, delta, flowId, kind = 'text') {
   if (!delta) return pane;
   const flow = [...pane.flow];
   const last = flow[flow.length - 1];
-  if (last?.kind === 'text') {
+  if (last?.kind === kind && (kind !== 'reasoning' || !flowId || last.sourceId === flowId)) {
     flow[flow.length - 1] = { ...last, text: last.text + delta };
   } else {
-    flow.push({ id: `flow-${flowId}`, kind: 'text', text: delta });
+    flow.push({ id: `flow-${flowId}`, sourceId: flowId, kind, text: delta });
   }
   return { ...pane, flow };
 }
@@ -279,12 +291,22 @@ export function reduce(state, action) {
     case 'roleStatus':
       return { ...state, statuses: { ...state.statuses, [action.role]: action.message } };
     case 'turnStart': {
-      const next = ensureRound({ ...state, phase: Phase.Running, result: null }, action.round);
+      const otherRole = action.role === 'AUTHOR' ? 'REVIEWER' : 'AUTHOR';
+      const base = {
+        ...state,
+        phase: Phase.Running,
+        result: null,
+        statuses: { ...state.statuses, [action.role]: 'running', [otherRole]: PaneStatus.Pending },
+      };
+      const next = ensureRound(base, action.round);
       return patchPane(next, action.round, action.role, (p) => ({
         ...p,
         status: PaneStatus.Running,
         usage: state.usage[action.role],
         turnUsage: null,
+        startedAt: action.at ?? Date.now(),
+        finishedAt: null,
+        durationMs: null,
       }));
     }
     case 'turnSnapshot': {
@@ -303,7 +325,18 @@ export function reduce(state, action) {
       return patchPane(ensureRound(state, action.round), action.round, action.role, (pane) =>
         appendTextFlow(pane, action.delta, action.flowId),
       );
+    case 'reasoningDelta':
+      return patchPane(ensureRound(state, action.round), action.round, action.role, (pane) =>
+        appendTextFlow(pane, action.delta, action.reasoningId ?? action.flowId, 'reasoning'),
+      );
+    case 'turnCompleted':
+      return finishPaneTurn(state, action, PaneStatus.Completed, { stopReason: action.stopReason });
+    case 'turnFailed':
+      return finishPaneTurn(state, action, PaneStatus.Failed, { error: action.error });
+    case 'turnEnd':
+      return finishPaneTurn(state, action, undefined, {}, { preserveTerminalStatus: true });
     case 'toolStart':
+    case 'toolUpdate':
     case 'toolEnd':
       return patchPane(ensureRound(state, action.round), action.round, action.role, (pane) =>
         appendOrUpdateToolFlow(pane, action, action.flowId),
@@ -332,4 +365,23 @@ export function reduce(state, action) {
     default:
       return state;
   }
+}
+
+function finishPaneTurn(state, action, status, patch = {}, options = {}) {
+  return patchPane(ensureRound(state, action.round), action.round, action.role, (pane) => {
+    const finishedAt = action.at ?? Date.now();
+    const startedAt = pane.startedAt ?? finishedAt;
+    const nextStatus = options.preserveTerminalStatus
+      && (pane.status === PaneStatus.Completed || pane.status === PaneStatus.Failed)
+      ? pane.status
+      : status ?? pane.status;
+    return {
+      ...pane,
+      ...patch,
+      status: nextStatus,
+      startedAt,
+      finishedAt,
+      durationMs: Math.max(0, finishedAt - startedAt),
+    };
+  });
 }

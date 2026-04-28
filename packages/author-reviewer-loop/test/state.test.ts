@@ -69,6 +69,89 @@ describe('author-reviewer-loop state reducer', () => {
     ]);
   });
 
+  it('merges same reasoning stream and separates different reasoning streams', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'reasoningDelta', flowId: 1, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'Plan first. ' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 2, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'Then patch.' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 3, reasoningId: 'r2', round: 1, role: 'AUTHOR', delta: 'Check result.' });
+    state = reduce(state, { type: 'delta', flowId: 4, round: 1, role: 'AUTHOR', delta: 'Done.' });
+
+    expect(state.rounds.get(1)?.AUTHOR.flow).toEqual([
+      { id: 'flow-r1', sourceId: 'r1', kind: 'reasoning', text: 'Plan first. Then patch.' },
+      { id: 'flow-r2', sourceId: 'r2', kind: 'reasoning', text: 'Check result.' },
+      { id: 'flow-4', sourceId: 4, kind: 'text', text: 'Done.' },
+    ]);
+  });
+
+  it('updates a live tool call from tool.update without adding a new row', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'toolStart', flowId: 1, round: 1, role: 'REVIEWER', toolCallId: 'tool-1', status: PaneStatus.Running, name: 'shell', title: 'Run command' });
+    state = reduce(state, { type: 'toolUpdate', flowId: 2, round: 1, role: 'REVIEWER', toolCallId: 'tool-1', status: 'running', output: 'partial output', chars: 14 });
+
+    const pane = state.rounds.get(1)?.REVIEWER;
+    expect(pane?.flow.filter((item) => item.kind === 'tool')).toHaveLength(1);
+    expect(pane?.tools[0]).toMatchObject({ id: 'tool-1', status: 'running', output: 'partial output', chars: 14 });
+  });
+
+  it('records per-role turn duration', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'turnStart', round: 1, role: 'AUTHOR', at: 1000 });
+    state = reduce(state, { type: 'turnCompleted', round: 1, role: 'AUTHOR', at: 2450, stopReason: 'end_turn' });
+
+    expect(state.rounds.get(1)?.AUTHOR).toMatchObject({
+      status: PaneStatus.Completed,
+      startedAt: 1000,
+      finishedAt: 2450,
+      durationMs: 1450,
+      stopReason: 'end_turn',
+    });
+  });
+
+  it('keeps completed status after the final turnEnd event', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'turnStart', round: 1, role: 'AUTHOR', at: 1000 });
+    state = reduce(state, { type: 'turnCompleted', round: 1, role: 'AUTHOR', at: 2000, stopReason: 'end_turn' });
+    state = reduce(state, { type: 'turnEnd', round: 1, role: 'AUTHOR', at: 2100 });
+
+    expect(state.rounds.get(1)?.AUTHOR).toMatchObject({
+      status: PaneStatus.Completed,
+      durationMs: 1100,
+    });
+  });
+
+  it('does not treat status-less snapshots as running before a turn starts', () => {
+    const state = reduce(initialState(), {
+      type: 'turnSnapshot',
+      round: 1,
+      role: 'REVIEWER',
+      snapshot: { text: '' },
+    });
+
+    expect(state.rounds.get(1)?.REVIEWER.status).toBe(PaneStatus.Pending);
+  });
+
+  it('keeps later round reviewer unstarted while author is running', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'turnStart', round: 2, role: 'AUTHOR', at: 1000 });
+
+    const round = state.rounds.get(2);
+    expect(round?.AUTHOR.startedAt).toBe(1000);
+    expect(round?.AUTHOR.status).toBe(PaneStatus.Running);
+    expect(round?.REVIEWER.startedAt).toBeNull();
+    expect(round?.REVIEWER.status).toBe(PaneStatus.Pending);
+    expect(state.statuses).toMatchObject({ AUTHOR: 'running', REVIEWER: PaneStatus.Pending });
+  });
+
+  it('keeps merged tool details when a later snapshot arrives', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'toolStart', flowId: 1, round: 1, role: 'REVIEWER', toolCallId: 'tool-1', status: PaneStatus.Running, title: 'Run command' });
+    state = reduce(state, { type: 'toolUpdate', flowId: 2, round: 1, role: 'REVIEWER', toolCallId: 'tool-1', status: 'running', output: 'partial output', chars: 14 });
+    state = reduce(state, { type: 'turnSnapshot', round: 1, role: 'REVIEWER', snapshot: { status: 'running', text: '', tools: [{ id: 'tool-1', tag: '#1', title: 'Run command', status: 'running', inputChars: 3, outputChars: 4 }] } });
+
+    expect(state.rounds.get(1)?.REVIEWER.tools[0]).toMatchObject({ id: 'tool-1', output: 'partial output', chars: 14 });
+    expect(state.rounds.get(1)?.REVIEWER.flow.filter((item) => item.kind === 'tool')).toHaveLength(1);
+  });
+
   it('preserves nonzero context usage when a later same-size snapshot reports zero used', () => {
     let state = initialState();
     state = reduce(state, {

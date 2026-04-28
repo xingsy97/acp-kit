@@ -11,6 +11,7 @@ import {
   type SpawnProcess,
   type WireMiddleware,
 } from '../src/index.js';
+import { resolveLaunch } from '../src/transports/node.js';
 
 function createFakeSpawn(): SpawnProcess {
   return () => ({
@@ -22,6 +23,13 @@ function createFakeSpawn(): SpawnProcess {
 }
 
 describe('AcpRuntime', () => {
+  it('launches Windows PowerShell shims through powershell.exe', () => {
+    expect(resolveLaunch('C:/nvm4w/nodejs/codex-acp.ps1', ['--flag'], 'win32')).toEqual({
+      command: 'powershell.exe',
+      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'C:/nvm4w/nodejs/codex-acp.ps1', '--flag'],
+    });
+  });
+
   it('creates a session and emits normalized prompt lifecycle events', async () => {
     let capturedClient: { sessionUpdate(notification: unknown): Promise<void> } | null = null;
     const connection = {

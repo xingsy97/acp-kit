@@ -8,6 +8,32 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-04-29
+
+### Added
+
+- `@acp-kit/author-reviewer-loop` TUI now ships an in-app agent and model picker for AUTHOR and REVIEWER, persisting the selection to `~/.acp-author-reviewer-loop.json` so subsequent runs reuse the same choices unless overridden by `AUTHOR_AGENT` / `AUTHOR_MODEL` / `REVIEWER_AGENT` / `REVIEWER_MODEL` env vars. CLI mode still uses built-in defaults; TUI mode no longer hard-codes them.
+- `@acp-kit/author-reviewer-loop` exposes `agentChoices`, `modelChoices`, `defaultModelForAgent`, `modelChoicesForAgent`, and `applyRoleSelection` from the agents config module so the TUI selection screen and tests can share one source of truth.
+- `@acp-kit/author-reviewer-loop` engine now also forwards `reasoningDelta` and `reasoningCompleted` events to the renderer, and threads `turnCompleted` / `turnFailed` / `turnEnd` through the trace pipeline so the TUI can display per-flow turn lifecycle markers.
+- `@acp-kit/author-reviewer-loop` engine state now tracks pane `startedAt` / `finishedAt` / `durationMs` and uses dedicated `launching` / `waiting` statuses for clearer TUI run state.
+- New documentation page [docs/author-reviewer-loop](https://acpkit.github.io/acp-kit/author-reviewer-loop) describing the demo, why single-agent self-review fails, the renderers, and the diagnostics env vars. Linked from the docs sidebar.
+
+### Changed
+
+- `@acp-kit/author-reviewer-loop` default CLI models updated to `gpt-5.4` for both AUTHOR and REVIEWER.
+- `@acp-kit/author-reviewer-loop` plain and TUI renderers now display token usage as `ctx X/Y Tk` (context window from `usage_update`) and `Σ in:N out:N` (cumulative session totals from `PromptResponse.usage`), joined with `·`, instead of the previous ambiguous `In/Out`/`Used` labels. A header comment in each renderer documents the two ACP sources.
+- `@acp-kit/author-reviewer-loop` reviewer prompt now asks for actionable suggestions with concrete fix guidance, and the author prompt now reminds the AUTHOR to fix root causes and validate when practical.
+- `@acp-kit/author-reviewer-loop` package `homepage` now points at the new dedicated docs page.
+- `release-prep` skill rewritten to drop dedicated `Release X.Y.Z` commits: releases now ride on top of normal development commits and are marked solely by the tag.
+
+### Fixed
+
+- `@acp-kit/core` `collectTurnResult` now folds the session transcript's session usage into the final result and no longer lets a follow-up usage update with a zero `used` overwrite a positive prior value when `size` is unchanged.
+- `@acp-kit/core` `normalizeAcpUpdate` accepts ACP `usage_update` payloads that report `currentTokens` / `tokenLimit` (and snake_case variants) in addition to `used` / `size`.
+- `@acp-kit/core` `resolveCommandOnPath` resolves Windows PowerShell `.ps1` shims even when `PATHEXT` omits `.PS1`, fixing agent detection for installs that ship PowerShell launchers.
+- `@acp-kit/author-reviewer-loop` agent availability pre-flight is now skipped when the relevant role has not been chosen yet (TUI selection mode) and runs at TUI launch time once the choice is made.
+- `@acp-kit/author-reviewer-loop` engine reducer tolerates partial pane snapshots and missing duration fields without throwing.
+
 ## [0.6.7] - 2026-04-28
 
 ### Fixed

@@ -83,7 +83,7 @@ describe('author-reviewer-loop engine', () => {
     });
   });
 
-  it('does not capture expensive wire traces in TUI mode unless trace is enabled', async () => {
+  it('captures wire traces in TUI mode even when trace logging is disabled', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
     const cfg = { ...config(1), tui: true, trace: false };
@@ -99,12 +99,12 @@ describe('author-reviewer-loop engine', () => {
     expect(mocks.openRole).toHaveBeenCalledWith(expect.objectContaining({
       role: 'AUTHOR',
       trace: false,
-      captureTrace: false,
+      captureTrace: true,
     }));
     expect(mocks.openRole).toHaveBeenCalledWith(expect.objectContaining({
       role: 'REVIEWER',
       trace: false,
-      captureTrace: false,
+      captureTrace: true,
     }));
   });
 

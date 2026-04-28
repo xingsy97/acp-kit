@@ -10,7 +10,9 @@ import { formatEnvAssignment } from '../config/shell.mjs';
 export async function openRole({ role, settings, cwd, trace, captureTrace, renderer }) {
   const inspector = createRuntimeInspector({ includeWire: Boolean(trace || captureTrace) });
   const unsubscribeTrace = renderer.onTraceEntry
-    ? inspector.onEntry((entry) => renderer.onTraceEntry({ role, entry }))
+    ? inspector.onEntry((entry) => {
+      renderer.onTraceEntry?.({ role, entry });
+    })
     : () => {};
   const fsHost = createLocalFileSystemHost({ root: cwd });
   const terminalHost = createLocalTerminalHost({
@@ -31,8 +33,18 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
   });
 
   let session;
+  let unsubscribeUsage = () => {};
   try {
     session = await runtime.newSession({ cwd });
+    if (renderer.onUsageUpdate) {
+      unsubscribeUsage = session.on('session.usage.updated', (event) => {
+        if (process.env.ACP_REVIEW_DEBUG_USAGE) {
+          process.stderr.write(`[usage] ${role} ${JSON.stringify(event)}\n`);
+        }
+        const usage = readUsage(event);
+        if (usage) renderer.onUsageUpdate({ role, usage });
+      });
+    }
     if (settings.model) {
       renderer.onRoleStatus?.({ role, message: `session ready, setting model ${settings.model}...` });
       await setRequiredModel({ role, session, settings });
@@ -45,11 +57,13 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
       inspector,
       session,
       close: async () => {
+        unsubscribeUsage();
         unsubscribeTrace();
         await cleanupRoleResources({ session, runtime, terminalHost });
       },
     };
   } catch (error) {
+    unsubscribeUsage();
     unsubscribeTrace();
     await cleanupRoleResources({ session, runtime, terminalHost }).catch((cleanupError) => {
       console.error(cleanupError instanceof Error ? cleanupError.message : String(cleanupError));
@@ -61,6 +75,42 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
   }
 }
 
+function readUsage(value) {
+  if (!value || typeof value !== 'object') return null;
+  const usage = {
+    used: readNumber(value, 'used', 'currentTokens', 'current_tokens'),
+    size: readNumber(value, 'size', 'tokenLimit', 'token_limit'),
+    cost: readOptionalNumber(value, 'cost'),
+    inputTokens: readNumber(value, 'inputTokens', 'input_tokens'),
+    outputTokens: readNumber(value, 'outputTokens', 'output_tokens'),
+    totalTokens: readNumber(value, 'totalTokens', 'total_tokens'),
+    cachedReadTokens: readNumber(value, 'cachedReadTokens', 'cached_read_tokens'),
+    cachedWriteTokens: readNumber(value, 'cachedWriteTokens', 'cached_write_tokens'),
+    thoughtTokens: readNumber(value, 'thoughtTokens', 'thought_tokens'),
+  };
+  return Object.values(usage).some((item) => Number.isFinite(item)) ? usage : null;
+}
+
+function readNumber(value, ...keys) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      const number = Number(value[key]);
+      if (Number.isFinite(number)) return number;
+    }
+  }
+  return undefined;
+}
+
+function readOptionalNumber(value, ...keys) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(value, key) && value[key] != null) {
+      const number = Number(value[key]);
+      if (Number.isFinite(number)) return number;
+    }
+  }
+  return undefined;
+}
+
 function resolveTerminalCwd(root, requestedCwd) {
   const resolvedRoot = resolve(root);
   const resolvedCwd = !requestedCwd
@@ -70,7 +120,11 @@ function resolveTerminalCwd(root, requestedCwd) {
       : resolve(resolvedRoot, requestedCwd);
 
   const rel = relative(resolvedRoot, resolvedCwd);
-  if (rel && (rel === '..' || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`))) {
+  if (rel && (
+    rel === '..'
+    || rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`)
+    || isAbsolute(rel)
+  )) {
     throw new Error(`Terminal cwd escapes workspace root: ${requestedCwd}`);
   }
   return resolvedCwd;

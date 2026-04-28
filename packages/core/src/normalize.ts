@@ -94,8 +94,9 @@ function readConfigOptions(update: RawUpdate): SessionConfigOption[] | null {
   return null;
 }
 
-function readFiniteNumber(update: RawUpdate, key: string, fallbackKey?: string): number | undefined {
-  const raw = key in update ? update[key] : fallbackKey ? update[fallbackKey] : undefined;
+function readFiniteNumber(update: RawUpdate, key: string, ...fallbackKeys: string[]): number | undefined {
+  const sourceKey = [key, ...fallbackKeys].find((candidate) => candidate in update);
+  const raw = sourceKey ? update[sourceKey] : undefined;
   const value = Number(raw);
   return Number.isFinite(value) ? value : undefined;
 }
@@ -212,8 +213,8 @@ export function normalizeAcpUpdate(
         sessionId,
         at,
         turnId,
-        used: readFiniteNumber(update, 'used'),
-        size: readFiniteNumber(update, 'size'),
+        used: readFiniteNumber(update, 'used', 'currentTokens', 'current_tokens'),
+        size: readFiniteNumber(update, 'size', 'tokenLimit', 'token_limit'),
         cost: Number.isFinite(Number(update.cost)) ? Number(update.cost) : null,
         inputTokens: readFiniteNumber(update, 'inputTokens', 'input_tokens'),
         outputTokens: readFiniteNumber(update, 'outputTokens', 'output_tokens'),

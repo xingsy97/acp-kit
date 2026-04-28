@@ -30,7 +30,7 @@ export interface CollectTurnResultOptions {
   onUpdate?: (snapshot: CollectedTurnResult) => void;
 }
 
-type TurnResultSession = Pick<RuntimeSession, 'on' | 'prompt'>;
+type TurnResultSession = Pick<RuntimeSession, 'on' | 'prompt'> & Pick<Partial<RuntimeSession>, 'transcript'>;
 
 export async function collectTurnResult(
   session: TurnResultSession,
@@ -133,6 +133,10 @@ export async function collectTurnResult(
     state.usage = state.promptResult.usage
       ? mergeUsage(state.usage, state.promptResult.usage)
       : state.usage;
+    const transcriptUsage = session.transcript?.session?.usage;
+    state.usage = transcriptUsage && hasUsage(transcriptUsage)
+      ? mergeUsage(state.usage, transcriptUsage)
+      : state.usage;
     return snapshot();
   } finally {
     unsubscribe();
@@ -157,8 +161,6 @@ function countChars(value: unknown): number {
 function mergeUsage(previous: RuntimeUsage | null | undefined, next: RuntimeUsage): RuntimeUsage {
   const usage: RuntimeUsage = { ...(previous || {}) };
   for (const key of [
-    'used',
-    'size',
     'cost',
     'inputTokens',
     'outputTokens',
@@ -172,10 +174,30 @@ function mergeUsage(previous: RuntimeUsage | null | undefined, next: RuntimeUsag
       usage[key] = value as never;
     }
   }
+  mergeContextUsage(usage, next);
   if (usage.totalTokens == null && (usage.inputTokens != null || usage.outputTokens != null)) {
     usage.totalTokens = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
   }
   return usage;
+}
+
+function mergeContextUsage(usage: RuntimeUsage, next: RuntimeUsage): void {
+  const nextSize = Number.isFinite(next.size) ? next.size : undefined;
+  const nextUsed = Number.isFinite(next.used) ? next.used : undefined;
+  const previousSize = Number.isFinite(usage.size) ? usage.size : undefined;
+  const previousUsed = Number.isFinite(usage.used) ? usage.used : undefined;
+
+  if (nextSize != null) {
+    usage.size = nextSize;
+  }
+  if (nextUsed == null) {
+    return;
+  }
+
+  if (nextUsed === 0 && nextSize != null && previousSize === nextSize && (previousUsed ?? 0) > 0) {
+    return;
+  }
+  usage.used = nextUsed;
 }
 
 function hasUsage(event: {

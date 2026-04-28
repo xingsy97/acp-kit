@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -9,24 +10,34 @@ const mocks = vi.hoisted(() => ({
     setModel: vi.fn(),
     dispose: vi.fn(),
     transcript: { session: { models: { availableModels: [{ id: 'good-model' }] } } },
+    on: vi.fn(),
   },
+  sessionUsageListeners: [] as Array<(event: unknown) => void>,
   terminalHost: {
     terminals: new Map(),
   },
+  terminalResolveCwd: undefined as undefined | ((requestedCwd?: string) => string),
+  inspectorListeners: [] as Array<(entry: unknown) => void>,
 }));
 
 vi.mock('@acp-kit/core', () => ({
   PermissionDecision: { AllowAlways: 'allow-always' },
   createAcpRuntime: vi.fn(() => mocks.runtime),
   createRuntimeInspector: vi.fn(() => ({
-    onEntry: vi.fn(() => vi.fn()),
+    onEntry: vi.fn((listener: (entry: unknown) => void) => {
+      mocks.inspectorListeners.push(listener);
+      return vi.fn();
+    }),
     toJSONL: vi.fn(() => ''),
   })),
 }));
 
 vi.mock('@acp-kit/core/node', () => ({
   createLocalFileSystemHost: vi.fn(() => ({})),
-  createLocalTerminalHost: vi.fn(() => mocks.terminalHost),
+  createLocalTerminalHost: vi.fn((options: { resolveCwd(requestedCwd?: string): string }) => {
+    mocks.terminalResolveCwd = options.resolveCwd;
+    return mocks.terminalHost;
+  }),
 }));
 
 const { openRole } = await import('../lib/runtime/role.mjs');
@@ -38,6 +49,16 @@ describe('runtime role adapter', () => {
     mocks.session.setModel.mockReset();
     mocks.session.dispose.mockReset();
     mocks.terminalHost.terminals = new Map();
+    mocks.terminalResolveCwd = undefined;
+    mocks.inspectorListeners.length = 0;
+    mocks.sessionUsageListeners.length = 0;
+    mocks.session.on.mockReset();
+    mocks.session.on.mockImplementation((type: string, listener: (event: unknown) => void) => {
+      if (type === 'session.usage.updated') {
+        mocks.sessionUsageListeners.push(listener);
+      }
+      return () => {};
+    });
     mocks.runtime.newSession.mockResolvedValue(mocks.session);
     mocks.runtime.shutdown.mockResolvedValue(undefined);
     mocks.session.dispose.mockResolvedValue(undefined);
@@ -63,5 +84,73 @@ describe('runtime role adapter', () => {
     expect(child.kill).toHaveBeenCalledWith('SIGKILL');
     expect(mocks.session.dispose).toHaveBeenCalledTimes(1);
     expect(mocks.runtime.shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports ACP session.usage.updated events to the renderer while the role is open', async () => {
+    const onUsageUpdate = vi.fn();
+
+    const state = await openRole({
+      role: 'AUTHOR',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: true,
+      renderer: { onUsageUpdate },
+      settings: {
+        agent: { displayName: 'Author', command: 'author' },
+        model: null,
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    });
+
+    expect(mocks.sessionUsageListeners.length).toBe(1);
+    mocks.sessionUsageListeners[0]?.({
+      type: 'session.usage.updated',
+      used: 1234,
+      size: 200_000,
+      cost: 0.05,
+    });
+
+    expect(onUsageUpdate).toHaveBeenCalledWith({
+      role: 'AUTHOR',
+      usage: expect.objectContaining({ used: 1234, size: 200_000, cost: 0.05 }),
+    });
+
+    onUsageUpdate.mockClear();
+    mocks.sessionUsageListeners[0]?.({
+      type: 'session.usage.updated',
+      inputTokens: 5,
+      cost: null,
+    });
+
+    expect(onUsageUpdate.mock.calls[0]?.[0].usage).toMatchObject({ inputTokens: 5 });
+    expect(onUsageUpdate.mock.calls[0]?.[0].usage.cost).toBeUndefined();
+
+    await state.close();
+  });
+
+  it('rejects terminal cwd paths outside the workspace root', async () => {
+    const state = await openRole({
+      role: 'AUTHOR',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: false,
+      renderer: {},
+      settings: {
+        agent: { displayName: 'Author', command: 'author' },
+        model: null,
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    });
+
+    expect(mocks.terminalResolveCwd?.('subdir')).toBe(path.resolve(process.cwd(), 'subdir'));
+    expect(() => mocks.terminalResolveCwd?.('..')).toThrow('escapes workspace root');
+
+    if (process.platform === 'win32') {
+      const currentDrive = path.parse(process.cwd()).root.toLowerCase();
+      const otherDrive = currentDrive.startsWith('c:') ? 'D:\\outside' : 'C:\\outside';
+      expect(() => mocks.terminalResolveCwd?.(otherDrive)).toThrow('escapes workspace root');
+    }
+
+    await state.close();
   });
 });

@@ -8,6 +8,24 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-04-28
+
+### Fixed
+
+- `@acp-kit/author-reviewer-loop` now passes the AUTHOR's reply for each round into the REVIEWER's prompt builder as `authorReply`, and the default reviewer prompt explicitly tells the REVIEWER to re-read every file the AUTHOR claims to have changed before judging. Previously the REVIEWER only saw the original task plus its own prior feedback and would frequently report "no changes" or treat each round as an unrelated codebase.
+- `@acp-kit/author-reviewer-loop` now subscribes directly to the canonical normalized `session.usage.updated` event for token accounting, instead of trying to extract usage out of inspector wire frames. This makes the TUI token header and the plain renderer `[role usage]` line work in the default run mode without needing trace capture.
+- `@acp-kit/author-reviewer-loop` TUI now batches engine-driven re-renders to ~50 ms frames during streaming, eliminating the lower-half flicker that occurred when message deltas, snapshots, tool events, and trace entries arrived in fast bursts. `result` and `error` actions still flush immediately.
+- `@acp-kit/author-reviewer-loop` legacy `runAuthorReviewerLoop` adapter now also forwards `turnSnapshot`, `traceEntry`, and `usageUpdate` engine events to the renderer, matching what the engine publishes.
+- `@acp-kit/author-reviewer-loop` reducer's standalone `usageUpdate` action now updates both the cumulative role usage and the active round pane, so token counts shown by the TUI refresh as soon as a usage update arrives, not only on the next turn snapshot.
+- `@acp-kit/core` `normalizeAcpUpdate` now accepts ACP `usage_update` payloads that report `currentTokens` / `tokenLimit` (and snake_case variants) in addition to `used` / `size`, so context-window data from agents that use the alternate field names is no longer dropped.
+- `@acp-kit/core` `collectTurnResult` now folds the session transcript's session usage into the final result and no longer lets a follow-up usage update with a zero `used` overwrite a positive prior value when `size` is unchanged.
+
+### Added
+
+- `@acp-kit/author-reviewer-loop` plain renderer prints a `[role usage] In/Out … Tk` (or `Used … Tk`) line whenever an agent reports new token usage, deduplicated against the previous line for the same role.
+- `@acp-kit/author-reviewer-loop` exposes an `ACP_REVIEW_DEBUG_USAGE=1` diagnostic env var that writes each received `session.usage.updated` event to stderr for confirming whether the agent emits ACP usage data at all.
+- A local `release-prep` skill under `.github/skills/release-prep/SKILL.md` documenting the end-to-end release workflow used for ACP Kit.
+
 ## [0.6.6] - 2026-04-28
 
 ### Fixed

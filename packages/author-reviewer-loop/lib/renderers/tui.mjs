@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { createLoopEngine, PaneStatus, Phase } from '../engine.mjs';
 
 const DEFAULT_EDITOR_TIMEOUT_MS = 30 * 60 * 1000;
+const ENGINE_RENDER_FRAME_MS = 50;
 
 /**
  * Ink-based TUI renderer.
@@ -431,8 +432,31 @@ export async function runTui({ config }) {
     }, [stdout]);
 
     useEffect(() => {
-      const off = engine.subscribe(() => setTick((t) => (t + 1) | 0));
-      return off;
+      let timeout = null;
+      let pending = false;
+      const flush = () => {
+        timeout = null;
+        if (!pending) return;
+        pending = false;
+        setTick((t) => (t + 1) | 0);
+      };
+      const schedule = (action) => {
+        pending = true;
+        if (action?.type === 'result' || action?.type === 'error') {
+          if (timeout) {
+            clearTimeout(timeout);
+            timeout = null;
+          }
+          flush();
+          return;
+        }
+        if (!timeout) timeout = setTimeout(flush, ENGINE_RENDER_FRAME_MS);
+      };
+      const off = engine.subscribe((_state, action) => schedule(action));
+      return () => {
+        off();
+        if (timeout) clearTimeout(timeout);
+      };
     }, []);
 
     // Auto-follow: whenever a new round arrives keep the view pinned.

@@ -64,6 +64,50 @@ describe('author-reviewer-loop engine', () => {
     expect(reviewerTurns).toEqual([reviewerState, reviewerState]);
   });
 
+  it('only treats APPROVED on its own line as approval', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'REVIEWER' ? 'NOT APPROVED: still broken' : '',
+    );
+
+    const result = await createLoopEngine({ config: config(1) }).run();
+
+    expect(result).toMatchObject({
+      approved: false,
+      feedback: 'NOT APPROVED: still broken',
+      rounds: 1,
+    });
+  });
+
+  it('does not capture expensive wire traces in TUI mode unless trace is enabled', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    const cfg = { ...config(1), tui: true, trace: false };
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'REVIEWER' ? 'APPROVED' : '',
+    );
+
+    await createLoopEngine({ config: cfg }).run();
+
+    expect(mocks.openRole).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'AUTHOR',
+      trace: false,
+      captureTrace: false,
+    }));
+    expect(mocks.openRole).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'REVIEWER',
+      trace: false,
+      captureTrace: false,
+    }));
+  });
+
   it('fails before any author turn when reviewer startup or model setup fails', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerError = new Error('REVIEWER_MODEL="bad" is not available');
@@ -156,6 +200,37 @@ describe('author-reviewer-loop engine', () => {
 
     expect(round?.AUTHOR.usage).toMatchObject({ used: 200, size: 1_000 });
     expect(round?.REVIEWER.usage).toMatchObject({ used: 20, size: 500 });
+  });
+
+  it('updates role panes from ACP usage events that arrive outside turn snapshots', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({
+      role,
+      round,
+      renderer,
+    }: {
+      role: 'AUTHOR' | 'REVIEWER';
+      round: number;
+      renderer: { onTurnStart(event: unknown): void; onUsageUpdate(event: unknown): void };
+    }) => {
+      renderer.onTurnStart({ round, role });
+      renderer.onUsageUpdate({
+        role,
+        usage: role === 'AUTHOR' ? { used: 1234, size: 200_000 } : { used: 4321, size: 200_000 },
+      });
+      return role === 'REVIEWER' ? 'APPROVED' : 'done';
+    });
+
+    const engine = createLoopEngine({ config: config(1) });
+    await engine.run();
+    const round = engine.getState().rounds.get(1);
+
+    expect(round?.AUTHOR.usage).toMatchObject({ used: 1234, size: 200_000 });
+    expect(round?.REVIEWER.usage).toMatchObject({ used: 4321, size: 200_000 });
   });
 
   it('continues with the same sessions when approval is reopened by an edited task', async () => {

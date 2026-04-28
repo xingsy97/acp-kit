@@ -45,6 +45,7 @@ export function createPlainRenderer() {
   const toolStatusLabel = (status) => status === 'completed' ? 'done' : status;
   let toolBurstCount = 0;
   let toolBurstHidden = 0;
+  const lastUsageByRole = new Map();
 
   const stringifyValue = (value) => {
     if (value == null) return '';
@@ -158,6 +159,32 @@ export function createPlainRenderer() {
     }
   };
 
+  const formatTokenCount = (tokens) => {
+    if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(2).replace(/\.?0+$/, '')}M`;
+    if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1).replace(/\.?0+$/, '')}K`;
+    return String(tokens);
+  };
+
+  const formatUsage = (usage) => {
+    const input = Number.isFinite(usage?.inputTokens) ? usage.inputTokens : 0;
+    const output = Number.isFinite(usage?.outputTokens) ? usage.outputTokens : 0;
+    if (input > 0 || output > 0) return `In/Out ${formatTokenCount(input)}/${formatTokenCount(output)} Tk`;
+    const used = Number.isFinite(usage?.used) ? usage.used : 0;
+    const size = Number.isFinite(usage?.size) ? usage.size : 0;
+    if (used > 0 || size > 0) return `Used ${formatTokenCount(used)}/${formatTokenCount(size)} Tk`;
+    return '';
+  };
+
+  const logUsage = ({ role, usage }) => {
+    const label = formatUsage(usage);
+    if (!label) return;
+    const previous = lastUsageByRole.get(role);
+    if (previous === label) return;
+    lastUsageByRole.set(role, label);
+    lineFeed();
+    console.log(color('gray', `  [${role.toLowerCase()} usage] ${label}`));
+  };
+
   const writeTextDelta = (delta) => {
     if (!process.stdout.isTTY) {
       process.stdout.write(delta);
@@ -229,6 +256,10 @@ export function createPlainRenderer() {
           case 'turnEnd':
             flushToolBurst();
             lineFeed();
+            return;
+          case 'usageUpdate':
+            flushToolBurst();
+            logUsage(event);
             return;
           case 'result': {
             flushToolBurst();

@@ -40,6 +40,15 @@ describe('author-reviewer-loop CLI config', () => {
     expect(parseRunConfig({ argv: [cwd, 'Build the thing', '--yes', '--tui'] }).tui).toBe(true);
   });
 
+  it('lets the TUI compatibility environment flag override CLI environment mode', () => {
+    const cwd = tempDir();
+
+    process.env.ACP_REVIEW_CLI = '1';
+    process.env.ACP_REVIEW_TUI = '1';
+
+    expect(parseRunConfig({ argv: [cwd, 'Build the thing', '--yes'] }).tui).toBe(true);
+  });
+
   it('reports invalid startup config through the CLI formatter', () => {
     const cwd = tempDir();
     const bin = path.resolve('packages', 'author-reviewer-loop', 'bin', 'acp-author-reviewer-loop.mjs');
@@ -105,5 +114,18 @@ describe('author-reviewer-loop CLI config', () => {
 
     expect(prompt).toContain('Round: 2');
     expect(prompt).toContain('Previous reviewer feedback:\n1. Missing tests');
+  });
+
+  it("includes the AUTHOR's reply in the reviewer prompt when provided", () => {
+    const config = parseRunConfig({ argv: [tempDir(), 'build it', '--yes', '--cli'] });
+    const prompt = config.reviewerSettings.prompt({
+      round: 3,
+      feedback: '',
+      authorReply: 'I edited foo.ts and bar.ts to add validation.',
+    });
+
+    expect(prompt).toContain("AUTHOR's reply for this round");
+    expect(prompt).toContain('I edited foo.ts and bar.ts to add validation.');
+    expect(prompt).toContain('Re-read every file the AUTHOR claims to have changed');
   });
 });

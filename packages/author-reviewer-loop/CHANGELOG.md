@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-04-28
+
+### Fixed
+
+- The REVIEWER prompt now receives the AUTHOR's reply for the current round as `authorReply`, and the default reviewer prompt explicitly instructs the REVIEWER to re-read every file the AUTHOR claims to have changed before judging. Previously the REVIEWER only saw the original task plus its own prior feedback and would frequently report "no changes" or treat each round as an unrelated codebase.
+- Token usage is now sourced directly from the canonical normalized `session.usage.updated` event, rather than extracted from inspector wire frames. The TUI token header and the new plain renderer usage line work in the default run mode without needing trace capture.
+- The TUI batches engine-driven re-renders to ~50 ms frames during streaming, eliminating the lower-half flicker that occurred when message deltas, snapshots, tool events, and trace entries arrived in fast bursts. `result` and `error` actions still flush immediately.
+- The legacy `runAuthorReviewerLoop` adapter now also forwards `turnSnapshot`, `traceEntry`, and `usageUpdate` engine events to the renderer, matching what the engine publishes.
+- The reducer's standalone `usageUpdate` action now updates both the cumulative role usage and the active round pane, so token counts shown by the TUI refresh as soon as a usage update arrives, not only on the next turn snapshot.
+
+### Added
+
+- The plain renderer prints a `[role usage] In/Out … Tk` (or `Used … Tk`) line whenever an agent reports new token usage, deduplicated against the previous line for the same role.
+- New diagnostic env var `ACP_REVIEW_DEBUG_USAGE=1` writes each received `session.usage.updated` event to stderr for confirming whether the agent emits ACP usage data at all.
+
 ## [0.6.6] - 2026-04-28
 
 ### Fixed

@@ -79,6 +79,30 @@ describe('collectTurnResult', () => {
     expect(result.usage).toEqual({ used: 12_345, size: 200_000 });
   });
 
+  it('preserves nonzero context usage when a later same-size update reports zero used', async () => {
+    const { session } = createSession([
+      { type: 'session.usage.updated', sessionId: 's1', at: 1, used: 12_345, size: 200_000 } as RuntimeSessionEvent,
+      { type: 'session.usage.updated', sessionId: 's1', at: 2, used: 0, size: 200_000 } as RuntimeSessionEvent,
+      { type: 'turn.completed', sessionId: 's1', at: 3, turnId: 'turn1', stopReason: 'end_turn' },
+    ], undefined, null);
+
+    const result = await collectTurnResult(session as never, 'review');
+
+    expect(result.usage).toEqual({ used: 12_345, size: 200_000 });
+  });
+
+  it('accepts zero context usage when the context size changes', async () => {
+    const { session } = createSession([
+      { type: 'session.usage.updated', sessionId: 's1', at: 1, used: 12_345, size: 200_000 } as RuntimeSessionEvent,
+      { type: 'session.usage.updated', sessionId: 's1', at: 2, used: 0, size: 100_000 } as RuntimeSessionEvent,
+      { type: 'turn.completed', sessionId: 's1', at: 3, turnId: 'turn1', stopReason: 'end_turn' },
+    ], undefined, null);
+
+    const result = await collectTurnResult(session as never, 'review');
+
+    expect(result.usage).toEqual({ used: 0, size: 100_000 });
+  });
+
   it('preserves context usage when prompt response also reports token usage', async () => {
     const { session } = createSession([
       { type: 'session.usage.updated', sessionId: 's1', at: 1, used: 12_345, size: 200_000 } as RuntimeSessionEvent,

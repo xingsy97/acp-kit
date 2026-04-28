@@ -73,11 +73,22 @@ function addUsage(left, right) {
     const value = right[key];
     if (Number.isFinite(value)) next[key] += value;
   }
-  for (const key of ['used', 'size', 'cost']) {
-    const value = right[key];
-    if (Number.isFinite(value) || value === null) next[key] = value;
-  }
+  mergeContextUsage(next, right);
+  const cost = right.cost;
+  if (Number.isFinite(cost) || cost === null) next.cost = cost;
   return next;
+}
+
+function mergeContextUsage(target, source) {
+  const nextSize = Number.isFinite(source.size) ? source.size : undefined;
+  const nextUsed = Number.isFinite(source.used) ? source.used : undefined;
+  const previousSize = Number.isFinite(target.size) ? target.size : undefined;
+  const previousUsed = Number.isFinite(target.used) ? target.used : undefined;
+
+  if (nextSize !== undefined) target.size = nextSize;
+  if (nextUsed === undefined) return;
+  if (nextUsed === 0 && nextSize !== undefined && previousSize === nextSize && previousUsed > 0) return;
+  target.used = nextUsed;
 }
 
 function subtractUsage(left, right) {
@@ -87,6 +98,19 @@ function subtractUsage(left, right) {
     const value = right[key];
     if (Number.isFinite(value)) next[key] = Math.max(0, next[key] - value);
   }
+  return next;
+}
+
+function mergeUsage(previous, nextUsage) {
+  const next = { ...(previous || {}) };
+  if (!nextUsage) return next;
+  for (const key of ['inputTokens', 'outputTokens', 'totalTokens', 'cachedReadTokens', 'cachedWriteTokens', 'thoughtTokens']) {
+    const value = nextUsage[key];
+    if (Number.isFinite(value)) next[key] = value;
+  }
+  mergeContextUsage(next, nextUsage);
+  const cost = nextUsage.cost;
+  if (Number.isFinite(cost) || cost === null) next.cost = cost;
   return next;
 }
 
@@ -159,13 +183,14 @@ function appendTextFlow(pane, delta, flowId) {
 }
 
 function appendOrUpdateToolFlow(pane, event, flowId) {
+  const toolCallId = event.toolCallId || `tool-event-${flowId ?? pane.tools.length + 1}`;
   const flow = [...pane.flow];
-  const index = flow.findIndex((item) => item.kind === 'tool' && item.toolCallId === event.toolCallId);
+  const index = flow.findIndex((item) => item.kind === 'tool' && item.toolCallId === toolCallId);
   const previous = index >= 0 ? flow[index] : null;
   const next = {
     id: previous?.id ?? `flow-${flowId}`,
     kind: 'tool',
-    toolCallId: event.toolCallId,
+    toolCallId,
     tag: event.tag ?? previous?.tag,
     name: event.name ?? previous?.name,
     title: event.title ?? previous?.title,
@@ -178,11 +203,11 @@ function appendOrUpdateToolFlow(pane, event, flowId) {
   else flow.push(next);
 
   const tools = [...pane.tools];
-  const toolIndex = tools.findIndex((item) => item.id === event.toolCallId);
+  const toolIndex = tools.findIndex((item) => item.id === toolCallId);
   const previousTool = toolIndex >= 0 ? tools[toolIndex] : {};
   const tool = {
     ...previousTool,
-    id: event.toolCallId,
+    id: toolCallId,
     tag: next.tag,
     name: next.name,
     title: next.title,
@@ -285,6 +310,21 @@ export function reduce(state, action) {
       );
     case 'traceEntry':
       return pushTrace(state, action);
+    case 'usageUpdate': {
+      if (state.latest == null) {
+        const roleUsage = addUsage(state.usage[action.role], action.usage);
+        return { ...state, usage: { ...state.usage, [action.role]: roleUsage } };
+      }
+      const pane = state.rounds.get(state.latest)?.[action.role] ?? emptyPane();
+      const turnUsage = mergeUsage(pane.turnUsage, action.usage);
+      const roleUsage = addUsage(subtractUsage(state.usage[action.role], pane.turnUsage), turnUsage);
+      const next = { ...state, usage: { ...state.usage, [action.role]: roleUsage } };
+      return patchPane(next, next.latest, action.role, (currentPane) => ({
+        ...currentPane,
+        usage: roleUsage,
+        turnUsage,
+      }));
+    }
     case 'result':
       return { ...state, phase: Phase.Done, result: action.result, finishedAt: Date.now() };
     case 'error':

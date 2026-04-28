@@ -263,6 +263,26 @@ describe('normalizeAcpUpdate – edge cases', () => {
     });
   });
 
+  it('maps Copilot-style context usage aliases', () => {
+    const events = normalizeAcpUpdate(
+      {
+        sessionId: 'session-1',
+        update: {
+          sessionUpdate: 'usage_update',
+          currentTokens: 1234,
+          tokenLimit: 200_000,
+        },
+      } as never,
+      ctx,
+    );
+
+    expect(events[0]).toMatchObject({
+      type: 'session.usage.updated',
+      used: 1234,
+      size: 200_000,
+    });
+  });
+
   it('maps config_option_update with single configOption', () => {
     const option = { id: 'opt1', name: 'Option 1', type: 'boolean', value: true };
     const events = normalizeAcpUpdate(

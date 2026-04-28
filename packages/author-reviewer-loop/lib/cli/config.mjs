@@ -62,10 +62,13 @@ Environment:
       agent: envChoice('REVIEWER_AGENT', agents, defaults.reviewerAgent),
       model: env('REVIEWER_MODEL', defaults.reviewerModel, { empty: null }),
       modelEnvName: 'REVIEWER_MODEL',
-      prompt: ({ round, feedback }) =>
+      prompt: ({ round, feedback, authorReply }) =>
         `You are the REVIEWER. Round: ${round}\n\nOriginal task: ${config.task}\n\n`
         + previousFeedbackSection(feedback)
+        + authorReplySection(authorReply)
         + `Inspect the project under ${cwd} using your filesystem tools. `
+        + 'Re-read every file the AUTHOR claims to have changed before judging; '
+        + 'do not assume nothing changed just because earlier rounds looked different. '
         + 'Reply APPROVED on its own line if it fully solves the task with no obvious bugs; '
         + 'otherwise reply with a terse numbered list of issues.',
     },
@@ -79,9 +82,16 @@ function previousFeedbackSection(feedback) {
   return `Previous reviewer feedback:\n${text}\n\n`;
 }
 
+function authorReplySection(authorReply) {
+  const text = typeof authorReply === 'string' ? authorReply.trim() : '';
+  if (!text) return '';
+  return `AUTHOR's reply for this round (their summary of what they changed):\n${text}\n\n`;
+}
+
 function resolveRendererMode(opts) {
   if (opts.cli) return false;
   if (opts.tui) return true;
+  if (envFlag('ACP_REVIEW_TUI')) return true;
   if (envFlag('ACP_REVIEW_CLI')) return false;
   return true;
 }

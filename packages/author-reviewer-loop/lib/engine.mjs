@@ -58,6 +58,10 @@ export function createLoopEngine({ config }) {
       { type: 'traceEntry', ...event },
       { type: 'traceEntry', traceId: nextTraceId++, ...event },
     ),
+    onUsageUpdate: (event) => publish(
+      { type: 'usageUpdate', ...event },
+      { type: 'usageUpdate', ...event },
+    ),
     onTurnCompleted: (event) => publish({ type: 'turnCompleted', ...event }, null),
     onTurnFailed: (event) => publish({ type: 'turnFailed', ...event }, null),
     onTurnEnd: (event) => publish({ type: 'turnEnd', ...event }, null),
@@ -65,7 +69,7 @@ export function createLoopEngine({ config }) {
   };
 
   async function run() {
-    const { cwd, maxRounds, trace, tui, authorSettings, reviewerSettings } = config;
+    const { cwd, maxRounds, trace, authorSettings, reviewerSettings } = config;
     await fs.mkdir(cwd, { recursive: true });
     innerRenderer.onLaunching();
 
@@ -77,7 +81,7 @@ export function createLoopEngine({ config }) {
         reviewerSettings,
         cwd,
         trace,
-        captureTrace: trace || tui,
+        captureTrace: trace,
         renderer: innerRenderer,
       });
 
@@ -129,7 +133,7 @@ async function runRounds({ author, reviewer, maxRounds, cwd, config, authorSetti
 
   for (let round = 1; round <= roundLimit; round++) {
     lastRound = round;
-    await runTurn({
+    const authorReply = await runTurn({
       round,
       role: 'AUTHOR',
       state: author,
@@ -140,7 +144,7 @@ async function runRounds({ author, reviewer, maxRounds, cwd, config, authorSetti
       round,
       role: 'REVIEWER',
       state: reviewer,
-      prompt: reviewerSettings.prompt({ round, feedback }),
+      prompt: reviewerSettings.prompt({ round, feedback, authorReply }),
       renderer,
     });
 

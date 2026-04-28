@@ -1,4 +1,5 @@
 import type { RuntimeSession, RuntimeSessionEvent, PromptResult } from './session.js';
+import type { RuntimeUsage } from './events.js';
 
 export type CollectedTurnStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -19,6 +20,7 @@ export interface CollectedTurnResult {
   stopReason: string | null;
   error: string | null;
   promptResult: PromptResult | null;
+  usage: RuntimeUsage | null;
   events?: RuntimeSessionEvent[];
 }
 
@@ -44,6 +46,7 @@ export async function collectTurnResult(
     stopReason: null,
     error: null,
     promptResult: null,
+    usage: null,
     events: options.includeEvents ? events : undefined,
   };
 
@@ -98,6 +101,13 @@ export async function collectTurnResult(
       state.tools = [...tools.values()];
       notify(event);
     },
+    sessionUsageUpdated: (event) => {
+      if (options.includeEvents) events.push(event);
+      if (hasUsage(event)) {
+        state.usage = mergeUsage(state.usage, event);
+      }
+      notify(event);
+    },
     turnCompleted: (event) => {
       if (options.includeEvents) events.push(event);
       state.status = 'completed';
@@ -120,6 +130,9 @@ export async function collectTurnResult(
 
   try {
     state.promptResult = await session.prompt(prompt);
+    state.usage = state.promptResult.usage
+      ? mergeUsage(state.usage, state.promptResult.usage)
+      : state.usage;
     return snapshot();
   } finally {
     unsubscribe();
@@ -139,4 +152,52 @@ function countChars(value: unknown): number {
     return Object.values(record).reduce<number>((count, item) => count + countChars(item), 0);
   }
   return 0;
+}
+
+function mergeUsage(previous: RuntimeUsage | null | undefined, next: RuntimeUsage): RuntimeUsage {
+  const usage: RuntimeUsage = { ...(previous || {}) };
+  for (const key of [
+    'used',
+    'size',
+    'cost',
+    'inputTokens',
+    'outputTokens',
+    'totalTokens',
+    'cachedReadTokens',
+    'cachedWriteTokens',
+    'thoughtTokens',
+  ] as const) {
+    const value = next[key];
+    if (typeof value === 'number' ? Number.isFinite(value) : value != null) {
+      usage[key] = value as never;
+    }
+  }
+  if (usage.totalTokens == null && (usage.inputTokens != null || usage.outputTokens != null)) {
+    usage.totalTokens = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
+  }
+  return usage;
+}
+
+function hasUsage(event: {
+  used?: unknown;
+  size?: unknown;
+  cost?: unknown;
+  inputTokens?: unknown;
+  outputTokens?: unknown;
+  totalTokens?: unknown;
+  cachedReadTokens?: unknown;
+  cachedWriteTokens?: unknown;
+  thoughtTokens?: unknown;
+}): boolean {
+  return [
+    event.used,
+    event.size,
+    event.cost,
+    event.inputTokens,
+    event.outputTokens,
+    event.totalTokens,
+    event.cachedReadTokens,
+    event.cachedWriteTokens,
+    event.thoughtTokens,
+  ].some((value) => typeof value === 'number' && Number.isFinite(value));
 }

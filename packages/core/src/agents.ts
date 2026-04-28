@@ -17,7 +17,7 @@ export interface AgentProfile {
   fallbackCommands?: Array<{ command: string; args: string[] }>;
   /** Extra environment variables merged on top of `process.env`. */
   env?: Record<string, string>;
-  /** Override the default 30s startup timeout (initialize / newSession / loadSession). */
+  /** Override the startup timeout (initialize / newSession / loadSession). */
   startupTimeoutMs?: number;
   /**
    * Optional per-line filter applied to the agent's stdout before JSON-RPC parsing.
@@ -37,7 +37,7 @@ export const GitHubCopilot: AgentProfile = {
   displayName: 'GitHub Copilot',
   command: 'copilot-language-server',
   args: ['--acp'],
-  fallbackCommands: [{ command: 'npx', args: ['@github/copilot-language-server@latest', '--acp'] }],
+  fallbackCommands: [{ command: 'npx', args: ['--yes', '@github/copilot-language-server@latest', '--acp'] }],
   startupTimeoutMs: 90000,
 };
 
@@ -51,7 +51,7 @@ export const ClaudeCode: AgentProfile = {
   displayName: 'Claude Code',
   command: 'claude-code-acp',
   args: [],
-  fallbackCommands: [{ command: 'npx', args: ['@zed-industries/claude-code-acp@latest'] }],
+  fallbackCommands: [{ command: 'npx', args: ['--yes', '@zed-industries/claude-code-acp@latest'] }],
   startupTimeoutMs: 90000,
 };
 
@@ -65,7 +65,7 @@ export const CodexCli: AgentProfile = {
   displayName: 'Codex CLI',
   command: 'codex-acp',
   args: [],
-  fallbackCommands: [{ command: 'npx', args: ['@zed-industries/codex-acp@latest'] }],
+  fallbackCommands: [{ command: 'npx', args: ['--yes', '@zed-industries/codex-acp@latest'] }],
   startupTimeoutMs: 90000,
 };
 
@@ -79,7 +79,7 @@ export const GeminiCli: AgentProfile = {
   displayName: 'Gemini CLI',
   command: 'gemini',
   args: ['--experimental-acp'],
-  fallbackCommands: [{ command: 'npx', args: ['@google/gemini-cli@latest', '--experimental-acp'] }],
+  fallbackCommands: [{ command: 'npx', args: ['--yes', '@google/gemini-cli@latest', '--experimental-acp'] }],
   startupTimeoutMs: 90000,
 };
 
@@ -93,7 +93,7 @@ export const QwenCode: AgentProfile = {
   displayName: 'Qwen Code',
   command: 'qwen',
   args: ['--acp', '--experimental-skills'],
-  fallbackCommands: [{ command: 'npx', args: ['@qwen-code/qwen-code@latest', '--acp', '--experimental-skills'] }],
+  fallbackCommands: [{ command: 'npx', args: ['--yes', '@qwen-code/qwen-code@latest', '--acp', '--experimental-skills'] }],
   startupTimeoutMs: 90000,
 };
 
@@ -107,6 +107,6 @@ export const OpenCode: AgentProfile = {
   displayName: 'OpenCode',
   command: 'opencode',
   args: ['acp'],
-  fallbackCommands: [{ command: 'npx', args: ['opencode-ai@latest', 'acp'] }],
+  fallbackCommands: [{ command: 'npx', args: ['--yes', 'opencode-ai@latest', 'acp'] }],
   startupTimeoutMs: 90000,
 };

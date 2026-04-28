@@ -209,6 +209,60 @@ describe('normalizeAcpUpdate – edge cases', () => {
     });
   });
 
+  it('maps usage_update token fields', () => {
+    const events = normalizeAcpUpdate(
+      {
+        sessionId: 'session-1',
+        update: {
+          sessionUpdate: 'usage_update',
+          inputTokens: 123,
+          outputTokens: '45',
+          totalTokens: 168,
+          cachedReadTokens: 10,
+          cachedWriteTokens: 5,
+          thoughtTokens: 'not-a-number',
+        },
+      } as never,
+      ctx,
+    );
+    expect(events[0]).toMatchObject({
+      type: 'session.usage.updated',
+      inputTokens: 123,
+      outputTokens: 45,
+      totalTokens: 168,
+      cachedReadTokens: 10,
+      cachedWriteTokens: 5,
+      thoughtTokens: undefined,
+    });
+  });
+
+  it('maps usage_update snake_case token fields', () => {
+    const events = normalizeAcpUpdate(
+      {
+        sessionId: 'session-1',
+        update: {
+          sessionUpdate: 'usage_update',
+          input_tokens: 123,
+          output_tokens: '45',
+          total_tokens: 168,
+          cached_read_tokens: 10,
+          cached_write_tokens: 5,
+          thought_tokens: 7,
+        },
+      } as never,
+      ctx,
+    );
+    expect(events[0]).toMatchObject({
+      type: 'session.usage.updated',
+      inputTokens: 123,
+      outputTokens: 45,
+      totalTokens: 168,
+      cachedReadTokens: 10,
+      cachedWriteTokens: 5,
+      thoughtTokens: 7,
+    });
+  });
+
   it('maps config_option_update with single configOption', () => {
     const option = { id: 'opt1', name: 'Option 1', type: 'boolean', value: true };
     const events = normalizeAcpUpdate(

@@ -6,6 +6,7 @@ import {
   flushOpenStreamCompletions,
   normalizeAcpUpdate,
   type RuntimeEvent,
+  type RuntimeUsage,
   type SessionConfigUpdatedEvent,
   type SessionModeUpdatedEvent,
   type SessionModesUpdatedEvent,
@@ -86,6 +87,7 @@ export type RuntimeSessionEvent =
 
 export interface PromptResult {
   stopReason: string | null;
+  usage?: RuntimeUsage | null;
 }
 
 type Listener = (event: RuntimeSessionEvent) => void;
@@ -225,6 +227,20 @@ export class RuntimeSession {
       });
       this.flushPendingStreams();
       const stopReason = typeof response?.stopReason === 'string' ? response.stopReason : null;
+      if (response?.usage) {
+        this.emitRuntimeEvent({
+          type: 'session.usage.updated',
+          sessionId: this.sessionId,
+          at: Date.now(),
+          turnId,
+          inputTokens: response.usage.inputTokens,
+          outputTokens: response.usage.outputTokens,
+          totalTokens: response.usage.totalTokens,
+          cachedReadTokens: response.usage.cachedReadTokens,
+          cachedWriteTokens: response.usage.cachedWriteTokens,
+          thoughtTokens: response.usage.thoughtTokens,
+        });
+      }
       this.emitEvent({
         type: 'turn.completed',
         sessionId: this.sessionId,
@@ -234,7 +250,7 @@ export class RuntimeSession {
       });
       this.resetTurnState();
       this.setStatus('idle');
-      return { stopReason };
+      return { stopReason, usage: response?.usage ?? null };
     } catch (error) {
       this.flushPendingStreams();
       const message = error instanceof Error ? error.message : String(error);

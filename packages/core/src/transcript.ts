@@ -3,6 +3,7 @@ import type {
   SessionConfigOption,
   SessionModelState,
   SessionModeState,
+  Usage,
 } from '@agentclientprotocol/sdk';
 
 import type { RuntimeEvent, RuntimeToolStatus } from './events.js';
@@ -40,6 +41,12 @@ export interface TranscriptSessionMetadata {
     used?: number;
     size?: number;
     cost?: number | null;
+    inputTokens?: Usage['inputTokens'];
+    outputTokens?: Usage['outputTokens'];
+    totalTokens?: Usage['totalTokens'];
+    cachedReadTokens?: Usage['cachedReadTokens'];
+    cachedWriteTokens?: Usage['cachedWriteTokens'];
+    thoughtTokens?: Usage['thoughtTokens'];
   };
 }
 
@@ -211,6 +218,12 @@ export function applyRuntimeEvent(state: TranscriptState, event: RuntimeEvent): 
         used: event.used ?? state.session.usage.used,
         size: event.size ?? state.session.usage.size,
         cost: event.cost ?? state.session.usage.cost,
+        inputTokens: event.inputTokens ?? state.session.usage.inputTokens,
+        outputTokens: event.outputTokens ?? state.session.usage.outputTokens,
+        totalTokens: event.totalTokens ?? state.session.usage.totalTokens,
+        cachedReadTokens: event.cachedReadTokens ?? state.session.usage.cachedReadTokens,
+        cachedWriteTokens: event.cachedWriteTokens ?? state.session.usage.cachedWriteTokens,
+        thoughtTokens: event.thoughtTokens ?? state.session.usage.thoughtTokens,
       };
       break;
     }

@@ -27,7 +27,7 @@ export function createPlainRenderer() {
     return `\u001b[${ansiCodes[name]}m${text}\u001b[0m`;
   };
 
-  const paragraphPalette = ['white', 'cyan', 'green', 'yellow', 'magenta', 'blue'];
+  const paragraphPalette = ['white', 'cyan', 'green', 'yellow', 'blue'];
   const paragraphColor = () => paragraphPalette[textParagraph % paragraphPalette.length];
   const resetColor = () => {
     if (process.stdout.isTTY && textColorActive) {

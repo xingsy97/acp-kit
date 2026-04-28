@@ -204,8 +204,18 @@ Use `session.on(...)` when you have a `RuntimeSession`; it subscribes to future 
 ```ts
 interface PromptResult {
   stopReason: string | null; // 'end_turn' | 'cancelled' | agent-specific | null
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+    cachedReadTokens?: number;
+    cachedWriteTokens?: number;
+    thoughtTokens?: number;
+  } | null;                  // present only when the agent reports token usage
 }
 ```
+
+Usage is agent-reported data. ACP Kit forwards `usage` from `PromptResponse` and `session.usage.updated` notifications, but it does not invent token counts when an agent omits them.
 
 ---
 
@@ -260,6 +270,7 @@ interface CollectedTurnResult {
   stopReason: string | null;
   error: string | null;
   promptResult: PromptResult | null;
+  usage: PromptResult['usage'];
   events?: RuntimeSessionEvent[];
 }
 ```
@@ -292,7 +303,7 @@ The union emitted by `session.on(...)`. Every event has `type`, `sessionId`, `at
 | `session.mode.updated` | `sessionModeUpdated` | `currentModeId` |
 | `session.models.updated` | `sessionModelsUpdated` | `state` |
 | `session.model.updated` | `sessionModelUpdated` | `currentModelId` |
-| `session.usage.updated` | `sessionUsageUpdated` | `used?`, `size?`, `cost?` |
+| `session.usage.updated` | `sessionUsageUpdated` | `inputTokens?`, `outputTokens?`, `totalTokens?`, `cachedReadTokens?`, `cachedWriteTokens?`, `thoughtTokens?` |
 | `session.error` | `sessionError` | `message` |
 
 `tool.start` / `tool.update` / `tool.end` carry the agent's `_meta` field verbatim &mdash; vendor-specific affordances pass through unchanged.

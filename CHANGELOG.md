@@ -8,6 +8,12 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-04-28
+
+### Added
+
+- `@acp-kit/author-reviewer-loop` TUI users can now force another AUTHOR/REVIEWER round after reviewer approval without editing the task.
+
 ## [0.6.4] - 2026-04-27
 
 ### Added

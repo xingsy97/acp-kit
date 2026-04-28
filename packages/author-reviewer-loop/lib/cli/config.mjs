@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { Command } from 'commander';
 import { agents, defaults } from '../config/agents.mjs';
@@ -8,11 +9,12 @@ export function parseRunConfig({ argv } = {}) {
   const program = new Command()
     .name('author-reviewer-loop')
     .description('Run split-context AUTHOR and REVIEWER ACP agents over one workspace.')
-    .usage('<cwd> <task...> [--yes] [--tui]')
+    .usage('<cwd> <task-or-task-file...> [--yes] [--cli]')
     .argument('<cwd>', 'workspace directory')
-    .argument('<task...>', 'task for the AUTHOR to implement')
+    .argument('<task...>', 'task text, or a relative/absolute path to a UTF-8 task file')
     .option('-y, --yes', 'skip confirmation prompt')
-    .option('--tui', 'use the experimental Ink TUI renderer')
+    .option('--cli', 'use the plain line-based renderer instead of the default TUI')
+    .option('--tui', 'use the Ink TUI renderer (default; kept for compatibility)')
     .addHelpText('after', `
 Environment:
   AUTHOR_AGENT=copilot|claude|codex|gemini|qwen|opencode   default: ${defaults.authorAgent}
@@ -21,8 +23,10 @@ Environment:
   REVIEWER_MODEL=<model-id>                                default: ${defaults.reviewerModel}
   MAX_ROUNDS=<n>                                            default: ${defaults.maxRounds}
   ACP_REVIEW_YES=1                                          skip confirmation prompt
-  ACP_REVIEW_TUI=1                                          use the experimental Ink TUI renderer
+  ACP_REVIEW_CLI=1                                          use the plain line-based renderer
+  ACP_REVIEW_TUI=1                                          use the Ink TUI renderer (default)
   ACP_REVIEW_TRACE=1                                        print inspector trace on startup failures
+  ACP_REVIEW_EDITOR_TIMEOUT_MS=<ms>                         TUI task editor timeout (default: 1800000)
 `)
     .action((cwdArg, taskParts) => {
       parsedArgs = { cwdArg, taskParts };
@@ -32,34 +36,61 @@ Environment:
   else program.parse();
 
   const cwd = path.resolve(parsedArgs.cwdArg);
-  const task = parsedArgs.taskParts.join(' ').trim();
+  const { task, taskSource } = resolveTask(parsedArgs.taskParts);
   const opts = program.opts();
+  const useCli = Boolean(opts.cli) || envFlag('ACP_REVIEW_CLI');
 
-  return {
+  const config = {
     cwd,
     task,
+    taskSource,
     maxRounds: envPositiveInt('MAX_ROUNDS', defaults.maxRounds),
     trace: envFlag('ACP_REVIEW_TRACE'),
     skipConfirm: Boolean(opts.yes) || envFlag('ACP_REVIEW_YES'),
-    tui: Boolean(opts.tui) || envFlag('ACP_REVIEW_TUI'),
+    tui: !useCli || Boolean(opts.tui) || envFlag('ACP_REVIEW_TUI'),
     authorSettings: {
       agent: envChoice('AUTHOR_AGENT', agents, defaults.authorAgent),
       model: env('AUTHOR_MODEL', defaults.authorModel, { empty: null }),
       modelEnvName: 'AUTHOR_MODEL',
       prompt: ({ round, feedback }) => round === 1
-        ? `You are the AUTHOR. Working dir: ${cwd}\n\nTask: ${task}\n\n`
+        ? `You are the AUTHOR. Working dir: ${cwd}\n\nTask: ${config.task}\n\n`
           + 'Use your filesystem tools to create or modify files on disk. Do not paste code.'
-        : `REVIEWER feedback:\n${feedback}\n\nUpdate the files in ${cwd} to address every point.`,
+        : `You are the AUTHOR. Working dir: ${cwd}\n\nCurrent task: ${config.task}\n\n`
+          + `REVIEWER feedback:\n${feedback}\n\nUpdate the files in ${cwd} to address every point.`,
     },
     reviewerSettings: {
       agent: envChoice('REVIEWER_AGENT', agents, defaults.reviewerAgent),
       model: env('REVIEWER_MODEL', defaults.reviewerModel, { empty: null }),
       modelEnvName: 'REVIEWER_MODEL',
       prompt: () =>
-        `You are the REVIEWER. Original task: ${task}\n\n`
+        `You are the REVIEWER. Original task: ${config.task}\n\n`
         + `Inspect the project under ${cwd} using your filesystem tools. `
         + 'Reply APPROVED on its own line if it fully solves the task with no obvious bugs; '
         + 'otherwise reply with a terse numbered list of issues.',
     },
   };
+  return config;
+}
+
+function resolveTask(taskParts) {
+  const raw = taskParts.join(' ').trim();
+  if (!raw) return { task: raw, taskSource: { kind: 'text' } };
+
+  const candidate = path.resolve(raw);
+  if (isReadableFile(candidate)) {
+    return {
+      task: fs.readFileSync(candidate, 'utf8'),
+      taskSource: { kind: 'file', path: candidate },
+    };
+  }
+
+  return { task: raw, taskSource: { kind: 'text' } };
+}
+
+function isReadableFile(filePath) {
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
 }

@@ -1,5 +1,11 @@
 import process from 'node:process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { createLoopEngine, PaneStatus, Phase } from '../engine.mjs';
+
+const DEFAULT_EDITOR_TIMEOUT_MS = 30 * 60 * 1000;
 
 /**
  * Ink-based TUI renderer.
@@ -28,7 +34,7 @@ export async function runTui({ config }) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(
       'Ink TUI mode requires the optional `ink` and `react` packages.\n'
-        + `Install them or rerun without --tui.\nUnderlying error: ${detail}`,
+        + `Install them or rerun with --cli.\nUnderlying error: ${detail}`,
     );
   }
 
@@ -40,6 +46,25 @@ export async function runTui({ config }) {
     useReducer,
   } = React;
 
+  let approvalResolver = null;
+  let exitAfterApproval = false;
+  config.onApproved = () => new Promise((resolve) => {
+    approvalResolver = resolve;
+  });
+
+  function resolveApproval(decision) {
+    const resolve = approvalResolver;
+    approvalResolver = null;
+    resolve?.(decision);
+  }
+
+  function forceContinueAfterApproval() {
+    resolveApproval({
+      continue: true,
+      feedback: `The reviewer approved, but the user requested another round. Re-check the current task and make any further improvements needed:\n${config.task}`,
+    });
+  }
+
   const engine = createLoopEngine({ config });
 
   // -- TTY guard -----------------------------------------------------------
@@ -49,7 +74,7 @@ export async function runTui({ config }) {
   if (!process.stdout.isTTY || !process.stdin.isTTY) {
     throw new Error(
       '--tui requires an interactive terminal (stdin and stdout must be TTY).\n'
-        + 'Re-run without --tui or attach a TTY.',
+        + 'Re-run with --cli or attach a TTY.',
     );
   }
 
@@ -67,9 +92,11 @@ export async function runTui({ config }) {
   }
   enterAltScreen();
   const restore = () => leaveAltScreen();
+  const handleSigint = () => { restore(); process.exit(130); };
+  const handleSigterm = () => { restore(); process.exit(143); };
   process.on('exit', restore);
-  process.on('SIGINT', () => { restore(); process.exit(130); });
-  process.on('SIGTERM', () => { restore(); process.exit(143); });
+  process.on('SIGINT', handleSigint);
+  process.on('SIGTERM', handleSigterm);
 
   // -- helpers -------------------------------------------------------------
   function paneStatusColor(status) {
@@ -80,6 +107,7 @@ export async function runTui({ config }) {
   }
 
   function toolStatusColor(status) {
+    if (status === 'partial-failed') return '#ffa500';
     if (status === 'failed' || status === 'error') return 'red';
     if (status === 'completed' || status === 'done' || status === 'success') return 'green';
     return 'yellow';
@@ -89,7 +117,7 @@ export async function runTui({ config }) {
     return status === 'completed' ? 'done' : status;
   }
 
-  const paragraphPalette = ['white', 'cyan', 'green', 'yellow', 'magenta', 'blue'];
+  const paragraphPalette = ['white', 'cyan', 'green', 'yellow', 'blue'];
   function paragraphColor(index) {
     return paragraphPalette[index % paragraphPalette.length];
   }
@@ -100,6 +128,18 @@ export async function runTui({ config }) {
 
   function rowText(text, key) {
     return line(h(Text, { wrap: 'truncate-end' }, text), key);
+  }
+
+  function muted(text) {
+    return h(Text, { dimColor: true }, text);
+  }
+
+  function shortcutLabel(text, color = 'cyan') {
+    return h(Text, { color, bold: true }, text);
+  }
+
+  function shortcutLine(...parts) {
+    return h(Text, { wrap: 'truncate-end' }, ...parts);
   }
 
   function normalizeDisplayText(text) {
@@ -174,9 +214,31 @@ export async function runTui({ config }) {
   }
 
   function mergedToolStatus(items) {
-    if (items.some((item) => item.status === 'failed' || item.status === 'error')) return 'failed';
+    const failed = items.filter((item) => item.status === 'failed' || item.status === 'error').length;
+    if (failed === items.length) return 'failed';
+    if (failed > 0) return 'partial-failed';
     if (items.some((item) => item.status === 'running')) return 'running';
     return items[items.length - 1]?.status || 'completed';
+  }
+
+  function formatUsage(usage) {
+    const input = Number.isFinite(usage?.inputTokens) ? usage.inputTokens : 0;
+    const output = Number.isFinite(usage?.outputTokens) ? usage.outputTokens : 0;
+    if (input > 0 || output > 0) {
+      return `In/Out ${formatTokenCount(input)}/${formatTokenCount(output)} Tk`;
+    }
+    const used = Number.isFinite(usage?.used) ? usage.used : 0;
+    const size = Number.isFinite(usage?.size) ? usage.size : 0;
+    if (used > 0 || size > 0) {
+      return `Used ${formatTokenCount(used)}/${formatTokenCount(size)} Tk`;
+    }
+    return 'Tokens --';
+  }
+
+  function formatTokenCount(tokens) {
+    if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(2).replace(/\.?0+$/, '')}M`;
+    if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1).replace(/\.?0+$/, '')}K`;
+    return String(tokens);
   }
 
   // Soft-wrap one logical line to display rows. Prefer word boundaries; only
@@ -196,15 +258,69 @@ export async function runTui({ config }) {
     return out;
   }
 
+  function editorCommand() {
+    if (process.platform === 'win32') {
+      return { command: process.env.VISUAL || process.env.EDITOR || 'notepad.exe', args: [] };
+    }
+    return { command: process.env.VISUAL || process.env.EDITOR || 'vi', args: [] };
+  }
+
+  function editorTimeoutMs() {
+    const parsed = Number.parseInt(process.env.ACP_REVIEW_EDITOR_TIMEOUT_MS || '', 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_EDITOR_TIMEOUT_MS;
+  }
+
+  function editTaskText(currentTask) {
+    let tempDir;
+    let previousRawMode = process.stdin.isRaw;
+    let terminalReleased = false;
+    try {
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-task-'));
+      const taskFile = path.join(tempDir, 'task.txt');
+      fs.writeFileSync(taskFile, currentTask || '', 'utf8');
+      const { command, args } = editorCommand();
+      const timeout = editorTimeoutMs();
+      leaveAltScreen();
+      terminalReleased = true;
+      previousRawMode = process.stdin.isRaw;
+      if (process.stdin.setRawMode) process.stdin.setRawMode(false);
+      const result = spawnSync(command, [...args, taskFile], { stdio: 'inherit', timeout });
+      if (result.error) {
+        if (result.error.code === 'ETIMEDOUT') {
+          throw new Error(`${command} timed out after ${Math.round(timeout / 1000)} seconds.`);
+        }
+        throw result.error;
+      }
+      if (result.signal) throw new Error(`${command} exited after signal ${result.signal}.`);
+      if (result.status && result.status !== 0) throw new Error(`${command} exited with status ${result.status}.`);
+      return fs.readFileSync(taskFile, 'utf8').trimEnd();
+    } finally {
+      try {
+        if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+      } finally {
+        if (terminalReleased) {
+          if (process.stdin.setRawMode) process.stdin.setRawMode(Boolean(previousRawMode));
+          enterAltScreen();
+        }
+      }
+    }
+  }
+
   // -- view state (separate from engine state) -----------------------------
   const initialView = {
     selected: null,    // round number currently focused
     follow: true,      // auto-jump to latest round
     focus: 'AUTHOR',   // which pane is active for scrolling
-    screen: 'flow',     // flow | trace
+    screen: 'flow',     // flow | trace | tool | taskConfirm
+    selectedTool: null, // { round, role, toolCallId } used by the tool detail view
+    pendingTask: null,
+    editFromConfirm: false,
+    editError: null,
     scrollAuthor: 0,   // 0 = bottom; positive = scrolled up by N lines
     scrollReviewer: 0,
     scrollTrace: 0,
+    scrollTool: 0,
+    scrollConfirm: 0,
     wrap: true,        // soft wrap pane content
     showHelp: false,
     awaitingConfirm: !config.skipConfirm, // show confirm overlay first
@@ -239,6 +355,7 @@ export async function runTui({ config }) {
       case 'scroll': {
         const key = s.screen === 'trace'
           ? 'scrollTrace'
+          : s.screen === 'tool' ? 'scrollTool'
           : s.focus === 'AUTHOR' ? 'scrollAuthor' : 'scrollReviewer';
         const next = Math.max(0, s[key] + a.delta);
         return { ...s, [key]: next };
@@ -246,11 +363,38 @@ export async function runTui({ config }) {
       case 'scrollEnd': {
         const key = s.screen === 'trace'
           ? 'scrollTrace'
+          : s.screen === 'tool' ? 'scrollTool'
           : s.focus === 'AUTHOR' ? 'scrollAuthor' : 'scrollReviewer';
         return { ...s, [key]: 0 };
       }
+      case 'scrollConfirm':
+        return { ...s, scrollConfirm: Math.max(0, s.scrollConfirm + a.delta) };
+      case 'scrollConfirmTop':
+        return { ...s, scrollConfirm: 0 };
       case 'toggleTrace':
         return { ...s, screen: s.screen === 'trace' ? 'flow' : 'trace', scrollTrace: 0 };
+      case 'selectTool':
+        return { ...s, selectedTool: a.tool };
+      case 'openTool':
+        return a.tool ? { ...s, selectedTool: a.tool, screen: 'tool', scrollTool: 0 } : s;
+      case 'closeTool':
+        return { ...s, screen: 'flow' };
+      case 'taskEdited':
+        return {
+          ...s,
+          screen: 'taskConfirm',
+          pendingTask: a.task,
+          editFromConfirm: Boolean(a.fromConfirm),
+          editError: null,
+          awaitingConfirm: false,
+          scrollConfirm: 0,
+        };
+      case 'taskEditFailed':
+        return { ...s, editError: a.error };
+      case 'confirmTask':
+        return { ...s, screen: 'flow', pendingTask: null, editFromConfirm: false, editError: null };
+      case 'discardTask':
+        return { ...s, screen: 'flow', pendingTask: null, awaitingConfirm: s.editFromConfirm, editFromConfirm: false, editError: null };
       case 'toggleFocus':
         return { ...s, focus: s.focus === 'AUTHOR' ? 'REVIEWER' : 'AUTHOR' };
       case 'toggleWrap':
@@ -264,6 +408,7 @@ export async function runTui({ config }) {
 
   // -- the App component ---------------------------------------------------
   let runDone = false;
+  let runStarted = false;
   let runFailure = null;
   let runResult = null;
 
@@ -299,12 +444,20 @@ export async function runTui({ config }) {
     // Kick off the run exactly once, but only after the user confirms (or
     // immediately if --yes / ACP_REVIEW_YES skipped the prompt).
     useEffect(() => {
-      if (view.awaitingConfirm || view.cancelled) return;
+      if (runStarted || view.awaitingConfirm || view.cancelled || view.screen === 'taskConfirm') return;
+      runStarted = true;
       engine.run()
         .then((r) => { runResult = r; })
         .catch((err) => { runFailure = err; })
-        .finally(() => { runDone = true; setTick((t) => (t + 1) | 0); });
-    }, [view.awaitingConfirm, view.cancelled]);
+        .finally(() => {
+          runDone = true;
+          setTick((t) => (t + 1) | 0);
+          if (exitAfterApproval) {
+            leaveAltScreen();
+            app.exit();
+          }
+        });
+    }, [view.awaitingConfirm, view.cancelled, view.screen]);
 
     // If user cancels in the confirm overlay, treat the run as done so `q` exits.
     useEffect(() => {
@@ -315,17 +468,70 @@ export async function runTui({ config }) {
     }, [view.cancelled]);
 
     useInput((input, key) => {
+      const approvalPending = Boolean(approvalResolver && state.phase === Phase.Done && state.result?.approved);
+      const openTaskEditor = () => {
+        try {
+          dispatchView({ type: 'taskEdited', task: editTaskText(config.task), fromConfirm: view.awaitingConfirm });
+          setTick((t) => (t + 1) | 0);
+        } catch (error) {
+          dispatchView({ type: 'taskEditFailed', error: error instanceof Error ? error.message : String(error) });
+        }
+      };
+
       // Confirm overlay traps all input until resolved.
       if (view.awaitingConfirm) {
         if (input === 'y' || input === 'Y' || key.return) {
           dispatchView({ type: 'confirm' });
+        } else if (input === 'e' || input === 'E') {
+          openTaskEditor();
         } else if (input === 'n' || input === 'N' || key.escape || (input === 'q')) {
           dispatchView({ type: 'cancel' });
         }
         return;
       }
-      if (key.leftArrow)        dispatchView({ type: 'select', delta: -1, order: state.order });
+
+      if (view.screen === 'taskConfirm') {
+        if (key.upArrow || input === 'k') {
+          dispatchView({ type: 'scrollConfirm', delta: -1 });
+        } else if (key.downArrow || input === 'j') {
+          dispatchView({ type: 'scrollConfirm', delta: 1 });
+        } else if (key.pageUp) {
+          dispatchView({ type: 'scrollConfirm', delta: -10 });
+        } else if (key.pageDown) {
+          dispatchView({ type: 'scrollConfirm', delta: 10 });
+        } else if (input === 'g' || input === 'G') {
+          dispatchView({ type: 'scrollConfirmTop' });
+        } else if (key.return || input === 'y' || input === 'Y') {
+          const nextTask = view.pendingTask ?? config.task;
+          const changed = nextTask !== config.task;
+          config.task = nextTask;
+          config.taskSource = { kind: 'edited' };
+          if (approvalPending) {
+            resolveApproval(changed
+              ? {
+                continue: true,
+                feedback: `The task was edited after approval. Continue with the updated task:\n${config.task}`,
+              }
+              : { continue: false });
+          }
+          dispatchView({ type: 'confirmTask' });
+          setTick((t) => (t + 1) | 0);
+        } else if (key.escape || input === 'n' || input === 'N' || input === 'q') {
+          dispatchView({ type: 'discardTask' });
+        } else if (input === 'e' || input === 'E') {
+          openTaskEditor();
+        }
+        return;
+      }
+
+      if (approvalPending && (input === 'f' || input === 'F')) {
+        forceContinueAfterApproval();
+      } else if (approvalPending && (key.return || input === 'q')) {
+        exitAfterApproval = input === 'q';
+        resolveApproval({ continue: false });
+      } else if (key.leftArrow) dispatchView({ type: 'select', delta: -1, order: state.order });
       else if (key.rightArrow)  dispatchView({ type: 'select', delta: 1, order: state.order });
+      else if (view.screen === 'tool' && (key.escape || input === 'q')) dispatchView({ type: 'closeTool' });
       else if (input === 'g')   dispatchView({ type: 'jumpLatest', order: state.order });
       else if (input === 'G')   dispatchView({ type: 'scrollEnd' });
       else if (key.upArrow)     dispatchView({ type: 'scroll', delta: 1 });
@@ -336,6 +542,10 @@ export async function runTui({ config }) {
       else if (input === 'j')   dispatchView({ type: 'scroll', delta: -1 });
       else if (key.tab || input === '\t') dispatchView({ type: 'toggleFocus' });
       else if (input === 't')   dispatchView({ type: 'toggleTrace' });
+      else if (input === '[')   dispatchView({ type: 'selectTool', tool: moveToolSelection(-1) });
+      else if (input === ']')   dispatchView({ type: 'selectTool', tool: moveToolSelection(1) });
+      else if (key.return || input === 'd') dispatchView({ type: 'openTool', tool: currentToolSelection() });
+      else if (input === 'e' || input === 'E') openTaskEditor();
       else if (input === 'w')   dispatchView({ type: 'toggleWrap' });
       else if (input === '?')   dispatchView({ type: 'toggleHelp' });
       else if (input === 'q' && runDone) {
@@ -358,7 +568,7 @@ export async function runTui({ config }) {
     const totalRows = Math.max(0, size.rows);
     const idealHeader = 7;        // title + cwd/task/rounds + combined status + border
     const idealNav = 3;           // 1 line + 2 border
-    const idealFooter = (state.phase === Phase.Done || state.phase === Phase.Error) ? 4 : 0;
+    const idealFooter = state.phase === Phase.Error ? 4 : 0;
 
     // Header is the highest-priority chunk; give it up to its ideal but
     // never more than the total. Nav comes next, then footer, then panes
@@ -417,6 +627,32 @@ export async function runTui({ config }) {
     const total = state.order.length;
     const idx = selectedRound == null ? -1 : state.order.indexOf(selectedRound);
 
+    function toolsForSelection() {
+      const pane = view.focus === 'AUTHOR' ? round?.AUTHOR : round?.REVIEWER;
+      return pane?.tools ?? [];
+    }
+
+    function currentToolSelection() {
+      const tools = toolsForSelection();
+      if (tools.length === 0 || selectedRound == null) return null;
+      const selected = view.selectedTool?.round === selectedRound && view.selectedTool?.role === view.focus
+        ? tools.find((tool) => tool.id === view.selectedTool.toolCallId)
+        : null;
+      const tool = selected ?? tools[tools.length - 1];
+      return { round: selectedRound, role: view.focus, toolCallId: tool.id };
+    }
+
+    function moveToolSelection(delta) {
+      const tools = toolsForSelection();
+      if (tools.length === 0 || selectedRound == null) return null;
+      const current = view.selectedTool?.round === selectedRound && view.selectedTool?.role === view.focus
+        ? tools.findIndex((tool) => tool.id === view.selectedTool.toolCallId)
+        : -1;
+      const base = current >= 0 ? current : (delta < 0 ? tools.length : -1);
+      const next = Math.max(0, Math.min(tools.length - 1, base + delta));
+      return { round: selectedRound, role: view.focus, toolCallId: tools[next].id };
+    }
+
     function roleStatusToPaneStatus(status) {
       if (status === 'ready') return PaneStatus.Completed;
       if (String(status).startsWith('launching') || String(status).startsWith('session ready')) {
@@ -444,22 +680,23 @@ export async function runTui({ config }) {
           if (run.length > 3) {
             const status = mergedToolStatus(run);
             const failed = run.filter((tool) => tool.status === 'failed' || tool.status === 'error').length;
-            const summary = `${run.length} continuous tool calls${failed ? ` (${failed} failed)` : ''}`;
+            const succeeded = run.filter((tool) => ['completed', 'done', 'success'].includes(tool.status)).length;
+            const summary = `${run.length} Tool Call (${succeeded} Succ, ${failed} Fail)`;
             rows.push({ kind: 'tool', status, text: summary });
             run.slice(0, 3).forEach((tool) => {
               const text = `  ${summarizeTool(tool, { compact: true })}`;
               const parts = view.wrap ? wrapLine(text, width) : [text];
-              parts.forEach((part) => rows.push({ kind: 'tool', status: tool.status || status, text: part }));
+              parts.forEach((part) => rows.push({ kind: 'tool', status: tool.status || status, text: part, toolCallId: tool.toolCallId }));
             });
             if (run.length > 3) {
-              rows.push({ kind: 'tool', status, text: `  ... ${run.length - 3} more; press t for raw ACP details` });
+              rows.push({ kind: 'tool', status, text: `  ... ${run.length - 3} more; press [/] then Enter for full tool details` });
             }
           } else {
             for (const tool of run) {
               const status = tool.status || 'running';
               const text = summarizeTool(tool);
               const parts = view.wrap ? wrapLine(text, width) : [text];
-              parts.forEach((part) => rows.push({ kind: 'tool', status, text: part }));
+              parts.forEach((part) => rows.push({ kind: 'tool', status, text: part, toolCallId: tool.toolCallId }));
             }
           }
           continue;
@@ -544,19 +781,27 @@ export async function runTui({ config }) {
         },
         line(
           h(
-            Text,
-            { wrap: 'truncate-end' },
-            h(Text, { bold: true, color }, headerLabel),
-            ' ',
-            h(Text, { color: paneStatusColor(status) }, status),
+            Box,
+            { justifyContent: 'space-between', width: '100%' },
+            h(
+              Text,
+              { wrap: 'truncate-end' },
+              h(Text, { bold: true, color }, headerLabel),
+              ' ',
+              h(Text, { color: paneStatusColor(status) }, status),
+            ),
+            h(Text, { dimColor: true, wrap: 'truncate-end' }, formatUsage(pane?.usage)),
           ),
           `${role}-header`,
         ),
         ...visible.map((row, i) => {
           const text = row.text === '' ? ' ' : row.text;
           if (row.kind === 'tool') {
+            const selected = view.selectedTool?.round === selectedRound
+              && view.selectedTool?.role === role
+              && view.selectedTool?.toolCallId === row.toolCallId;
             return line(
-              h(Text, { color: toolStatusColor(row.status), wrap: 'truncate-end' }, text),
+              h(Text, { color: toolStatusColor(row.status), inverse: selected, wrap: 'truncate-end' }, text),
               `l${i}`,
             );
           }
@@ -608,7 +853,81 @@ export async function runTui({ config }) {
       );
     }
 
-    const mainView = view.screen === 'trace' ? h(TraceView) : split;
+    function selectedToolRecord() {
+      const selection = view.selectedTool;
+      if (!selection) return null;
+      const selected = state.rounds.get(selection.round)?.[selection.role];
+      const tool = selected?.tools?.find((item) => item.id === selection.toolCallId);
+      return tool ? { selection, tool } : null;
+    }
+
+    function formatToolDetailsRows() {
+      const record = selectedToolRecord();
+      if (!record) {
+        return ['No tool call selected. Press [ or ] in the flow view to select one.'];
+      }
+      const { selection, tool } = record;
+      const rows = [
+        `${selection.role} Round ${selection.round} ${tool.tag || ''} ${toolStatusLabel(tool.status || 'running')}`.trim(),
+        `id: ${tool.id}`,
+        `name: ${tool.name || '(unknown)'}`,
+        `title: ${tool.title || '(untitled)'}`,
+        `status: ${tool.status || 'running'}`,
+        `chars: ${tool.chars ?? 0}`,
+        '',
+        'input:',
+        ...prettyValue(tool.input).map((line) => `  ${line}`),
+        '',
+        'output:',
+        ...prettyValue(tool.output).map((line) => `  ${line}`),
+      ];
+      return rows;
+    }
+
+    function prettyValue(value) {
+      if (value == null) return ['(empty)'];
+      if (typeof value === 'string') return value.split('\n');
+      try {
+        return JSON.stringify(value, null, 2).split('\n');
+      } catch {
+        return [stringifyValue(value)];
+      }
+    }
+
+    function ToolView() {
+      const detailRows = formatToolDetailsRows()
+        .flatMap((row) => view.wrap ? wrapLine(row, Math.max(1, size.cols - 4)) : [row]);
+      const bodyBudget = Math.max(0, paneOuter - Math.min(3, paneOuter));
+      const end = Math.max(bodyBudget, detailRows.length - view.scrollTool);
+      const start = Math.max(0, end - bodyBudget);
+      const visible = detailRows.slice(start, end);
+      while (visible.length < bodyBudget) visible.push('');
+      return h(
+        Box,
+        {
+          flexDirection: 'column',
+          borderStyle: 'round',
+          borderColor: '#ffa500',
+          paddingX: 1,
+          height: paneOuter,
+          overflow: 'hidden',
+        },
+        line(
+          shortcutLine(
+            h(Text, { bold: true, color: '#ffa500' }, 'Tool Call Details'),
+            muted(' - '),
+            shortcutLabel('[/]'),
+            muted(' select, '),
+            shortcutLabel('Esc/q'),
+            muted(' back'),
+          ),
+          'tool-header',
+        ),
+        ...visible.map((row, i) => rowText(row === '' ? ' ' : row, `tool-${i}`)),
+      );
+    }
+
+    const mainView = view.screen === 'trace' ? h(TraceView) : view.screen === 'tool' ? h(ToolView) : split;
 
     // ---- nav -----------------------------------------------------------
     const navText = total === 0
@@ -617,7 +936,27 @@ export async function runTui({ config }) {
     const focusHint = `focus:${view.focus.toLowerCase()}`;
     const wrapHint = view.wrap ? 'wrap:on' : 'wrap:off';
     const followHint = view.follow ? 'follow:on' : 'follow:off';
-    const screenHint = view.screen === 'trace' ? 'trace:on' : 'trace:off';
+    const screenHint = view.screen === 'trace' ? 'trace:on' : view.screen === 'tool' ? 'tool:detail' : 'trace:off';
+    const resultHint = state.phase === Phase.Done && state.result
+      ? state.result.approved
+        ? shortcutLine(
+          h(Text, { color: 'green', bold: true }, 'APPROVED'),
+          muted(' - '),
+          shortcutLabel('f'),
+          muted(' force continue, '),
+          shortcutLabel('e'),
+          muted(' edit/resume, '),
+          shortcutLabel('Enter'),
+          muted(' accept, '),
+          shortcutLabel('q'),
+          muted(' accept+quit'),
+        )
+        : shortcutLine(
+          muted(`Not approved after ${state.result.rounds}/${state.result.maxRounds}; `),
+          shortcutLabel('q'),
+          muted(' quit'),
+        )
+      : null;
     const nav = h(
       Box,
       {
@@ -628,8 +967,31 @@ export async function runTui({ config }) {
       },
       h(
         Text,
-        { dimColor: true, wrap: 'truncate-end' },
-        `${navText}   \u2190/\u2192 round  \u2191/\u2193 scroll  Tab focus  t trace  w wrap  g latest  ? help  q quit`,
+        { wrap: 'truncate-end' },
+        resultHint || muted(navText),
+        muted('   '),
+        shortcutLabel('\u2190/\u2192'),
+        muted(' round  '),
+        shortcutLabel('\u2191/\u2193'),
+        muted(' scroll  '),
+        shortcutLabel('Tab'),
+        muted(' focus  '),
+        shortcutLabel('[/]'),
+        muted(' tool  '),
+        shortcutLabel('Enter'),
+        muted(' detail  '),
+        shortcutLabel('e'),
+        muted(' edit  '),
+        shortcutLabel('t'),
+        muted(' trace  '),
+        shortcutLabel('w'),
+        muted(' wrap  '),
+        shortcutLabel('g'),
+        muted(' latest  '),
+        shortcutLabel('?'),
+        muted(' help  '),
+        shortcutLabel('q'),
+        muted(' quit'),
         '   ',
         h(Text, { color: view.follow ? 'green' : 'yellow' }, followHint),
         ' ',
@@ -641,36 +1003,9 @@ export async function runTui({ config }) {
       ),
     );
 
-    // ---- footer (only when run is done) --------------------------------
+    // ---- footer (only for errors; final status stays in nav to avoid layout jumps)
     let footer = null;
-    if (state.phase === Phase.Done && state.result) {
-      footer = h(
-        Box,
-        {
-          flexDirection: 'column',
-          borderStyle: 'double',
-          paddingX: 1,
-          height: footerHeight,
-          overflow: 'hidden',
-        },
-        h(
-          Text,
-          {
-            color: state.result.approved ? 'green' : 'red',
-            bold: true,
-            wrap: 'truncate-end',
-          },
-          state.result.approved
-            ? `\u2705  APPROVED  \u2705  Files under ${state.result.cwd}.`
-            : `Not approved after ${state.result.rounds}/${state.result.maxRounds} rounds.`,
-        ),
-        h(
-          Text,
-          { dimColor: true, wrap: 'truncate-end' },
-          'Run complete \u2014 \u2190/\u2192 review rounds, q to quit.',
-        ),
-      );
-    } else if (state.phase === Phase.Error) {
+    if (state.phase === Phase.Error) {
       footer = h(
         Box,
         {
@@ -681,15 +1016,69 @@ export async function runTui({ config }) {
           overflow: 'hidden',
         },
         h(Text, { color: 'red', wrap: 'truncate-end' }, state.error || 'error'),
-        h(Text, { dimColor: true, wrap: 'truncate-end' }, 'Press q to quit.'),
+        shortcutLine(muted('Press '), shortcutLabel('q'), muted(' to quit.')),
+      );
+    }
+
+    // ---- task edit confirmation overlay -------------------------------
+    if (view.screen === 'taskConfirm') {
+      const confirmCols = Math.max(20, size.cols - 10);
+      const taskLines = wrapLine(view.pendingTask || '(empty)', confirmCols);
+      const bodyBudget = Math.max(0, size.rows - 8);
+      const maxStart = Math.max(0, taskLines.length - bodyBudget);
+      const start = Math.min(view.scrollConfirm, maxStart);
+      const visibleLines = bodyBudget > 0 ? taskLines.slice(start, start + bodyBudget) : [];
+      return h(
+        Box,
+        {
+          flexDirection: 'column',
+          width: size.cols,
+          height: size.rows,
+          overflow: 'hidden',
+        },
+        h(
+          Box,
+          {
+            flexDirection: 'column',
+            borderStyle: 'double',
+            borderColor: 'yellow',
+            paddingX: 2,
+            paddingY: 1,
+            width: size.cols,
+            height: size.rows,
+            overflow: 'hidden',
+          },
+          h(Text, { bold: true, color: 'yellow' }, 'Confirm updated task'),
+          h(Text, null, ''),
+          ...visibleLines.map((row, i) =>
+            h(Text, { key: `task-confirm-${start}-${i}`, wrap: 'wrap' }, start + i === 0 ? 'task:     ' : '          ', row),
+          ),
+          h(Text, null, ''),
+          h(
+            Text,
+            null,
+            h(Text, { color: 'green', bold: true }, 'Enter'),
+            ' apply   ',
+            h(Text, { color: 'cyan', bold: true }, 'e'),
+            ' edit again   ',
+            h(Text, { color: 'red', bold: true }, 'Esc'),
+            ' discard   ',
+            shortcutLabel('\u2191/\u2193'),
+            ' scroll',
+          ),
+        ),
       );
     }
 
     // ---- confirm overlay (first frame, blocks engine.run) -------------
     if (view.awaitingConfirm) {
+      const confirmCols = Math.max(20, size.cols - 10);
+      const taskLines = wrapLine(config.task || '(empty)', confirmCols);
       const lines = [
         ['cwd:      ', config.cwd],
-        ['task:     ', config.task],
+        ['task src: ', config.taskSource?.kind === 'file' ? config.taskSource.path : '(inline text)'],
+        ['task:     ', taskLines[0] ?? ''],
+        ...taskLines.slice(1).map((row) => ['          ', row]),
         ['author:   ', `${config.authorSettings.agent.displayName} (${config.authorSettings.agent.id})`],
         ['          model: ', config.authorSettings.model || '(agent default)'],
         ['reviewer: ', `${config.reviewerSettings.agent.displayName} (${config.reviewerSettings.agent.id})`],
@@ -722,7 +1111,7 @@ export async function runTui({ config }) {
           ...lines.map((row, i) =>
             h(
               Text,
-              { key: i, wrap: 'truncate-end' },
+              { key: i, wrap: 'wrap' },
               h(Text, { dimColor: true }, row[0]),
               row[1],
             ),
@@ -735,6 +1124,8 @@ export async function runTui({ config }) {
             ' / ',
             h(Text, { color: 'green', bold: true }, 'Enter'),
             ' to start   ',
+            h(Text, { color: 'cyan', bold: true }, 'e'),
+            ' edit task   ',
             h(Text, { color: 'red', bold: true }, 'n'),
             ' / ',
             h(Text, { color: 'red', bold: true }, 'Esc'),
@@ -772,7 +1163,7 @@ export async function runTui({ config }) {
             overflow: 'hidden',
           },
           h(Text, { color: 'red', bold: true }, 'Cancelled.'),
-          h(Text, { dimColor: true }, 'Press q to quit.'),
+          shortcutLine(muted('Press '), shortcutLabel('q'), muted(' to quit.')),
         ),
       );
     }
@@ -800,20 +1191,33 @@ export async function runTui({ config }) {
           },
           h(Text, { bold: true, color: 'cyan' }, 'Keybindings'),
           h(Text, null, ''),
-          h(Text, null, '  \u2190 / \u2192     Move between rounds'),
-          h(Text, null, '  \u2191 / \u2193     Scroll focused pane up/down by 1 line'),
-          h(Text, null, '  PgUp/PgDn  Scroll focused pane by 10 lines'),
-          h(Text, null, '  j / k      Same as down/up arrows'),
-          h(Text, null, '  Tab        Switch focused pane (AUTHOR \u2194 REVIEWER)'),
-          h(Text, null, '  g          Jump to latest round, re-enable follow'),
-          h(Text, null, '  G          Reset scroll to bottom in focused pane'),
-          h(Text, null, '  t          Toggle ACP trace view'),
-          h(Text, null, '  w          Toggle soft wrap'),
-          h(Text, null, '  ?          Toggle this help'),
-          h(Text, null, '  q          Quit (only after the run completes)'),
+          keyBindingLine('\u2190 / \u2192', 'Move between rounds'),
+          keyBindingLine('\u2191 / \u2193', 'Scroll focused pane up/down by 1 line'),
+          keyBindingLine('PgUp/PgDn', 'Scroll focused pane by 10 lines'),
+          keyBindingLine('j / k', 'Same as down/up arrows'),
+          keyBindingLine('Tab', 'Switch focused pane (AUTHOR \u2194 REVIEWER)'),
+          keyBindingLine('g', 'Jump to latest round, re-enable follow'),
+          keyBindingLine('G', 'Reset scroll to bottom in focused pane'),
+          keyBindingLine('[ / ]', 'Select previous/next tool call in focused pane'),
+          keyBindingLine('Enter / d', 'Open selected tool call details'),
+          keyBindingLine('Esc / q', 'Return from tool detail view'),
+          keyBindingLine('t', 'Toggle ACP trace view'),
+          keyBindingLine('w', 'Toggle soft wrap'),
+          keyBindingLine('?', 'Toggle this help'),
+          keyBindingLine('f', 'Force another round after reviewer approval'),
+          keyBindingLine('q', 'Quit (only after the run completes)'),
           h(Text, null, ''),
-          h(Text, { dimColor: true }, 'Press ? again to dismiss.'),
+          shortcutLine(muted('Press '), shortcutLabel('?'), muted(' again to dismiss.')),
         ),
+      );
+    }
+
+    function keyBindingLine(keys, description) {
+      const padding = ' '.repeat(Math.max(1, 12 - keys.length));
+      return shortcutLine(
+        muted('  '),
+        shortcutLabel(keys),
+        muted(`${padding}${description}`),
       );
     }
 
@@ -843,6 +1247,9 @@ export async function runTui({ config }) {
   try {
     await inkApp.waitUntilExit();
   } finally {
+    process.off('exit', restore);
+    process.off('SIGINT', handleSigint);
+    process.off('SIGTERM', handleSigterm);
     leaveAltScreen();
   }
 

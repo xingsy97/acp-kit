@@ -30,8 +30,9 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
     },
   });
 
+  let session;
   try {
-    const session = await runtime.newSession({ cwd });
+    session = await runtime.newSession({ cwd });
     if (settings.model) {
       renderer.onRoleStatus?.({ role, message: `session ready, setting model ${settings.model}...` });
       await setRequiredModel({ role, session, settings });
@@ -45,16 +46,14 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
       session,
       close: async () => {
         unsubscribeTrace();
-        for (const child of terminalHost.terminals.values()) {
-          if (!child.killed) child.kill('SIGKILL');
-        }
-        await session.dispose();
-        await runtime.shutdown();
+        await cleanupRoleResources({ session, runtime, terminalHost });
       },
     };
   } catch (error) {
     unsubscribeTrace();
-    await runtime.shutdown().catch(() => undefined);
+    await cleanupRoleResources({ session, runtime, terminalHost }).catch((cleanupError) => {
+      console.error(cleanupError instanceof Error ? cleanupError.message : String(cleanupError));
+    });
     if (trace) {
       console.error(inspector.toJSONL());
     }
@@ -155,6 +154,32 @@ function formatModelList(models) {
     'Available models:',
     ...models.map((model) => `  - ${model.id}${model.name && model.name !== model.id ? ` (${model.name})` : ''}`),
   ].join('\n');
+}
+
+async function cleanupRoleResources({ session, runtime, terminalHost }) {
+  const errors = [];
+
+  try {
+    for (const child of terminalHost.terminals?.values?.() ?? []) {
+      if (!child.killed && typeof child.kill === 'function') child.kill('SIGKILL');
+    }
+  } catch (error) {
+    errors.push(error);
+  }
+
+  if (session) {
+    await session.dispose().catch((error) => {
+      errors.push(error);
+    });
+  }
+
+  await runtime.shutdown().catch((error) => {
+    errors.push(error);
+  });
+
+  if (errors.length > 0) {
+    throw new AggregateError(errors, 'Failed to clean up ACP role resources.');
+  }
 }
 
 export async function closeRole(state) {

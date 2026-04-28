@@ -54,6 +54,26 @@ describe('diagnostics hint generation', () => {
     expect(diag.hints.find((h) => h.code === 'startup-timeout')).toBeDefined();
   });
 
+  it('generates GitHub Copilot ACP initialize guidance', () => {
+    const diag = createAcpStartupDiagnostics({
+      agent: {
+        id: 'github-copilot',
+        displayName: 'GitHub Copilot',
+        command: 'copilot-language-server',
+        args: ['--acp'],
+        fallbackCommands: [{ command: 'npx', args: ['--yes', '@github/copilot-language-server@latest', '--acp'] }],
+        startupTimeoutMs: 90000,
+      },
+      label: 'ACP initialize',
+      phase: 'initialize',
+      error: new Error('ACP initialize failed for agent github-copilot during initialize'),
+    });
+
+    const hint = diag.hints.find((h) => h.code === 'github-copilot-acp');
+    expect(hint).toBeDefined();
+    expect(hint?.command).toBe('npx --yes @github/copilot-language-server@latest --acp');
+  });
+
   it('generates auth-required hint for "login" messages', () => {
     const diag = createAcpStartupDiagnostics({
       agent,
@@ -329,6 +349,9 @@ describe('formatStartupDiagnostics', () => {
       cwd: '/repo',
       label: 'ACP initialize',
       phase: 'initialize',
+      platform: process.platform,
+      nodeVersion: process.version,
+      path: process.env.PATH,
       durationMs: 5000,
       process: { exitSummary: 'exit code=1', exitCode: 1, signal: null },
       stderrTail: 'login required',
@@ -341,6 +364,9 @@ describe('formatStartupDiagnostics', () => {
     expect(formatted).toContain('initialize');
     expect(formatted).toContain('test-agent-cli --acp');
     expect(formatted).toContain('/repo');
+    expect(formatted).toContain('Platform:');
+    expect(formatted).toContain('Node:');
+    expect(formatted).toContain('PATH:');
     expect(formatted).toContain('5000ms');
     expect(formatted).toContain('exit code=1');
     expect(formatted).toContain('something broke');

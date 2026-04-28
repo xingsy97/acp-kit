@@ -24,7 +24,7 @@ It launches an ACP agent process, manages the protocol connection, handles authe
 npm install @acp-kit/core
 ```
 
-Requires Node.js **>= 20.11** and a reachable ACP agent CLI on `PATH`.
+Requires Node.js **>= 20.11** and a reachable ACP agent CLI. Built-in profiles prefer local binaries on `PATH` and fall back to non-interactive `npx --yes <package>@latest` launches when needed.
 
 ## Quick Start
 
@@ -110,7 +110,7 @@ flowchart TB
   S -- stdio --> A
 ```
 
-Without ACP Kit, every product that wants to host an ACP agent has to write the same plumbing: pick the right CLI for the platform, spawn it without breaking on Windows shells or login envs, surface stderr when it fails to start, run `initialize`, retry `session/new` after `auth_required`, expose host capabilities only when the application actually backs them, parse `session/update` notifications into something a UI can render, and decide when a turn is really done.
+Without ACP Kit, every product that wants to host an ACP agent has to write the same plumbing: pick the right CLI for the platform, spawn it without breaking on Windows `.cmd` shims or login envs, surface stderr when it fails to start, run `initialize`, retry `session/new` after `auth_required`, expose host capabilities only when the application actually backs them, parse `session/update` notifications into something a UI can render, and decide when a turn is really done.
 
 ACP Kit packages all of that behind `createAcpRuntime({...}).newSession({ cwd })` (or the `runOneShotPrompt` one-shot helper). The agent stays a regular ACP server; your application stays a regular consumer of typed events. See [Architecture](docs/architecture.md) for the layer breakdown.
 

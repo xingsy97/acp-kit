@@ -1,208 +1,9 @@
 import fs from 'node:fs/promises';
+import { PaneStatus, Phase, initialState, reduce } from './engine/state.mjs';
 import { closeRole, openRole } from './runtime/role.mjs';
 import { runTurn } from './runtime/turn.mjs';
 
-/**
- * Author/Reviewer engine.
- *
- * Owns:
- *   - the business loop (open roles, alternate AUTHOR/REVIEWER turns until APPROVED)
- *   - a reduced state tree describing every round's panes, tools, statuses
- *   - a tiny subscribe()/getState() API so any renderer (plain, ink, html, ...)
- *     can observe the run without re-implementing bookkeeping.
- *
- * Renderers are now passive views over `engine.getState()` plus the stream of
- * normalized events delivered to subscribers. The engine itself does not draw.
- */
-
-export const PaneStatus = Object.freeze({
-  Pending: 'pending',
-  Running: 'running',
-  Completed: 'completed',
-  Failed: 'failed',
-});
-
-export const Phase = Object.freeze({
-  Idle: 'idle',
-  Launching: 'launching',
-  Running: 'running',
-  Done: 'done',
-  Error: 'error',
-});
-
-function emptyPane() {
-  return {
-    status: PaneStatus.Pending,
-    lines: [],          // committed text lines (split by \n)
-    current: '',        // the not-yet-newline-terminated tail
-    flow: [],           // ordered text/tool activity as emitted by the agent
-    tools: [],          // [{ id, tag, title, status, chars, input, output }]
-    stopReason: null,
-    error: null,
-    chars: 0,           // total streamed characters
-  };
-}
-
-function paneFromTurnSnapshot(snapshot, previous = emptyPane()) {
-  const parts = snapshot.text.split('\n');
-  const current = parts.pop() ?? '';
-  const status = snapshot.status === 'completed'
-    ? PaneStatus.Completed
-    : snapshot.status === 'failed' || snapshot.status === 'cancelled'
-      ? PaneStatus.Failed
-      : PaneStatus.Running;
-  return {
-    status,
-    lines: parts,
-    current,
-    flow: previous.flow,
-    tools: snapshot.tools.map((tool) => ({
-      id: tool.id,
-      tag: tool.tag,
-      name: tool.name,
-      title: tool.title || tool.name || tool.id,
-      status: tool.status,
-      chars: Math.max(tool.inputChars, tool.outputChars),
-      input: previous.tools.find((item) => item.id === tool.id)?.input,
-      output: previous.tools.find((item) => item.id === tool.id)?.output,
-    })),
-    stopReason: snapshot.stopReason,
-    error: snapshot.error,
-    chars: snapshot.text.length,
-  };
-}
-
-function emptyRound() {
-  return { AUTHOR: emptyPane(), REVIEWER: emptyPane() };
-}
-
-function initialState() {
-  return {
-    phase: Phase.Idle,
-    statuses: { AUTHOR: 'pending', REVIEWER: 'pending' },
-    rounds: new Map(),   // round number -> { AUTHOR, REVIEWER }
-    order: [],           // sorted round numbers
-    trace: [],           // raw ACP inspector entries for trace views
-    latest: null,        // latest round number with activity
-    result: null,        // final RunResult
-    error: null,         // error string if phase === 'error'
-    startedAt: null,
-    finishedAt: null,
-  };
-}
-
-function ensureRound(state, round) {
-  if (state.rounds.has(round)) return state;
-  const rounds = new Map(state.rounds);
-  rounds.set(round, emptyRound());
-  const order = [...state.order];
-  if (!order.includes(round)) {
-    order.push(round);
-    order.sort((a, b) => a - b);
-  }
-  return { ...state, rounds, order, latest: order[order.length - 1] };
-}
-
-function patchPane(state, round, role, mutate) {
-  const rounds = new Map(state.rounds);
-  const entry = rounds.get(round) || emptyRound();
-  rounds.set(round, { ...entry, [role]: mutate({ ...entry[role] }) });
-  return { ...state, rounds };
-}
-
-function appendTextFlow(pane, delta, flowId) {
-  if (!delta) return pane;
-  const flow = [...pane.flow];
-  const last = flow[flow.length - 1];
-  if (last?.kind === 'text') {
-    flow[flow.length - 1] = { ...last, text: last.text + delta };
-  } else {
-    flow.push({ id: `flow-${flowId}`, kind: 'text', text: delta });
-  }
-  return { ...pane, flow };
-}
-
-function appendOrUpdateToolFlow(pane, event, flowId) {
-  const flow = [...pane.flow];
-  const index = flow.findIndex((item) => item.kind === 'tool' && item.toolCallId === event.toolCallId);
-  const previous = index >= 0 ? flow[index] : null;
-  const next = {
-    id: previous?.id ?? `flow-${flowId}`,
-    kind: 'tool',
-    toolCallId: event.toolCallId,
-    tag: event.tag ?? previous?.tag,
-    name: event.name ?? previous?.name,
-    title: event.title ?? previous?.title,
-    status: event.status ?? previous?.status ?? PaneStatus.Running,
-    chars: event.chars ?? previous?.chars ?? 0,
-    input: event.input ?? previous?.input,
-    output: event.output ?? previous?.output,
-  };
-  if (index >= 0) flow[index] = { ...previous, ...next };
-  else flow.push(next);
-
-  const tools = [...pane.tools];
-  const toolIndex = tools.findIndex((item) => item.id === event.toolCallId);
-  const previousTool = toolIndex >= 0 ? tools[toolIndex] : {};
-  const tool = {
-    ...previousTool,
-    id: event.toolCallId,
-    tag: next.tag,
-    name: next.name,
-    title: next.title,
-    status: next.status,
-    chars: next.chars,
-    input: next.input,
-    output: next.output,
-  };
-  if (toolIndex >= 0) tools[toolIndex] = tool;
-  else tools.push(tool);
-
-  return { ...pane, flow, tools };
-}
-
-function pushTrace(state, action) {
-  const trace = [
-    ...state.trace,
-    { id: `trace-${action.traceId}`, role: action.role, entry: action.entry },
-  ];
-  return { ...state, trace: trace.slice(-1000) };
-}
-
-function reduce(state, action) {
-  switch (action.type) {
-    case 'launching':
-      return { ...state, phase: Phase.Launching, startedAt: state.startedAt ?? Date.now() };
-    case 'roleStatus':
-      return { ...state, statuses: { ...state.statuses, [action.role]: action.message } };
-    case 'turnStart': {
-      const next = ensureRound(state, action.round);
-      next.phase = Phase.Running;
-      return patchPane(next, action.round, action.role, (p) => ({ ...p, status: PaneStatus.Running }));
-    }
-    case 'turnSnapshot': {
-      const next = ensureRound(state, action.round);
-      return patchPane(next, action.round, action.role, (pane) => paneFromTurnSnapshot(action.snapshot, pane));
-    }
-    case 'delta': {
-      const next = ensureRound(state, action.round);
-      return patchPane(next, action.round, action.role, (pane) => appendTextFlow(pane, action.delta, action.flowId));
-    }
-    case 'toolStart':
-    case 'toolEnd': {
-      const next = ensureRound(state, action.round);
-      return patchPane(next, action.round, action.role, (pane) => appendOrUpdateToolFlow(pane, action, action.flowId));
-    }
-    case 'traceEntry':
-      return pushTrace(state, action);
-    case 'result':
-      return { ...state, phase: Phase.Done, result: action.result, finishedAt: Date.now() };
-    case 'error':
-      return { ...state, phase: Phase.Error, error: action.error, finishedAt: Date.now() };
-    default:
-      return state;
-  }
-}
+export { PaneStatus, Phase };
 
 function isApprovedVerdict(text) {
   return text
@@ -212,12 +13,6 @@ function isApprovedVerdict(text) {
     .some((line) => /^APPROVED\.?$/i.test(line.trim()));
 }
 
-/**
- * Build a new engine. The engine does NOT auto-start; call `engine.run()`.
- *
- * @param {object} options
- * @param {object} options.config  parsed run configuration
- */
 export function createLoopEngine({ config }) {
   let state = initialState();
   const listeners = new Set();
@@ -272,7 +67,6 @@ export function createLoopEngine({ config }) {
   async function run() {
     const { cwd, maxRounds, trace, tui, authorSettings, reviewerSettings } = config;
     await fs.mkdir(cwd, { recursive: true });
-
     innerRenderer.onLaunching();
 
     let author;
@@ -287,33 +81,16 @@ export function createLoopEngine({ config }) {
         renderer: innerRenderer,
       });
 
-      let feedback = '';
-      let approved = false;
-      let lastRound = 0;
-
-      for (let round = 1; round <= maxRounds && !approved; round++) {
-        lastRound = round;
-        await runTurn({
-          round,
-          role: 'AUTHOR',
-          state: author,
-          prompt: authorSettings.prompt({ round, feedback }),
-          renderer: innerRenderer,
-        });
-        const reply = await runTurn({
-          round,
-          role: 'REVIEWER',
-          state: reviewer,
-          prompt: reviewerSettings.prompt({ round, feedback }),
-          renderer: innerRenderer,
-        });
-
-        feedback = reply.trim();
-        approved = isApprovedVerdict(feedback);
-      }
-
-      const result = { approved, feedback, maxRounds, rounds: lastRound, cwd };
-      innerRenderer.onResult(result);
+      const result = await runRounds({
+        author,
+        reviewer,
+        maxRounds,
+        cwd,
+        config,
+        authorSettings,
+        reviewerSettings,
+        renderer: innerRenderer,
+      });
       return result;
     } catch (error) {
       const message = formatErrorMessage(error);
@@ -339,6 +116,68 @@ export function createLoopEngine({ config }) {
     },
     run,
   };
+}
+
+async function runRounds({ author, reviewer, maxRounds, cwd, config, authorSettings, reviewerSettings, renderer }) {
+  let feedback = '';
+  let approved = false;
+  let lastRound = 0;
+  let roundLimit = maxRounds;
+  let approvalContinuations = 0;
+  const continuationLimit = normalizeApprovalContinuationLimit(config.maxApprovalContinuations, maxRounds);
+  const hardRoundLimit = maxRounds + continuationLimit;
+
+  for (let round = 1; round <= roundLimit; round++) {
+    lastRound = round;
+    await runTurn({
+      round,
+      role: 'AUTHOR',
+      state: author,
+      prompt: authorSettings.prompt({ round, feedback }),
+      renderer,
+    });
+    const reply = await runTurn({
+      round,
+      role: 'REVIEWER',
+      state: reviewer,
+      prompt: reviewerSettings.prompt({ round, feedback }),
+      renderer,
+    });
+
+    feedback = reply.trim();
+    approved = isApprovedVerdict(feedback);
+    if (!approved) continue;
+
+    const result = { approved: true, feedback, maxRounds: roundLimit, rounds: lastRound, cwd };
+    renderer.onResult(result);
+    const decision = await config.onApproved?.(result);
+    if (!decision?.continue) return result;
+
+    if (approvalContinuations >= continuationLimit || round >= hardRoundLimit) {
+      const cappedResult = {
+        ...result,
+        maxRounds: hardRoundLimit,
+        continuationLimitReached: true,
+        feedback: `${feedback}\n\nApproval continuation limit reached after ${approvalContinuations} continuation(s).`,
+      };
+      renderer.onResult(cappedResult);
+      return cappedResult;
+    }
+
+    approvalContinuations += 1;
+    approved = false;
+    if (round === roundLimit) roundLimit = Math.min(roundLimit + 1, hardRoundLimit);
+    feedback = decision.feedback || `The task changed after approval. Continue with the updated task:\n${config.task}`;
+  }
+
+  const result = { approved, feedback, maxRounds: roundLimit, rounds: lastRound, cwd };
+  renderer.onResult(result);
+  return result;
+}
+
+function normalizeApprovalContinuationLimit(value, fallback) {
+  if (Number.isInteger(value) && value >= 0) return value;
+  return fallback;
 }
 
 async function openRoles({ authorSettings, reviewerSettings, cwd, trace, captureTrace, renderer }) {

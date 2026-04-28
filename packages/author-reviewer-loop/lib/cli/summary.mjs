@@ -1,6 +1,7 @@
-export function formatRunSummary({ cwd, task, authorSettings, reviewerSettings, maxRounds, trace, tui }) {
+export function formatRunSummary({ cwd, task, taskSource, authorSettings, reviewerSettings, maxRounds, trace, tui }) {
   return `Run configuration
   cwd:            ${cwd}
+  task source:    ${taskSource?.kind === 'file' ? taskSource.path : '(inline text)'}
   task:           ${task}
   author:         ${authorSettings.agent.displayName} (${authorSettings.agent.id})
   author model:   ${authorSettings.model || '(agent default)'}

@@ -295,7 +295,7 @@ export class AcpRuntime {
   async newSession(options: NewSessionOptions = {}): Promise<RuntimeSession> {
     const cwd = this.requireCwd(options.cwd, 'newSession');
     const state = await this.connect();
-    const startupTimeoutMs = this.agent.startupTimeoutMs || 30000;
+    const startupTimeoutMs = startupTimeoutMsFor(this.agent);
 
     const sessionResponse = await withAuthRetry({
       operation: () => withStartupDiagnostics(
@@ -350,7 +350,7 @@ export class AcpRuntime {
         + 'Inspect `acp.agentCapabilities.loadSession` before calling loadSession().',
       );
     }
-    const startupTimeoutMs = this.agent.startupTimeoutMs || 30000;
+    const startupTimeoutMs = startupTimeoutMsFor(this.agent);
 
     const loadResponse = await withAuthRetry({
       operation: () => withStartupDiagnostics(
@@ -511,7 +511,7 @@ export class AcpRuntime {
         onSessionUpdate: sessionUpdateRouter,
       });
 
-      const startupTimeoutMs = this.agent.startupTimeoutMs || 30000;
+      const startupTimeoutMs = startupTimeoutMsFor(this.agent);
       const promptCapabilities = this.host.promptCapabilities;
       const initResponse = await withStartupDiagnostics(
         withTimeout(
@@ -1046,4 +1046,10 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
       clearTimeout(timeoutHandle);
     }
   }
+}
+
+function startupTimeoutMsFor(agent: AgentProfile): number {
+  const configured = Number(agent.startupTimeoutMs);
+  if (!Number.isFinite(configured) || configured <= 0) return 30000;
+  return configured;
 }

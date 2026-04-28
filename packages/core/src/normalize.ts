@@ -94,6 +94,12 @@ function readConfigOptions(update: RawUpdate): SessionConfigOption[] | null {
   return null;
 }
 
+function readFiniteNumber(update: RawUpdate, key: string, fallbackKey?: string): number | undefined {
+  const raw = key in update ? update[key] : fallbackKey ? update[fallbackKey] : undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : undefined;
+}
+
 export function normalizeAcpUpdate(
   notification: SessionNotification,
   context: NormalizeUpdateContext,
@@ -206,9 +212,15 @@ export function normalizeAcpUpdate(
         sessionId,
         at,
         turnId,
-        used: Number.isFinite(Number(update.used)) ? Number(update.used) : undefined,
-        size: Number.isFinite(Number(update.size)) ? Number(update.size) : undefined,
+        used: readFiniteNumber(update, 'used'),
+        size: readFiniteNumber(update, 'size'),
         cost: Number.isFinite(Number(update.cost)) ? Number(update.cost) : null,
+        inputTokens: readFiniteNumber(update, 'inputTokens', 'input_tokens'),
+        outputTokens: readFiniteNumber(update, 'outputTokens', 'output_tokens'),
+        totalTokens: readFiniteNumber(update, 'totalTokens', 'total_tokens'),
+        cachedReadTokens: readFiniteNumber(update, 'cachedReadTokens', 'cached_read_tokens'),
+        cachedWriteTokens: readFiniteNumber(update, 'cachedWriteTokens', 'cached_write_tokens'),
+        thoughtTokens: readFiniteNumber(update, 'thoughtTokens', 'thought_tokens'),
       }];
     }
     case 'config_option_update': {

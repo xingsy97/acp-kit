@@ -1,6 +1,12 @@
 import { existsSync } from 'node:fs';
 import { delimiter, isAbsolute, join } from 'node:path';
 
+export interface ResolveCommandOptions {
+  pathEnv?: string;
+  pathext?: string;
+  platform?: NodeJS.Platform;
+}
+
 /**
  * Synchronously check whether a command name resolves on the system PATH.
  *
@@ -13,23 +19,47 @@ import { delimiter, isAbsolute, join } from 'node:path';
  * spawned, so it completes in microseconds per call.
  */
 export function isCommandOnPath(command: string): boolean {
-  if (!command) return false;
+  return resolveCommandOnPath(command) !== null;
+}
+
+/**
+ * Resolve a command to the concrete file that will be launched.
+ *
+ * On Windows this includes PATHEXT lookup, so npm-installed shims such as
+ * `copilot-language-server.cmd` are returned with their real extension instead
+ * of the extensionless command name.
+ */
+export function resolveCommandOnPath(command: string, options: ResolveCommandOptions = {}): string | null {
+  if (!command) return null;
   if (command.includes('/') || command.includes('\\') || isAbsolute(command)) {
-    return existsSync(command);
+    return existsSync(command) ? command : null;
   }
 
-  const pathEnv = process.env.PATH || '';
-  const paths = pathEnv.split(delimiter).filter(Boolean);
-  const extensions = process.platform === 'win32'
-    ? (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+  const platform = options.platform ?? process.platform;
+  const pathEnv = options.pathEnv ?? process.env.PATH ?? '';
+  const pathDelimiter = platform === 'win32' ? ';' : delimiter;
+  const paths = pathEnv.split(pathDelimiter).filter(Boolean);
+  const extensions = platform === 'win32'
+    ? (options.pathext ?? process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
     : [''];
 
   for (const base of paths) {
     const direct = join(base, command);
-    if (existsSync(direct)) return true;
-    for (const ext of extensions) {
-      if (existsSync(direct + ext.toLowerCase()) || existsSync(direct + ext.toUpperCase())) return true;
+    const directExists = existsSync(direct);
+    if (platform !== 'win32') {
+      if (directExists) return direct;
+      continue;
     }
+    const lowerDirect = direct.toLowerCase();
+    const directHasExecutableExtension = extensions.some((ext) => lowerDirect.endsWith(ext.toLowerCase()));
+    if (directExists && directHasExecutableExtension) return direct;
+    for (const ext of extensions) {
+      const lower = direct + ext.toLowerCase();
+      if (existsSync(lower)) return lower;
+      const upper = direct + ext.toUpperCase();
+      if (existsSync(upper)) return upper;
+    }
+    if (directExists) return direct;
   }
-  return false;
+  return null;
 }

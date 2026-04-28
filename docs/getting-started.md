@@ -120,7 +120,7 @@ Failed to spawn agent "claude-code" (claude-code-acp):
   spawn claude-code-acp ENOENT
 ```
 
-The runtime tried to spawn the command in the agent profile and got `ENOENT`. Install the agent's npm package globally, or override `command` / `args` to point at a binary that exists on `PATH`.
+The runtime tried to spawn the command in the agent profile and got `ENOENT`. Built-in profiles first look for the fast local binary and, when it is missing, fall back to `npx --yes <package>@latest` if `npx` is available. Install the agent's npm package globally for the fastest startup, or override `command` / `args` to point at a pinned binary.
 
 ### `auth_required` and no `chooseAuthMethod`
 
@@ -143,13 +143,17 @@ Returning `null` aborts the session; returning a method `id` triggers the runtim
 ### Startup timeout
 
 ```text
-ACP initialize timed out after 30000ms for agent "github-copilot".
+ACP initialize timed out after 90000ms for agent "github-copilot".
 Last stderr: <whatever the CLI printed>
 ```
 
-Either the agent CLI is downloading itself (`npx` first run) or it's hung on an interactive prompt. Run the same `command` / `args` manually in a terminal to see what it's waiting for. If it just needs more time, bump `startupTimeoutMs` on the agent profile (default 30s; built-in profiles use 90s).
+Either the agent CLI is downloading itself through the non-interactive `npx --yes` fallback, waiting on agent login, or stuck on another first-run setup step. Run the same `command` / `args` manually in a terminal to see what it is waiting for. If it just needs more time, bump `startupTimeoutMs` on the agent profile; ACP Kit now honors values above the 30s built-in default for slow first-run Copilot or `npx` launches.
+
+For GitHub Copilot specifically, run `copilot-language-server --acp` manually. If that installed shim is stale or broken, retry with the fallback command ACP Kit suggests in diagnostics: `npx --yes @github/copilot-language-server@latest --acp`.
 
 For all three buckets, `host.log` is the single best diagnostic hook &mdash; it receives structured records for spawn, connect, init, auth, session create, and exit events.
+
+On Windows, npm-installed agent binaries are usually `.cmd` shims. ACP Kit resolves those concrete shim paths before spawning, so commands such as `copilot-language-server` launch the same way whether the caller typed the extension or not.
 
 ## Run local examples
 

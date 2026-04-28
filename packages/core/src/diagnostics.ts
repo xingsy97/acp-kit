@@ -30,9 +30,10 @@ export interface AcpStartupDiagnostics {
   cwd?: string;
   label: string;
   phase: AcpStartupFailurePhase;
-  platform?: string;
-  nodeVersion?: string;
-  durationMs?: number;
+    platform?: string;
+    nodeVersion?: string;
+    path?: string;
+    durationMs?: number;
   process?: {
     exitSummary?: string | null;
     exitCode?: number | null;
@@ -85,6 +86,7 @@ export function createAcpStartupDiagnostics(params: {
     phase: params.phase ?? inferFailurePhase(params.label, originalMessage),
     platform: typeof process !== 'undefined' ? process.platform : undefined,
     nodeVersion: typeof process !== 'undefined' ? process.version : undefined,
+    path: typeof process !== 'undefined' ? process.env.PATH : undefined,
     durationMs: params.startedAt ? Date.now() - params.startedAt : undefined,
     process: {
       exitSummary: diagnostics.exitSummary,
@@ -119,8 +121,12 @@ export function formatStartupDiagnostics(diagnostics: AcpStartupDiagnostics): st
     `Command: ${[diagnostics.command, ...diagnostics.args].join(' ')}`,
   ];
   if (diagnostics.cwd) lines.push(`CWD: ${diagnostics.cwd}`);
+  if (diagnostics.agentDisplayName) lines.push(`Agent: ${diagnostics.agentDisplayName}`);
+  if (diagnostics.platform) lines.push(`Platform: ${diagnostics.platform}`);
+  if (diagnostics.nodeVersion) lines.push(`Node: ${diagnostics.nodeVersion}`);
   if (diagnostics.durationMs !== undefined) lines.push(`Duration: ${diagnostics.durationMs}ms`);
   if (diagnostics.process?.exitSummary) lines.push(`Process: ${diagnostics.process.exitSummary}`);
+  if (diagnostics.path) lines.push(`PATH: ${diagnostics.path}`);
   lines.push('', diagnostics.originalMessage);
   if (diagnostics.stderrTail) lines.push('', `stderr:\n${diagnostics.stderrTail}`);
   if (diagnostics.stdoutTail) lines.push('', `stdout:\n${diagnostics.stdoutTail}`);
@@ -161,8 +167,15 @@ function buildStartupHints(params: {
   if (/timed out|timeout/.test(text)) {
     hints.push({
       code: 'startup-timeout',
-      message: 'Run the agent command manually, then increase agent.startupTimeoutMs if first launch installs packages or performs login.',
+      message: `Run the agent command manually and complete any first-run install or login before starting ACP Kit. Startup operations are capped at ${params.agent.startupTimeoutMs ?? 30000}ms for this agent.`,
       command: [params.agent.command, ...params.agent.args].join(' '),
+    });
+  }
+  if (params.agent.id === 'github-copilot' && params.agent.command === 'copilot-language-server') {
+    hints.push({
+      code: 'github-copilot-acp',
+      message: 'For GitHub Copilot ACP initialize failures, verify the language server can start in ACP mode outside ACP Kit, then retry with the bundled npx fallback if the installed shim is stale or broken.',
+      command: 'npx --yes @github/copilot-language-server@latest --acp',
     });
   }
   if (/auth|login|sign in|signin/.test(text)) {

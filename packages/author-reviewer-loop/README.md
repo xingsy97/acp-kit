@@ -21,9 +21,11 @@ npx @acp-kit/author-reviewer-loop .\demo-workspace "Create a Node.js CLI that co
 
 Use an empty or disposable directory. The AUTHOR agent is allowed to create and modify files under the target workspace.
 
+The task argument may be inline text or a relative/absolute path to a UTF-8 text file. If it resolves to a file, the task is read once at startup and that in-memory text is used for the rest of the run.
+
 After the initial confirmation, the demo approves agent file-system and terminal requests for the selected workspace so the loop can run unattended. Use a disposable workspace and only run agents you trust.
 
-Before launching agents, the CLI prints the full run configuration and asks for confirmation. Pass `--yes` or set `ACP_REVIEW_YES=1` to skip the prompt in scripts.
+Before launching agents, the CLI shows the full run configuration and asks for confirmation. Pass `--yes` or set `ACP_REVIEW_YES=1` to skip the prompt in scripts.
 
 ## Requirements
 
@@ -62,16 +64,18 @@ Supported built-in agent ids: `copilot`, `claude`, `codex`, `gemini`, `qwen`, `o
 ## Options
 
 ```bash
-npx @acp-kit/author-reviewer-loop <cwd> <task> [--yes] [--tui]
+npx @acp-kit/author-reviewer-loop <cwd> <task-or-task-file> [--yes] [--cli]
 ```
 
-Pass `--tui` (or set `ACP_REVIEW_TUI=1`) to render the loop in an Ink-based fullscreen TUI:
+The Ink-based fullscreen TUI is the default renderer. Pass `--cli` (or set `ACP_REVIEW_CLI=1`) to use the plain line-based renderer instead. `--tui` and `ACP_REVIEW_TUI=1` are still accepted for compatibility.
 
 - The TUI uses the terminal's alternate screen buffer, so it always occupies the entire visible viewport and never grows past the bottom of the screen. Your scrollback is restored on exit.
 - A split view shows AUTHOR on the left and REVIEWER on the right; each pane has a fixed height computed from the current terminal size and scrolls internally as new output arrives.
 - The header shows `cwd`, the task, max rounds, and a combined AUTHOR/REVIEWER status row with agent and model names.
+- Each AUTHOR/REVIEWER pane header shows cumulative input/output token usage as `In/Out 10.53M/0.5M Tk` when the agent reports ACP prompt usage.
 - Pane output soft-wraps by default and is pre-wrapped to whole words before rendering.
-- Tool-call rows include the command/input preview and output preview when available. Bursts of more than three continuous tool-call rows are collapsed into a compact summary so tool-heavy turns do not flood the pane.
+- Tool-call rows include the command/input preview and output preview when available. Bursts of more than three continuous tool-call rows are collapsed into a compact success/failure summary so tool-heavy turns do not flood the pane.
+- Press `[` / `]` to select a concrete tool call in the focused pane, then `Enter` or `d` to inspect its full input and output. `Esc` or `q` returns to the flow view.
 - The raw ACP trace view pretty-prints each wire frame as readable multi-line JSON instead of a single long line.
 - Resizing the terminal re-flows the layout immediately.
 
@@ -85,12 +89,16 @@ Keybindings:
 | `Tab` | Switch focus between AUTHOR and REVIEWER |
 | `g` | Jump to the latest round and re-enable follow-mode |
 | `G` | Reset scroll to the bottom of the focused pane |
+| `[` / `]` | Select previous/next tool call in the focused pane |
+| `Enter` / `d` | Open the selected tool call detail view |
+| `Esc` / `q` | Return from the tool call detail view |
 | `t` | Toggle the raw ACP trace view |
 | `w` | Toggle soft-wrap for long lines |
 | `?` | Toggle the help overlay |
+| `f` | Force another AUTHOR/REVIEWER round after reviewer approval |
 | `q` | Quit (only after the run has completed) |
 
-The plain console renderer remains the default. It also includes tool command/output previews and collapses continuous tool-event bursts after three lines.
+The plain console renderer also includes tool command/output previews and collapses continuous tool-event bursts after three lines.
 
 ## Architecture
 
@@ -117,8 +125,10 @@ Environment variables:
 | `REVIEWER_MODEL` | `gpt-5.5` | Model id passed via ACP `session/set_model`; set empty to skip. |
 | `MAX_ROUNDS` | `10` | Maximum author/reviewer iterations. |
 | `ACP_REVIEW_YES` | unset | Set to `1` to skip the confirmation prompt. |
-| `ACP_REVIEW_TUI` | unset | Set to `1` to use the Ink TUI renderer (same as `--tui`). |
+| `ACP_REVIEW_CLI` | unset | Set to `1` to use the plain line-based renderer (same as `--cli`). |
+| `ACP_REVIEW_TUI` | unset | Compatibility flag for the default Ink TUI renderer (same as `--tui`). |
 | `ACP_REVIEW_TRACE` | unset | Set to `1` to print the runtime inspector JSONL trace on startup failures. |
+| `ACP_REVIEW_EDITOR_TIMEOUT_MS` | `1800000` | Maximum time the TUI waits for the external task editor before restoring the screen and reporting an error. |
 
 ## What It Shows
 

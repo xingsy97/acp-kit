@@ -3,7 +3,11 @@ import { collectTurnResult, type CollectedTurnResult } from '../src/turn-result.
 import type { RuntimeEventHandlers } from '../src/runtime-event.js';
 import type { RuntimeSessionEvent } from '../src/session.js';
 
-function createSession(events: RuntimeSessionEvent[], reject?: unknown) {
+function createSession(
+  events: RuntimeSessionEvent[],
+  reject?: unknown,
+  usage: { inputTokens: number; outputTokens: number; totalTokens: number } | null = { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+) {
   let handlers: RuntimeEventHandlers<RuntimeSessionEvent> | null = null;
   const unsubscribe = vi.fn(() => { handlers = null; });
   return {
@@ -20,7 +24,7 @@ function createSession(events: RuntimeSessionEvent[], reject?: unknown) {
           handler?.(event);
         }
         if (reject) throw reject;
-        return { stopReason: 'end_turn' };
+        return { stopReason: 'end_turn', usage };
       },
     },
   };
@@ -44,11 +48,52 @@ describe('collectTurnResult', () => {
     expect(result.text).toBe('APPROVED');
     expect(result.status).toBe('completed');
     expect(result.stopReason).toBe('end_turn');
+    expect(result.usage).toEqual({ inputTokens: 10, outputTokens: 2, totalTokens: 12 });
     expect(result.tools).toEqual([
       { id: 't1', tag: '#1', name: 'read', title: 'Read file', status: 'completed', inputChars: 3, outputChars: 6 },
     ]);
     expect(updates.map((update) => update.text)).toContain('APPROVED');
     expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it('collects partial token usage updates', async () => {
+    const { session } = createSession([
+      { type: 'session.usage.updated', sessionId: 's1', at: 1, inputTokens: 20 } as RuntimeSessionEvent,
+      { type: 'session.usage.updated', sessionId: 's1', at: 2, outputTokens: 5, totalTokens: 25 } as RuntimeSessionEvent,
+      { type: 'turn.completed', sessionId: 's1', at: 3, turnId: 'turn1', stopReason: 'end_turn' },
+    ], undefined, null);
+
+    const result = await collectTurnResult(session as never, 'review');
+
+    expect(result.usage).toEqual({ inputTokens: 20, outputTokens: 5, totalTokens: 25 });
+  });
+
+  it('collects ACP context usage updates with used and size', async () => {
+    const { session } = createSession([
+      { type: 'session.usage.updated', sessionId: 's1', at: 1, used: 12_345, size: 200_000 } as RuntimeSessionEvent,
+      { type: 'turn.completed', sessionId: 's1', at: 2, turnId: 'turn1', stopReason: 'end_turn' },
+    ], undefined, null);
+
+    const result = await collectTurnResult(session as never, 'review');
+
+    expect(result.usage).toEqual({ used: 12_345, size: 200_000 });
+  });
+
+  it('preserves context usage when prompt response also reports token usage', async () => {
+    const { session } = createSession([
+      { type: 'session.usage.updated', sessionId: 's1', at: 1, used: 12_345, size: 200_000 } as RuntimeSessionEvent,
+      { type: 'turn.completed', sessionId: 's1', at: 2, turnId: 'turn1', stopReason: 'end_turn' },
+    ], undefined, { inputTokens: 10, outputTokens: 2, totalTokens: 12 });
+
+    const result = await collectTurnResult(session as never, 'review');
+
+    expect(result.usage).toEqual({
+      used: 12_345,
+      size: 200_000,
+      inputTokens: 10,
+      outputTokens: 2,
+      totalTokens: 12,
+    });
   });
 
   it('unsubscribes when the prompt fails', async () => {

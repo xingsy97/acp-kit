@@ -3,6 +3,7 @@ import type {
   SessionConfigOption,
   SessionModelState,
   SessionModeState,
+  Usage,
 } from '@agentclientprotocol/sdk';
 
 export type RuntimeToolStatus = 'pending' | 'running' | 'completed' | 'failed';
@@ -106,11 +107,22 @@ export interface SessionModelUpdatedEvent extends RuntimeEventBase {
   currentModelId: string;
 }
 
-export interface SessionUsageUpdatedEvent extends RuntimeEventBase {
-  type: 'session.usage.updated';
+export interface RuntimeUsage {
+  /** Current context tokens in use, reported by ACP `usage_update`. */
   used?: number;
+  /** Total context window size, reported by ACP `usage_update`. */
   size?: number;
   cost?: number | null;
+  inputTokens?: Usage['inputTokens'];
+  outputTokens?: Usage['outputTokens'];
+  totalTokens?: Usage['totalTokens'];
+  cachedReadTokens?: Usage['cachedReadTokens'];
+  cachedWriteTokens?: Usage['cachedWriteTokens'];
+  thoughtTokens?: Usage['thoughtTokens'];
+}
+
+export interface SessionUsageUpdatedEvent extends RuntimeEventBase, RuntimeUsage {
+  type: 'session.usage.updated';
 }
 
 export type RuntimeEvent =

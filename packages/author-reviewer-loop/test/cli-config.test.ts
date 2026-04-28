@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parseRunConfig } from '../lib/cli/config.mjs';
 import { formatRunSummary } from '../lib/cli/summary.mjs';
@@ -26,6 +27,34 @@ describe('author-reviewer-loop CLI config', () => {
 
     process.env.ACP_REVIEW_CLI = '1';
     expect(parseRunConfig({ argv: [cwd, 'Build the thing', '--yes'] }).tui).toBe(false);
+  });
+
+  it('gives explicit renderer flags precedence over compatibility environment flags', () => {
+    const cwd = tempDir();
+
+    process.env.ACP_REVIEW_TUI = '1';
+    expect(parseRunConfig({ argv: [cwd, 'Build the thing', '--yes', '--cli'] }).tui).toBe(false);
+
+    process.env.ACP_REVIEW_CLI = '1';
+    delete process.env.ACP_REVIEW_TUI;
+    expect(parseRunConfig({ argv: [cwd, 'Build the thing', '--yes', '--tui'] }).tui).toBe(true);
+  });
+
+  it('reports invalid startup config through the CLI formatter', () => {
+    const cwd = tempDir();
+    const bin = path.resolve('packages', 'author-reviewer-loop', 'bin', 'acp-author-reviewer-loop.mjs');
+    const result = spawnSync(process.execPath, [bin, cwd, 'Build the thing', '--yes', '--cli'], {
+      cwd: ORIGINAL_CWD,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        AUTHOR_AGENT: 'missing-agent',
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('AUTHOR_AGENT=missing-agent is not supported');
+    expect(result.stderr).not.toContain('at envChoice');
   });
 
   it('resolves relative and absolute task files once at startup', () => {
@@ -68,5 +97,13 @@ describe('author-reviewer-loop CLI config', () => {
     expect(config.authorSettings.prompt({ round: 1, feedback: '' })).toContain('Task: edited task');
     expect(config.authorSettings.prompt({ round: 2, feedback: 'fix it' })).toContain('Current task: edited task');
     expect(config.reviewerSettings.prompt({ round: 1, feedback: '' })).toContain('Original task: edited task');
+  });
+
+  it('includes round and previous feedback in reviewer prompts', () => {
+    const config = parseRunConfig({ argv: [tempDir(), 'build it', '--yes', '--cli'] });
+    const prompt = config.reviewerSettings.prompt({ round: 2, feedback: '1. Missing tests' });
+
+    expect(prompt).toContain('Round: 2');
+    expect(prompt).toContain('Previous reviewer feedback:\n1. Missing tests');
   });
 });

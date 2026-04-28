@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `@acp-kit/core` are documented in this file.
+All notable changes to ACP Kit packages are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -8,11 +8,45 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-04-28
+
+### Fixed
+
+- `@acp-kit/author-reviewer-loop` now gives explicit renderer flags predictable precedence: `--cli` selects the plain renderer even when the legacy `ACP_REVIEW_TUI=1` compatibility flag is present, while `--tui` can still override `ACP_REVIEW_CLI=1`.
+- `@acp-kit/author-reviewer-loop` CLI configuration errors, such as unsupported `AUTHOR_AGENT` / `REVIEWER_AGENT` values, are now reported through the normal startup formatter instead of leaking an uncaught stack trace before the CLI error handler is installed.
+- `@acp-kit/author-reviewer-loop` reviewer prompts now include the current round and previous reviewer feedback passed by the engine, so later review rounds have explicit context about what was already requested.
+- `@acp-kit/author-reviewer-loop` turn collection failures that happen before an ACP `turn.failed` / `turn.cancelled` event now emit a renderer `turnFailed` event before the error propagates.
+
+### Changed
+
+- Rebuilt the recent changelog history so the `0.6.1` through `0.6.5` entries reflect the actual package, runtime, renderer, documentation, and test changes shipped in those releases.
+- Added a package-local `@acp-kit/author-reviewer-loop` changelog and included it in the package's published files.
+
 ## [0.6.5] - 2026-04-28
 
 ### Added
 
-- `@acp-kit/author-reviewer-loop` TUI users can now force another AUTHOR/REVIEWER round after reviewer approval without editing the task.
+- `@acp-kit/author-reviewer-loop` task input can now be inline text or a relative/absolute UTF-8 task file; file input is read once at startup and the resolved source is shown in run summaries.
+- The Ink TUI is now the default renderer. `--cli` / `ACP_REVIEW_CLI=1` select the plain renderer, while `--tui` / `ACP_REVIEW_TUI=1` remain accepted for compatibility.
+- TUI users can edit the task in an external editor before launch or after reviewer approval, then continue the same AUTHOR/REVIEWER sessions with the updated task.
+- TUI users can force another AUTHOR/REVIEWER round after reviewer approval without editing the task.
+- TUI panes now show cumulative input/output token usage when agents report ACP usage data.
+- TUI tool-call navigation now supports selecting concrete tool calls with `[` / `]` and opening a full input/output detail view with `Enter` / `d`.
+- `@acp-kit/author-reviewer-loop` now has focused Vitest coverage for CLI config parsing, engine approval continuation, runtime role cleanup, turn failure cleanup, and state reduction.
+
+### Fixed
+
+- `@acp-kit/author-reviewer-loop` bounds retained raw ACP trace entries by both entry count and serialized byte size so trace-heavy runs do not grow UI state without limit.
+- `@acp-kit/author-reviewer-loop` state reduction now tolerates partial turn snapshots and missing tool character counts without throwing or producing `NaN`.
+- `@acp-kit/author-reviewer-loop` cleans up created sessions, spawned terminals, and runtimes when model setup fails during role startup.
+- `@acp-kit/core` command detection now handles Windows path extensions and command lookup edge cases more reliably.
+- `@acp-kit/core` normalized events and turn-result collection cover additional edge cases for missing text, usage updates, and terminal tool metadata.
+
+### Changed
+
+- `@acp-kit/author-reviewer-loop` moved pane, trace, usage, and result bookkeeping into a dedicated reducer module shared by renderers.
+- `@acp-kit/author-reviewer-loop` README and site docs now describe the default TUI, plain renderer opt-in, task-file input, task editing, tool detail view, token usage display, and editor timeout environment variable.
+- `@acp-kit/core` docs and runtime examples were refreshed for the renamed AcpKit organization and the current agent matrix.
 
 ## [0.6.4] - 2026-04-27
 
@@ -20,6 +54,10 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 - `detectInstalledAgents(...)` and `isCommandOnPath(...)` in `@acp-kit/core` for fast, side-effect-free agent availability checks.
 - `@acp-kit/author-reviewer-loop` now checks configured AUTHOR and REVIEWER agents before prompting or launching the loop, while preserving runtime fallback command behavior.
+
+### Fixed
+
+- `@acp-kit/core` Node transport now reuses the shared command detection helper instead of duplicating lookup logic.
 
 ### Changed
 
@@ -31,14 +69,18 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 - Built-in agent profiles now launch local agent binaries first and fall back to their `npx ...@latest` commands when the binary is not on `PATH`.
 - `@acp-kit/author-reviewer-loop` now gives hosted demo agents local file-system and terminal capabilities rooted at the selected workspace, with trace capture available in both plain and TUI renderers.
+- `@acp-kit/author-reviewer-loop` renderers now show compact command/input and output previews for tool calls, collapse large continuous tool-call bursts, and expose a raw ACP trace view in the TUI.
+- `@acp-kit/core` added broad edge-case test coverage for agent profile fallback, startup diagnostics, runtime inspection, recordings, normalization, sessions, transcripts, and turn-result collection.
 
 ### Fixed
 
 - Node child-process transport now handles spawn errors such as `ENOENT` without crashing the host process and records the failure in startup diagnostics.
+- Runtime inspector and diagnostic capture now handle large or unusual wire frames more robustly.
 
 ### Changed
 
 - Agent docs and compatibility issue templates now document the fast local command names while noting the automatic `npx` fallback behavior.
+- `@acp-kit/author-reviewer-loop` now captures trace data for TUI runs even when `ACP_REVIEW_TRACE` is not printing JSONL to stderr, enabling the in-app trace view.
 
 ## [0.6.2] - 2026-04-27
 
@@ -47,22 +89,28 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 - `collectTurnResult(session, prompt, options)` in `@acp-kit/core`, a turn-level helper that collects streaming session events into one result object while still exposing live `onEvent` and `onUpdate` callbacks for UIs.
 - `@acp-kit/author-reviewer-loop` now has a renderer-agnostic loop engine plus plain and Ink TUI renderers.
 - `@acp-kit/author-reviewer-loop --tui` for a fullscreen split-pane AUTHOR/REVIEWER view with round navigation, pane scrolling, and soft wrapping.
+- `@acp-kit/author-reviewer-loop` now includes modular CLI helpers for argument/env parsing, confirmation prompts, run summaries, startup error formatting, shell-specific environment examples, runtime role startup, and per-turn event normalization.
+- `@acp-kit/author-reviewer-loop` keeps the legacy `runAuthorReviewerLoop({ config, renderer })` adapter for callers that used the earlier single-file demo shape.
+- Core and package documentation now include `collectTurnResult(...)` and the author/reviewer loop architecture.
 
 ### Changed
 
 - `@acp-kit/author-reviewer-loop` now uses `commander` for CLI parsing and keeps CLI, config, runtime, engine, and renderer code in separate modules.
 - The author/reviewer loop validates configured models during startup. If an agent reports available models and the configured model is invalid, the CLI fails before the first turn and prints the available model ids plus shell-appropriate environment variable examples.
 - The TUI header now combines author/reviewer agent, model, and status into one status row; long task text and pane output are wrapped for readability.
+- The author/reviewer package now declares optional `ink` and `react` dependencies for TUI mode while keeping the plain renderer lazy-loaded and lightweight.
 
 ## [0.6.1] - 2026-04-27
 
 ### Added
 
 - New `@acp-kit/author-reviewer-loop` package, a runnable split-context `npx` demo where an AUTHOR agent modifies files and a REVIEWER agent inspects them in a separate context until `APPROVED`.
+- The package ships `acp-author-reviewer-loop` and `author-reviewer-loop` bin aliases, default Copilot AUTHOR / Codex REVIEWER profiles, model and round configuration through environment variables, confirmation prompts, and README usage docs.
 
 ### Changed
 
 - Replaced the old `examples/pair-programming/` folder with the publishable `packages/author-reviewer-loop/` CLI package.
+- Repository release automation and package metadata were updated so `@acp-kit/author-reviewer-loop` can be published alongside `@acp-kit/core`.
 
 ## [0.6.0] - 2026-04-26
 

@@ -38,7 +38,7 @@ Environment:
   const cwd = path.resolve(parsedArgs.cwdArg);
   const { task, taskSource } = resolveTask(parsedArgs.taskParts);
   const opts = program.opts();
-  const useCli = Boolean(opts.cli) || envFlag('ACP_REVIEW_CLI');
+  const tui = resolveRendererMode(opts);
 
   const config = {
     cwd,
@@ -47,7 +47,7 @@ Environment:
     maxRounds: envPositiveInt('MAX_ROUNDS', defaults.maxRounds),
     trace: envFlag('ACP_REVIEW_TRACE'),
     skipConfirm: Boolean(opts.yes) || envFlag('ACP_REVIEW_YES'),
-    tui: !useCli || Boolean(opts.tui) || envFlag('ACP_REVIEW_TUI'),
+    tui,
     authorSettings: {
       agent: envChoice('AUTHOR_AGENT', agents, defaults.authorAgent),
       model: env('AUTHOR_MODEL', defaults.authorModel, { empty: null }),
@@ -62,14 +62,28 @@ Environment:
       agent: envChoice('REVIEWER_AGENT', agents, defaults.reviewerAgent),
       model: env('REVIEWER_MODEL', defaults.reviewerModel, { empty: null }),
       modelEnvName: 'REVIEWER_MODEL',
-      prompt: () =>
-        `You are the REVIEWER. Original task: ${config.task}\n\n`
+      prompt: ({ round, feedback }) =>
+        `You are the REVIEWER. Round: ${round}\n\nOriginal task: ${config.task}\n\n`
+        + previousFeedbackSection(feedback)
         + `Inspect the project under ${cwd} using your filesystem tools. `
         + 'Reply APPROVED on its own line if it fully solves the task with no obvious bugs; '
         + 'otherwise reply with a terse numbered list of issues.',
     },
   };
   return config;
+}
+
+function previousFeedbackSection(feedback) {
+  const text = typeof feedback === 'string' ? feedback.trim() : '';
+  if (!text) return '';
+  return `Previous reviewer feedback:\n${text}\n\n`;
+}
+
+function resolveRendererMode(opts) {
+  if (opts.cli) return false;
+  if (opts.tui) return true;
+  if (envFlag('ACP_REVIEW_CLI')) return false;
+  return true;
 }
 
 function resolveTask(taskParts) {

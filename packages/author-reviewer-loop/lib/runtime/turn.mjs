@@ -6,6 +6,7 @@ import { collectTurnResult } from '@acp-kit/core';
  */
 export async function runTurn({ round, role, state, prompt, renderer }) {
   renderer.onTurnStart?.({ round, role });
+  let failureEmitted = false;
 
   try {
     const result = await collectTurnResult(state.session, prompt, {
@@ -47,9 +48,11 @@ export async function runTurn({ round, role, state, prompt, renderer }) {
             renderer.onTurnCompleted?.({ round, role, stopReason: event.stopReason ?? 'unknown' });
             return;
           case 'turn.failed':
+            failureEmitted = true;
             renderer.onTurnFailed?.({ round, role, error: event.error });
             return;
           case 'turn.cancelled':
+            failureEmitted = true;
             renderer.onTurnFailed?.({ round, role, error: event.reason });
             return;
           default:
@@ -60,9 +63,18 @@ export async function runTurn({ round, role, state, prompt, renderer }) {
 
     renderer.onTurnSnapshot?.({ round, role, snapshot: result });
     return typeof result.text === 'string' ? result.text : '';
+  } catch (error) {
+    if (!failureEmitted) {
+      renderer.onTurnFailed?.({ round, role, error: formatError(error) });
+    }
+    throw error;
   } finally {
     renderer.onTurnEnd?.({ round, role });
   }
+}
+
+function formatError(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function maxFinite(...values) {

@@ -1,6 +1,6 @@
 {
   "name": "@acp-kit/author-reviewer-loop",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "description": "Split-context ACP Kit demo: one AUTHOR agent writes files, one REVIEWER agent inspects them in a separate context, and the loop continues until APPROVED.",
   "type": "module",
   "bin": {
@@ -10,6 +10,7 @@
   "files": [
     "bin",
     "lib",
+    "CHANGELOG.md",
     "README.md"
   ],
   "keywords": [
@@ -45,7 +46,7 @@
     "node": ">=20.11"
   },
   "dependencies": {
-    "@acp-kit/core": "^0.6.5",
+    "@acp-kit/core": "^0.6.6",
     "commander": "^14.0.3"
   },
   "optionalDependencies": {

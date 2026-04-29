@@ -46,14 +46,14 @@ upgrades, and pre-merge audits of agent-generated code.
 ## Run with one command
 
 ```bash
-npx @acp-kit/author-reviewer-loop ./demo-workspace \
+npx @acp-kit/spar ./demo-workspace \
   "Create a Node.js CLI that counts word frequency from stdin"
 ```
 
 PowerShell:
 
 ```powershell
-npx @acp-kit/author-reviewer-loop .\demo-workspace `
+npx @acp-kit/spar .\demo-workspace `
   "Create a Node.js CLI that counts word frequency from stdin"
 ```
 
@@ -92,7 +92,7 @@ Override per role with environment variables:
 ```bash
 AUTHOR_AGENT='copilot' AUTHOR_MODEL='claude-opus-4.7' \
 REVIEWER_AGENT='codex' REVIEWER_MODEL='gpt-5.5' \
-  npx @acp-kit/author-reviewer-loop ./demo-workspace "Build a small CLI"
+  npx @acp-kit/spar ./demo-workspace "Build a small CLI"
 ```
 
 Set `AUTHOR_MODEL=''` or `REVIEWER_MODEL=''` to use that agent's default
@@ -197,8 +197,5 @@ For full CLI flag, environment variable, and keybinding reference, see the
 [Spar package README on GitHub](https://github.com/AcpKit/acp-kit/tree/main/packages/author-reviewer-loop#readme).
 
 ::: tip Note
-Spar currently ships under the package name
-[`@acp-kit/author-reviewer-loop`](https://www.npmjs.com/package/@acp-kit/author-reviewer-loop)
-for backwards compatibility. A future release will republish it as
-`@acp-kit/spar` and deprecate the old name.
+Spar publishes as both **`@acp-kit/spar`** (the new name; install command is `spar`) and **`@acp-kit/author-reviewer-loop`** (deprecated alias kept for backwards compatibility). Prefer the new name in fresh installs.
 :::

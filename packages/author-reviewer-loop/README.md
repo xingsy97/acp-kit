@@ -4,8 +4,8 @@
 over the same workspace, and keeps them sparring until the work is
 approved. Built on [`@acp-kit/core`](https://www.npmjs.com/package/@acp-kit/core).
 
-> Currently published as `@acp-kit/author-reviewer-loop`. A future release
-> will republish it as `@acp-kit/spar` and deprecate the old name.
+Published on npm as **`@acp-kit/spar`**. The previous name
+`@acp-kit/author-reviewer-loop` is deprecated; please prefer the new name.
 
 A split-context ACP Kit demo that hosts two ACP agents over the same workspace:
 
@@ -17,13 +17,13 @@ The two agents share the same workspace, but not the same conversation history. 
 ## Run With One Command
 
 ```bash
-npx @acp-kit/author-reviewer-loop ./demo-workspace "Create a Node.js CLI that counts word frequency from stdin"
+npx @acp-kit/spar ./demo-workspace "Create a Node.js CLI that counts word frequency from stdin"
 ```
 
 PowerShell:
 
 ```powershell
-npx @acp-kit/author-reviewer-loop .\demo-workspace "Create a Node.js CLI that counts word frequency from stdin"
+npx @acp-kit/spar .\demo-workspace "Create a Node.js CLI that counts word frequency from stdin"
 ```
 
 Use an empty or disposable directory. The AUTHOR agent is allowed to create and modify files under the target workspace.
@@ -74,7 +74,7 @@ Override with environment variables:
 
 ```bash
 AUTHOR_AGENT='copilot' AUTHOR_MODEL='claude-opus-4.7' REVIEWER_AGENT='codex' REVIEWER_MODEL='gpt-5.5' \
-  npx @acp-kit/author-reviewer-loop ./demo-workspace "Build a small CLI"
+  npx @acp-kit/spar ./demo-workspace "Build a small CLI"
 ```
 
 PowerShell:
@@ -84,7 +84,7 @@ $Env:AUTHOR_AGENT='copilot'
 $Env:AUTHOR_MODEL='claude-opus-4.7'
 $Env:REVIEWER_AGENT='codex'
 $Env:REVIEWER_MODEL='gpt-5.5'
-npx @acp-kit/author-reviewer-loop .\demo-workspace "Build a small CLI"
+npx @acp-kit/spar .\demo-workspace "Build a small CLI"
 ```
 
 Set `AUTHOR_MODEL=''` or `REVIEWER_MODEL=''` to use that agent's default model. When an agent reports its available models, the CLI validates the configured model before Round 1 starts. If the configured model is not available, startup fails with the agent's model list and an environment variable example formatted for the current shell (`$Env:NAME='value'` in PowerShell, `export NAME='value'` in Unix-like shells).
@@ -100,7 +100,7 @@ Supported built-in agent ids: `copilot`, `claude`, `codex`, `gemini`, `qwen`, `o
 ## Options
 
 ```bash
-npx @acp-kit/author-reviewer-loop <cwd> <task-or-task-file> [--yes] [--cli]
+npx @acp-kit/spar <cwd> <task-or-task-file> [--yes] [--cli]
 ```
 
 The Ink-based fullscreen TUI is the default renderer. Pass `--cli` (or set `ACP_REVIEW_CLI=1`) to use the plain line-based renderer instead. `--tui` and `ACP_REVIEW_TUI=1` are still accepted for compatibility.

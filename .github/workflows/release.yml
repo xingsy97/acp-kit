@@ -38,13 +38,13 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           CORE_VERSION=$(node -p "require('./packages/core/package.json').version")
-          REVIEW_LOOP_VERSION=$(node -p "require('./packages/author-reviewer-loop/package.json').version")
+          SPAR_VERSION=$(node -p "require('./packages/author-reviewer-loop/package.json').version")
           if [ "$TAG" != "$CORE_VERSION" ]; then
             echo "::error::Tag v$TAG does not match packages/core/package.json version $CORE_VERSION"
             exit 1
           fi
-          if [ "$TAG" != "$REVIEW_LOOP_VERSION" ]; then
-            echo "::error::Tag v$TAG does not match packages/author-reviewer-loop/package.json version $REVIEW_LOOP_VERSION"
+          if [ "$TAG" != "$SPAR_VERSION" ]; then
+            echo "::error::Tag v$TAG does not match packages/author-reviewer-loop/package.json version $SPAR_VERSION"
             exit 1
           fi
           echo "Publishing version $CORE_VERSION"
@@ -59,8 +59,8 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_ACCESS_TOKEN }}
 
-      - name: Publish author/reviewer loop to npm
-        run: npm publish -w @acp-kit/author-reviewer-loop --access public --provenance --tag "$DIST_TAG"
+      - name: Publish Spar to npm
+        run: npm publish -w @acp-kit/spar --access public --provenance --tag "$DIST_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_ACCESS_TOKEN }}
 

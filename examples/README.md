@@ -23,7 +23,7 @@ npm start
 Same pattern for `quick-start/` and `real-agent-cli/`. The author/reviewer loop is published as a CLI package instead:
 
 ```bash
-npx @acp-kit/author-reviewer-loop ./demo-workspace "Create a small CLI"
+npx @acp-kit/spar ./demo-workspace "Create a small CLI"
 ```
 
 ## Using an example as a template outside this repo
@@ -37,7 +37,7 @@ npm start
 
 That is the entire setup.
 
-For the packaged author/reviewer demo, prefer `npx @acp-kit/author-reviewer-loop ...` so you consume the same package external users get.
+For the packaged Spar demo, prefer `npx @acp-kit/spar ...` so you consume the same package external users get.
 
 ## Adding a new example
 

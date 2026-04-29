@@ -23,7 +23,7 @@
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "publish:core": "npm publish -w @acp-kit/core --access public",
-    "publish:author-reviewer-loop": "npm publish -w @acp-kit/author-reviewer-loop --access public"
+    "publish:spar": "npm publish -w @acp-kit/spar --access public"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",

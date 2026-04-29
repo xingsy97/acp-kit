@@ -1,15 +1,26 @@
 #!/usr/bin/env node
 import process from 'node:process';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { parseRunConfig } from '../lib/cli/config.mjs';
 import { printRunSummary } from '../lib/cli/summary.mjs';
 import { confirmRun } from '../lib/cli/confirm.mjs';
 import { createLoopEngine } from '../lib/engine.mjs';
 import { createPlainRenderer } from '../lib/renderers/plain.mjs';
 import { reportError } from '../lib/cli/error.mjs';
+import { runUpdateCheck } from '../lib/cli/update-check.mjs';
 import { detectInstalledAgents } from '@acp-kit/core';
 
 try {
   const config = parseRunConfig();
+
+  // Best-effort: nudge the user to update if a newer @acp-kit/spar release
+  // is on npm. Only runs in interactive terminals; never blocks startup
+  // when the registry is unreachable. In TUI mode we still run this BEFORE
+  // taking over the screen so the prompt can use ordinary stdio.
+  const updateOutcome = await maybeRunUpdateCheck();
+  if (updateOutcome === 'updated') process.exit(0);
 
   if (config.tui) {
     // TUI mode owns the screen end-to-end: the run summary is shown inside
@@ -32,6 +43,16 @@ try {
 } catch (error) {
   reportError(error);
   process.exitCode = 1;
+}
+
+async function maybeRunUpdateCheck() {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const pkg = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8'));
+    return await runUpdateCheck({ currentVersion: pkg?.version });
+  } catch {
+    return 'skipped';
+  }
 }
 
 function ensureConfiguredAgentsAvailable(config) {

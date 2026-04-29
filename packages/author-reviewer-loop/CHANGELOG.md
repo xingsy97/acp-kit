@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.12] - 2026-04-29
+
+### Added
+
+- The CLI has been **renamed on npm** from `@acp-kit/author-reviewer-loop` to **`@acp-kit/spar`**, with a single shorter `spar` bin. The old package name will be deprecated on npm; existing installs keep working but new installs should use `npm i -g @acp-kit/spar`.
+- `spar` performs a best-effort startup update check against the npm registry. When a newer stable release is available it prompts `Update now via npm install -g @acp-kit/spar? [y/N]` and runs the global install if the user presses `y`. The check is silent on failure, skipped on non-TTY stdio and under CI, bypassable via `SPAR_NO_UPDATE_CHECK=1`, and cached locally for 6 hours.
+
 ## [0.6.11] - 2026-04-29
 
 ### Added

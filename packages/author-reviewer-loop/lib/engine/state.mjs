@@ -38,6 +38,12 @@ function emptyPane() {
     current: '',
     flow: [],
     tools: [],
+    // Reasoning is accumulated per `reasoningId` so renderers can show a
+    // dedicated "thinking" view (independent of the inline `flow` rendering)
+    // and so consumers can summarize total reasoning at turn end. Each block
+    // is `{ id, content, completed, charCount }`. Reasoning is also kept
+    // in `flow` (with kind: 'reasoning') for inline rendering continuity.
+    reasoning: { blocks: [], totalChars: 0 },
     usage: null,
     turnUsage: null,
     stopReason: null,
@@ -62,6 +68,10 @@ export function initialState() {
     trace: [],
     latest: null,
     usage: { AUTHOR: emptyUsage(), REVIEWER: emptyUsage() },
+    // Latest agent execution plan per role, normalized from ACP `plan`
+    // session updates. Each plan replaces the role's slot wholesale per
+    // the ACP spec ("the agent must send a complete list of all entries").
+    plans: { AUTHOR: null, REVIEWER: null },
     result: null,
     error: null,
     startedAt: null,
@@ -90,8 +100,20 @@ function mergeContextUsage(target, source) {
 
   if (nextSize !== undefined) target.size = nextSize;
   if (nextUsed === undefined) return;
-  if (nextUsed === 0 && nextSize !== undefined && previousSize === nextSize && previousUsed > 0) return;
+  if (
+    nextUsed === 0
+    && nextSize !== undefined
+    && previousSize === nextSize
+    && previousUsed > 0
+    && !hasSupportingUsageTelemetry(source)
+  ) return;
   target.used = nextUsed;
+}
+
+function hasSupportingUsageTelemetry(source) {
+  if (!source || typeof source !== 'object') return false;
+  return ['inputTokens', 'outputTokens', 'totalTokens', 'cachedReadTokens', 'cachedWriteTokens', 'thoughtTokens']
+    .some((key) => Number.isFinite(source[key]));
 }
 
 function subtractUsage(left, right) {
@@ -164,6 +186,7 @@ function paneFromTurnSnapshot(snapshot, previous = emptyPane(), cumulativeUsage 
     current,
     flow: previous.flow,
     tools: [...snapshotTools, ...preservedLiveTools],
+    reasoning: previous.reasoning ?? { blocks: [], totalChars: 0 },
     usage: cumulativeUsage ?? previous.usage,
     turnUsage: snapshot.usage ?? previous.turnUsage,
     stopReason: snapshot.stopReason,
@@ -190,16 +213,105 @@ function appendTextFlow(pane, delta, flowId, kind = 'text') {
   if (!delta) return pane;
   const flow = [...pane.flow];
   const sourceId = kind === 'reasoning' ? (flowId ?? 'default-reasoning') : flowId;
-  const targetIndex = kind === 'reasoning'
-    ? flow.findLastIndex((item) => item.kind === kind && item.sourceId === sourceId)
-    : flow.length - 1;
+  const targetIndex = flow.length - 1;
   const target = flow[targetIndex];
   if (target?.kind === kind && (kind !== 'reasoning' || target.sourceId === sourceId)) {
-    flow[targetIndex] = { ...target, text: target.text + delta };
+    flow[targetIndex] = { ...target, text: appendStreamText(target.text, delta) };
   } else {
-    flow.push({ id: `flow-${sourceId ?? flow.length + 1}`, sourceId, kind, text: delta });
+    const baseId = `flow-${sourceId ?? flow.length + 1}`;
+    const id = flow.some((item) => item.id === baseId) ? `${baseId}-${flow.length + 1}` : baseId;
+    flow.push({ id, sourceId, kind, text: delta });
   }
   return { ...pane, flow };
+}
+
+function appendStreamText(previous, next) {
+  if (!next) return previous || '';
+  if (!previous) return next;
+  if (next === previous || next.startsWith(previous)) return next;
+  const overlap = suffixPrefixOverlap(previous, next);
+  if (overlap > 0) return previous + next.slice(overlap);
+  if (/\s$/.test(previous) || /^\s/.test(next)) return previous + next;
+  if (/[A-Za-z0-9)]$/.test(previous) && /^[A-Za-z0-9(`]/.test(next)) return `${previous} ${next}`;
+  return previous + next;
+}
+
+function suffixPrefixOverlap(left, right) {
+  const max = Math.min(left.length, right.length);
+  for (let length = max; length > 0; length -= 1) {
+    if (left.endsWith(right.slice(0, length))) return length;
+  }
+  return 0;
+}
+
+function replaceReasoningFlowContent(pane, reasoningId, content) {
+  if (!reasoningId || typeof content !== 'string') return pane;
+  const indices = pane.flow
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => item.kind === 'reasoning' && item.sourceId === reasoningId)
+    .map(({ index }) => index);
+  if (indices.length !== 1) return pane;
+  const flow = [...pane.flow];
+  const index = indices[0];
+  flow[index] = { ...flow[index], text: content };
+  return { ...pane, flow };
+}
+
+/**
+ * Append a reasoning delta to the dedicated `pane.reasoning` accumulator
+ * (separate from `pane.flow`, which keeps reasoning inline for transcript-
+ * style rendering). Each block is keyed by `reasoningId`; consecutive deltas
+ * on the same id append to the existing block, otherwise we start a new one.
+ */
+function appendReasoningBlock(pane, reasoningId, delta, completed) {
+  if (!delta) return pane;
+  const id = reasoningId ?? `reasoning-${pane.reasoning.blocks.length + 1}`;
+  const blocks = [...pane.reasoning.blocks];
+  const index = blocks.findIndex((block) => block.id === id);
+  if (index >= 0) {
+    const content = appendStreamText(blocks[index].content, delta);
+    blocks[index] = {
+      ...blocks[index],
+      content,
+      charCount: content.length,
+      completed: completed || blocks[index].completed,
+    };
+  } else {
+    blocks.push({ id, content: delta, charCount: delta.length, completed: Boolean(completed) });
+  }
+  return {
+    ...pane,
+    reasoning: { blocks, totalChars: blocks.reduce((total, block) => total + block.charCount, 0) },
+  };
+}
+
+/**
+ * Mark a reasoning block complete, optionally replacing its accumulated
+ * content with the canonical full content from the `reasoning.completed`
+ * event. We compute the delta (charCount diff) so the running totalChars
+ * stays consistent.
+ */
+function completeReasoningBlock(pane, reasoningId, fullContent) {
+  if (!reasoningId) return pane;
+  const blocks = [...pane.reasoning.blocks];
+  const index = blocks.findIndex((block) => block.id === reasoningId);
+  const finalContent = typeof fullContent === 'string' ? fullContent : (blocks[index]?.content ?? '');
+  if (index >= 0) {
+    const previous = blocks[index];
+    blocks[index] = {
+      ...previous,
+      content: finalContent,
+      charCount: finalContent.length,
+      completed: true,
+    };
+    const totalChars = pane.reasoning.totalChars - previous.charCount + finalContent.length;
+    return { ...pane, reasoning: { blocks, totalChars: Math.max(0, totalChars) } };
+  }
+  blocks.push({ id: reasoningId, content: finalContent, charCount: finalContent.length, completed: true });
+  return {
+    ...pane,
+    reasoning: { blocks, totalChars: pane.reasoning.totalChars + finalContent.length },
+  };
 }
 
 function appendOrUpdateToolFlow(pane, event, flowId) {
@@ -244,16 +356,42 @@ function appendOrUpdateToolFlow(pane, event, flowId) {
 
 function normalizeToolCallId(event, pane, flowId) {
   if (event.toolCallId) return event.toolCallId;
-  const title = event.title || event.name;
-  const reusable = [...pane.tools].reverse().find((tool) => {
-    if (!tool?.id || !String(tool.id).startsWith('tool-event-')) return false;
-    if (event.name && tool.name && event.name !== tool.name) return false;
-    if (title && tool.title && title !== tool.title) return false;
-    return tool.status === PaneStatus.Running || event.type !== 'toolStart';
+  if (event.type === 'toolStart') return nextSyntheticToolCallId(pane, flowId ?? pane.tools.length + 1);
+
+  const eventTitle = event.title;
+  const hasIdentity = Boolean(event.name || eventTitle);
+  const runningSyntheticTools = pane.tools.filter((tool) =>
+    tool?.id && String(tool.id).startsWith('tool-event-') && tool.status === PaneStatus.Running,
+  );
+  const reusable = [...runningSyntheticTools].reverse().find((tool) => {
+    if (!hasIdentity) return runningSyntheticTools.length === 1 && runningSyntheticTools[0].id === tool.id;
+    if (event.name && (!tool.name || event.name !== tool.name)) return false;
+    if (eventTitle && (!tool.title || (eventTitle !== tool.title && !sameNormalizedToolTitle(eventTitle, tool.title)))) return false;
+    return true;
   });
   if (reusable) return reusable.id;
-  const stableTitle = String(title || 'tool').replace(/\s+/g, ' ').trim().slice(0, 48);
-  return `tool-event-${stableTitle || 'tool'}-${flowId ?? pane.tools.length + 1}`;
+  return nextSyntheticToolCallId(pane, flowId ?? pane.tools.length + 1);
+}
+
+function nextSyntheticToolCallId(pane, preferredIndex) {
+  const existing = new Set((pane.tools || []).map((tool) => tool?.id).filter(Boolean));
+  let candidate = Number.isInteger(preferredIndex) && preferredIndex > 0 ? preferredIndex : 1;
+  while (existing.has(`tool-event-${candidate}`)) candidate += 1;
+  return `tool-event-${candidate}`;
+}
+
+function normalizeToolTitle(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/[\u2500-\u257f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function sameNormalizedToolTitle(left, right) {
+  const normalizedLeft = normalizeToolTitle(left);
+  const normalizedRight = normalizeToolTitle(right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
 }
 
 function pushTrace(state, action) {
@@ -348,9 +486,26 @@ export function reduce(state, action) {
         appendTextFlow(pane, action.delta, action.flowId),
       );
     case 'reasoningDelta':
-      return patchPane(ensureRound(state, action.round), action.round, action.role, (pane) =>
-        appendTextFlow(pane, action.delta, action.reasoningId ?? action.flowId, 'reasoning'),
-      );
+      return patchPane(ensureRound(state, action.round), action.round, action.role, (pane) => {
+        const reasoningId = action.reasoningId ?? action.flowId;
+        const withFlow = appendTextFlow(pane, action.delta, reasoningId, 'reasoning');
+        return appendReasoningBlock(withFlow, reasoningId, action.delta, false);
+      });
+    case 'reasoningCompleted':
+      return patchPane(ensureRound(state, action.round), action.round, action.role, (pane) => {
+        const completed = completeReasoningBlock(pane, action.reasoningId, action.content);
+        return replaceReasoningFlowContent(completed, action.reasoningId, action.content);
+      });
+    case 'planUpdate': {
+      const entries = Array.isArray(action.entries) ? action.entries : [];
+      return {
+        ...state,
+        plans: {
+          ...state.plans,
+          [action.role]: { entries, at: action.at ?? Date.now() },
+        },
+      };
+    }
     case 'turnCompleted':
       return finishPaneTurn(state, action, PaneStatus.Completed, { stopReason: action.stopReason });
     case 'turnFailed':

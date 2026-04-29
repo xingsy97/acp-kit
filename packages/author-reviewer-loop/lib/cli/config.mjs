@@ -81,12 +81,12 @@ Environment:
       model: authorResolved.model,
       modelSource: authorResolved.modelSource,
       modelEnvName: 'AUTHOR_MODEL',
-      prompt: ({ round, feedback }) => round === 1
-        ? `You are the AUTHOR. Working dir: ${cwd}\n\nTask: ${config.task}\n\n`
-          + 'Use your filesystem tools to create or modify files on disk. Do not paste code. '
-          + 'Fix root causes, keep changes focused, and validate when practical.'
-        : `You are the AUTHOR. Working dir: ${cwd}\n\nCurrent task: ${config.task}\n\n`
-          + `REVIEWER feedback:\n${feedback}\n\nUpdate the files in ${cwd} to address every point.`,
+      prompt: ({ round, feedback }) => createAuthorPrompt({
+        cwd,
+        task: config.task,
+        round,
+        feedback,
+      }),
     },
     reviewerSettings: {
       agent: reviewerResolved.agent,
@@ -95,16 +95,13 @@ Environment:
       model: reviewerResolved.model,
       modelSource: reviewerResolved.modelSource,
       modelEnvName: 'REVIEWER_MODEL',
-      prompt: ({ round, feedback, authorReply }) =>
-        `You are the REVIEWER. Round: ${round}\n\nOriginal task: ${config.task}\n\n`
-        + previousFeedbackSection(feedback)
-        + authorReplySection(authorReply)
-        + `Inspect the project under ${cwd} using your filesystem tools. `
-        + 'Re-read every file the AUTHOR claims to have changed before judging; '
-        + 'do not assume nothing changed just because earlier rounds looked different. '
-        + 'Reply APPROVED on its own line if it fully solves the task with no obvious bugs; '
-        + 'otherwise reply with a terse numbered list of issues, each with concrete fix guidance when useful. '
-        + 'Prefer actionable suggestions over questions; mention exact files or behavior that still needs work.',
+      prompt: ({ round, feedback, authorReply }) => createReviewerPrompt({
+        cwd,
+        task: config.task,
+        round,
+        feedback,
+        authorReply,
+      }),
     },
   };
   return config;
@@ -185,6 +182,63 @@ function authorReplySection(authorReply) {
   const text = typeof authorReply === 'string' ? authorReply.trim() : '';
   if (!text) return '';
   return `AUTHOR's reply for this round (their summary of what they changed):\n${text}\n\n`;
+}
+
+function createAuthorPrompt({ cwd, task, round, feedback }) {
+  const taskLabel = round === 1 ? 'Task' : 'Current task';
+  const roundSpecificSection = round === 1
+    ? ''
+    : `REVIEWER feedback:\n${String(feedback || '').trim() || '<none>'}\n\n`
+      + 'Address every reviewer point in code, tests, docs, or behavior as needed. '
+      + 'Keep the same production-grade bar from the first round; do not narrow the scope to only the quoted feedback.\n\n';
+
+  return [
+    `You are the AUTHOR. Working dir: ${cwd}`,
+    '',
+    `${taskLabel}: ${task}`,
+    '',
+    roundSpecificSection ? roundSpecificSection.trimEnd() : null,
+    'Mission: deliver a production-grade result where passing tests means the user experience is ready for handoff with zero manual babysitting.',
+    '',
+    'Coverage requirements:',
+    '1. Cover the relevant core logic and author-reviewer loop behavior with meaningful unit, integration, scenario/use-case, and realistic end-to-end tests when those layers are affected.',
+    '2. Focus on boundary conditions, state transitions, recovery after interruption, long-context or multi-step flows, and interactions with external dependencies such as LLM adapters, filesystem, terminal, or persistence layers.',
+    '',
+    'Adversarial thinking before implementation:',
+    '1. Think like a hostile tester first and identify 5-10 failure cases that could break the user experience.',
+    '2. Include cases such as unpredictable or malformed LLM output, empty replies, contradictory reviewer guidance, logic loops, high latency, disk exhaustion, huge inputs, dependency conflicts, and interrupted recovery.',
+    '3. Turn those failure cases into concrete assertions or regression coverage instead of aspirational notes.',
+    '',
+    'Guardrails:',
+    '1. Do not write vanity tests that only inflate coverage, such as trivial getter/setter checks or mocks that ignore real failure modes.',
+    '2. Use realistic fixtures, explicit assertions, and failure messages that explain what user-visible behavior regressed.',
+    '3. If testing exposes a real bug, fix the root cause correctly instead of papering over it in the test.',
+    '',
+    'Execution steps:',
+    '1. Create or update an adversarial scenario analysis report when the task warrants it.',
+    '2. Implement the strongest relevant tests first or alongside the fix so each important case is measurable.',
+    '3. Modify files on disk with your filesystem tools. Do not paste code.',
+    '4. Keep changes focused, integrated with surrounding code, and validated with the existing project checks when practical.',
+  ].filter(Boolean).join('\n');
+}
+
+function createReviewerPrompt({ cwd, task, round, feedback, authorReply }) {
+  return [
+    `You are the REVIEWER. Round: ${round}`,
+    '',
+    `Original task: ${task}`,
+    '',
+    previousFeedbackSection(feedback).trimEnd(),
+    authorReplySection(authorReply).trimEnd(),
+    `Inspect the whole project under ${cwd} using your filesystem tools.`,
+    'Review the current project state and relevant modifications as a whole, not only the files or summary mentioned by the AUTHOR.',
+    'Judge whether the AUTHOR translated the quality bar into concrete execution: meaningful tests, adversarial coverage, realistic fixtures, and correct bug fixes wired into the surrounding code.',
+    'Expect coverage that reflects real user experience: relevant unit, integration, scenario/use-case, and realistic end-to-end checks where the task touches those layers.',
+    'Reject vanity tests, over-idealized mocks, gaps in recovery behavior, and approval based only on happy paths or local file diffs.',
+    'Do not assume nothing changed just because earlier rounds looked different.',
+    'Reply APPROVED on its own line only if the project now fully solves the task, the tests are genuinely convincing, and no obvious bugs or omissions remain; otherwise reply with a terse numbered list of issues, each with concrete fix guidance when useful.',
+    'Prefer actionable suggestions over questions; mention exact files, flows, or failure modes that still need work.',
+  ].filter(Boolean).join('\n');
 }
 
 function resolveRendererMode(opts) {

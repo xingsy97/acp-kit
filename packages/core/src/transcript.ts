@@ -1,8 +1,10 @@
 import type {
   AvailableCommand,
+  PlanEntry,
   SessionConfigOption,
   SessionModelState,
   SessionModeState,
+  ToolCallContent,
   Usage,
 } from '@agentclientprotocol/sdk';
 
@@ -28,6 +30,13 @@ export interface TranscriptToolRecord {
   input?: unknown;
   output?: unknown;
   locations?: unknown[];
+  /**
+   * Latest structured tool output (text/image content blocks, file diffs,
+   * embedded terminals) from ACP `tool_call.content` /
+   * `tool_call_update.content`. Replaced wholesale on each update that
+   * supplies a new array.
+   */
+  content?: ToolCallContent[];
 }
 
 export interface TranscriptSessionMetadata {
@@ -37,6 +46,12 @@ export interface TranscriptSessionMetadata {
   currentModeId?: string;
   models?: SessionModelState;
   currentModelId?: string;
+  /**
+   * Latest agent execution plan, replaced wholesale on every ACP `plan`
+   * session update. `undefined` if the agent has not emitted a plan yet for
+   * this session.
+   */
+  currentPlan?: { entries: PlanEntry[] };
   usage: {
     used?: number;
     size?: number;
@@ -91,6 +106,9 @@ export function cloneTranscriptState(state: TranscriptState): TranscriptState {
         }
         : undefined,
       currentModelId: state.session.currentModelId,
+      currentPlan: state.session.currentPlan
+        ? { entries: state.session.currentPlan.entries.map((entry) => ({ ...entry })) }
+        : undefined,
       usage: { ...state.session.usage },
     },
   };
@@ -154,6 +172,7 @@ export function applyRuntimeEvent(state: TranscriptState, event: RuntimeEvent): 
         status: event.status,
         input: event.input,
         locations: event.locations,
+        content: event.content,
       };
       break;
     }
@@ -171,6 +190,8 @@ export function applyRuntimeEvent(state: TranscriptState, event: RuntimeEvent): 
         title: event.title ?? current.title,
         status: event.status,
         output: event.output ?? current.output,
+        locations: event.locations ?? current.locations,
+        content: event.content ?? current.content,
       };
       break;
     }
@@ -225,6 +246,12 @@ export function applyRuntimeEvent(state: TranscriptState, event: RuntimeEvent): 
         cachedWriteTokens: event.cachedWriteTokens ?? state.session.usage.cachedWriteTokens,
         thoughtTokens: event.thoughtTokens ?? state.session.usage.thoughtTokens,
       };
+      break;
+    }
+    case 'session.plan.updated': {
+      // ACP spec: every plan update carries the complete current plan, so
+      // replacing the slot wholesale is correct.
+      state.session.currentPlan = { entries: event.entries.map((entry) => ({ ...entry })) };
       break;
     }
   }

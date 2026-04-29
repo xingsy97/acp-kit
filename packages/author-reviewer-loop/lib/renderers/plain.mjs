@@ -210,6 +210,49 @@ export function createPlainRenderer() {
     midLine = !event.delta.endsWith('\n');
   };
 
+  /**
+   * Print a one-line summary at the end of a reasoning block so users can see
+   * the final shape of the model's "thinking" without rereading every delta.
+   */
+  const logReasoningSummary = (event) => {
+    const text = typeof event?.content === 'string' ? event.content : '';
+    if (!text) return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const charCount = text.length;
+    const role = (event.role ?? '').toLowerCase();
+    console.log(color('gray', `  [${role} thought] ${charCount} chars (id=${event.reasoningId ?? '?'})`));
+  };
+
+  const planGlyph = (status) => {
+    if (status === 'completed') return color('green', '✓');
+    if (status === 'in_progress') return color('yellow', '→');
+    if (status === 'failed' || status === 'cancelled') return color('red', '✗');
+    return color('gray', '·');
+  };
+
+  const lastPlanByRole = new Map();
+  /**
+   * Render a compact plan diff line per `session/update plan` notification.
+   * Plans are session-level, but we print them per role so users can tell
+   * whose execution plan changed in interleaved transcripts. We dedupe
+   * identical successive plans (some agents repost plans on every turn).
+   */
+  const logPlan = ({ role, entries }) => {
+    if (!Array.isArray(entries) || entries.length === 0) return;
+    const fingerprint = entries.map((e) => `${e?.status ?? '?'}:${e?.content ?? ''}`).join('|');
+    if (lastPlanByRole.get(role) === fingerprint) return;
+    lastPlanByRole.set(role, fingerprint);
+    const completed = entries.filter((e) => e?.status === 'completed').length;
+    const total = entries.length;
+    const summary = entries
+      .slice(0, 6)
+      .map((entry) => `${planGlyph(entry?.status)} ${entry?.content ?? ''}`)
+      .join('  ');
+    const overflow = entries.length > 6 ? ` (+${entries.length - 6} more)` : '';
+    console.log(color('cyan', `  [${role.toLowerCase()} plan ${completed}/${total}] ${summary}${overflow}`));
+  };
+
   const writeTextDelta = (delta) => {
     if (!process.stdout.isTTY) {
       process.stdout.write(delta);
@@ -267,10 +310,15 @@ export function createPlainRenderer() {
             return;
           case 'reasoningCompleted':
             lineFeed();
+            logReasoningSummary(event);
             return;
           case 'toolStart':
             lineFeed();
             logToolBurst('running', summarizeTool(event));
+            return;
+          case 'toolUpdate':
+            lineFeed();
+            logToolBurst(event.status || 'running', summarizeTool(event, { includeOutput: true }));
             return;
           case 'toolEnd':
             lineFeed();
@@ -293,6 +341,11 @@ export function createPlainRenderer() {
           case 'usageUpdate':
             flushToolBurst();
             logUsage(event);
+            return;
+          case 'planUpdate':
+            flushToolBurst();
+            lineFeed();
+            logPlan(event);
             return;
           case 'result': {
             flushToolBurst();

@@ -225,6 +225,55 @@ describe('session status transitions', () => {
     expect(statuses[2]).toEqual({ status: 'disposed', previous: 'idle' });
     await runtime.shutdown();
   });
+
+  it('emits full prompt response usage including ACP context and cost fields', async () => {
+    const { factory } = createBasicConnectionFactory({
+      prompt: vi.fn(async () => ({
+        stopReason: 'end_turn',
+        usage: {
+          used: 12_000,
+          size: 200_000,
+          cost: 0.42,
+          inputTokens: 100,
+          outputTokens: 25,
+          totalTokens: 125,
+          cachedReadTokens: 9,
+          cachedWriteTokens: 3,
+          thoughtTokens: 7,
+        },
+      })),
+    });
+
+    const runtime = createAcpRuntime({
+      agent: { id: 'test', displayName: 'Test', command: 'test', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess: createFakeSpawn(),
+      connectionFactory: factory,
+    });
+
+    const session = await runtime.newSession();
+    const usageUpdates: unknown[] = [];
+    session.on('session.usage.updated', (event) => usageUpdates.push(event));
+
+    const result = await session.prompt('measure usage');
+
+    expect(result.usage).toMatchObject({ used: 12_000, size: 200_000, cost: 0.42 });
+    expect(usageUpdates[0]).toMatchObject({
+      type: 'session.usage.updated',
+      used: 12_000,
+      size: 200_000,
+      cost: 0.42,
+      inputTokens: 100,
+      outputTokens: 25,
+      totalTokens: 125,
+      cachedReadTokens: 9,
+      cachedWriteTokens: 3,
+      thoughtTokens: 7,
+    });
+
+    await runtime.shutdown();
+  });
 });
 
 describe('runtime shutdown', () => {
@@ -479,6 +528,47 @@ describe('runOneShotPrompt edge cases', () => {
 });
 
 describe('session event subscription forms', () => {
+  it('emits normalized session.error updates through the runtime session pipeline', async () => {
+    const { factory, captureClient } = createBasicConnectionFactory({
+      prompt: vi.fn(async function () {
+        const client = captureClient();
+        await client?.sessionUpdate({
+          sessionId: 'session-1',
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial before failure' } },
+        });
+        await client?.sessionUpdate({
+          sessionId: 'session-1',
+          update: { sessionUpdate: 'session_error', message: 'adapter lost connection' },
+        });
+        return { stopReason: 'end_turn' };
+      }),
+    });
+
+    const runtime = createAcpRuntime({
+      agent: { id: 'test', displayName: 'Test', command: 'test', args: [] },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess: createFakeSpawn(),
+      connectionFactory: factory,
+    });
+
+    const session = await runtime.newSession();
+    const events: Array<{ type: string; message?: string; delta?: string }> = [];
+    session.on('event', (event) => events.push(event));
+
+    await session.prompt('hello');
+
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'message.delta', delta: 'partial before failure' }),
+      expect.objectContaining({ type: 'session.error', message: 'adapter lost connection' }),
+    ]));
+    expect(events.find((event) => event.type === 'session.error')).toMatchObject({
+      message: 'adapter lost connection',
+    });
+
+    await runtime.shutdown();
+  });
+
   it('on(type, listener) receives only matching events', async () => {
     const { factory, captureClient } = createBasicConnectionFactory({
       prompt: vi.fn(async function (this: unknown) {

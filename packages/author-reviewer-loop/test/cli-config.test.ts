@@ -11,6 +11,7 @@ import { commitSetupSelections, parseEditorCommand } from '../lib/renderers/tui.
 
 const ORIGINAL_ENV = { ...process.env };
 const ORIGINAL_CWD = process.cwd();
+const TEMP_DIRS: string[] = [];
 
 beforeEach(() => {
   process.env = { ...ORIGINAL_ENV };
@@ -25,10 +26,16 @@ beforeEach(() => {
 afterEach(() => {
   process.env = { ...ORIGINAL_ENV };
   process.chdir(ORIGINAL_CWD);
+  while (TEMP_DIRS.length > 0) {
+    const dir = TEMP_DIRS.pop();
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 function tempDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'author-reviewer-loop-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'author-reviewer-loop-'));
+  TEMP_DIRS.push(dir);
+  return dir;
 }
 
 function parseConfig(argv, preferences = {}) {
@@ -242,6 +249,32 @@ describe('author-reviewer-loop CLI config', () => {
     expect(config.reviewerSettings.prompt({ round: 1, feedback: '' })).toContain('Original task: edited task');
   });
 
+  it('gives the author a structured production-grade testing brief', () => {
+    const config = parseConfig([tempDir(), 'build it', '--yes', '--cli']);
+    const prompt = config.authorSettings.prompt({ round: 1, feedback: '' });
+
+    expect(prompt).toContain('Mission: deliver a production-grade result where passing tests means the user experience is ready for handoff');
+    expect(prompt).toContain('meaningful unit, integration, scenario/use-case, and realistic end-to-end tests');
+    expect(prompt).toContain('Think like a hostile tester first and identify 5-10 failure cases');
+    expect(prompt).toContain('unpredictable or malformed LLM output');
+    expect(prompt).toContain('contradictory reviewer guidance');
+    expect(prompt).toContain('Do not write vanity tests');
+    expect(prompt).toContain('If testing exposes a real bug, fix the root cause correctly');
+    expect(prompt).toContain('Create or update an adversarial scenario analysis report');
+    expect(prompt).toContain('Do not paste code');
+  });
+
+  it('keeps the production-grade bar in follow-up author prompts', () => {
+    const config = parseConfig([tempDir(), 'build it', '--yes', '--cli']);
+    const prompt = config.authorSettings.prompt({ round: 2, feedback: '1. Missing recovery test' });
+
+    expect(prompt).toContain('REVIEWER feedback:\n1. Missing recovery test');
+    expect(prompt).toContain('Address every reviewer point in code, tests, docs, or behavior as needed');
+    expect(prompt).toContain('Keep the same production-grade bar from the first round');
+    expect(prompt).toContain('huge inputs');
+    expect(prompt).toContain('existing project checks when practical');
+  });
+
   it('includes round and previous feedback in reviewer prompts', () => {
     const config = parseConfig([tempDir(), 'build it', '--yes', '--cli']);
     const prompt = config.reviewerSettings.prompt({ round: 2, feedback: '1. Missing tests' });
@@ -260,7 +293,10 @@ describe('author-reviewer-loop CLI config', () => {
 
     expect(prompt).toContain("AUTHOR's reply for this round");
     expect(prompt).toContain('I edited foo.ts and bar.ts to add validation.');
-    expect(prompt).toContain('Re-read every file the AUTHOR claims to have changed');
+    expect(prompt).toContain('Review the current project state and relevant modifications as a whole');
+    expect(prompt).toContain('not only the files or summary mentioned by the AUTHOR');
+    expect(prompt).toContain('translated the quality bar into concrete execution');
+    expect(prompt).toContain('meaningful tests, adversarial coverage, realistic fixtures, and correct bug fixes');
   });
 
   it('asks the reviewer for actionable fix guidance', () => {
@@ -269,6 +305,8 @@ describe('author-reviewer-loop CLI config', () => {
 
     expect(prompt).toContain('concrete fix guidance');
     expect(prompt).toContain('Prefer actionable suggestions over questions');
+    expect(prompt).toContain('Reject vanity tests, over-idealized mocks');
+    expect(prompt).toContain('the tests are genuinely convincing');
   });
 
   it('commits TUI selections to the configured preferences path while preserving env-locked sources', () => {

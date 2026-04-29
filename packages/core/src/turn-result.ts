@@ -80,7 +80,7 @@ export async function collectTurnResult(
     },
     messageCompleted: (event) => {
       if (options.includeEvents) events.push(event);
-      if (!state.text) state.text = event.content;
+      if (typeof event.content === 'string') state.text = event.content;
       notify(event);
     },
     reasoningDelta: (event) => {
@@ -125,9 +125,15 @@ export async function collectTurnResult(
       }
       notify(event);
     },
+    sessionError: (event) => {
+      if (options.includeEvents) events.push(event);
+      state.status = 'failed';
+      state.error = event.message;
+      notify(event);
+    },
     turnCompleted: (event) => {
       if (options.includeEvents) events.push(event);
-      state.status = 'completed';
+      if (state.status === 'running') state.status = 'completed';
       state.stopReason = event.stopReason;
       notify(event);
     },
@@ -147,6 +153,13 @@ export async function collectTurnResult(
 
   try {
     state.promptResult = await session.prompt(prompt);
+    if (state.status === 'failed' && state.error) {
+      throw new Error(state.error);
+    }
+    if (state.status === 'running') {
+      state.status = 'completed';
+      state.stopReason = state.promptResult.stopReason ?? state.stopReason;
+    }
     state.usage = state.promptResult.usage
       ? mergeUsage(state.usage, state.promptResult.usage)
       : state.usage;

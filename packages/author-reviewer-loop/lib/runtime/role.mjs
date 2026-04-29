@@ -34,6 +34,7 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
 
   let session;
   let unsubscribeUsage = () => {};
+  let unsubscribePlan = () => {};
   try {
     session = await runtime.newSession({ cwd });
     if (renderer.onUsageUpdate) {
@@ -43,6 +44,12 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
         }
         const usage = readUsage(event);
         if (usage) renderer.onUsageUpdate({ role, usage });
+      });
+    }
+    if (renderer.onPlanUpdate) {
+      unsubscribePlan = session.on('session.plan.updated', (event) => {
+        const entries = Array.isArray(event?.entries) ? event.entries : [];
+        renderer.onPlanUpdate({ role, entries });
       });
     }
     if (settings.model) {
@@ -58,12 +65,14 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
       session,
       close: async () => {
         unsubscribeUsage();
+        unsubscribePlan();
         unsubscribeTrace();
         await cleanupRoleResources({ session, runtime, terminalHost });
       },
     };
   } catch (error) {
     unsubscribeUsage();
+    unsubscribePlan();
     unsubscribeTrace();
     await cleanupRoleResources({ session, runtime, terminalHost }).catch((cleanupError) => {
       console.error(cleanupError instanceof Error ? cleanupError.message : String(cleanupError));
@@ -238,7 +247,5 @@ async function cleanupRoleResources({ session, runtime, terminalHost }) {
 
 export async function closeRole(state) {
   if (!state) return;
-  await state.close().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-  });
+  await state.close();
 }

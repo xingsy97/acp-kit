@@ -31,6 +31,7 @@ export const RuntimeEventKind = {
   SessionModelsUpdated:   'session.models.updated',
   SessionModelUpdated:    'session.model.updated',
   SessionUsageUpdated:    'session.usage.updated',
+  SessionPlanUpdated:     'session.plan.updated',
   SessionError:           'session.error',
 } as const;
 

@@ -10,13 +10,15 @@ import { agentChoices, defaultModelForAgent, modelChoicesForAgent } from '../con
 import { writePreferences } from '../config/preferences.mjs';
 
 const DEFAULT_EDITOR_TIMEOUT_MS = 30 * 60 * 1000;
-const ENGINE_RENDER_FRAME_MS = 80;
+const ENGINE_RENDER_FRAME_MS = 160;
+const ENGINE_ANIMATION_FRAME_MS = 1000;
 const TUI_STATIC_STATUS_MARK = '•';
 const TUI_SPINNER_FRAMES = ['-', '\\', '|', '/'];
-const TUI_SCAN_FRAMES = ['▰▱▱▱▱▱', '▰▰▱▱▱▱', '▱▰▰▱▱▱', '▱▱▰▰▱▱', '▱▱▱▰▰▱', '▱▱▱▱▰▰', '▱▱▱▱▱▰'];
+const TUI_TITLE_SPINNER_FRAMES = ['◐', '◓', '◑', '◒'];
+const TUI_WAIT_FRAMES = ['·  ', ' · ', '  ·', ' · '];
 const TUI_PROGRESS_FRAMES = ['▰▱▱▱▱▱▱▱', '▰▰▱▱▱▱▱▱', '▱▰▰▱▱▱▱▱', '▱▱▰▰▱▱▱▱', '▱▱▱▰▰▱▱▱', '▱▱▱▱▰▰▱▱', '▱▱▱▱▱▰▰▱', '▱▱▱▱▱▱▰▰'];
-const FINISH_ANIMATION_FRAME_MS = 80;
-const FINISH_ANIMATION_FRAMES = 18;
+const FINISH_ANIMATION_FRAME_MS = 70;
+const FINISH_ANIMATION_FRAMES = 24;
 
 export function parseEditorCommand(raw, { platform = process.platform } = {}) {
   const parsed = splitCommandLine(String(raw ?? '').trim(), { platform });
@@ -95,6 +97,329 @@ export function commitSetupSelections(config, setup, { savePreferences = writePr
   });
 }
 
+function sanitizeDisplayText(text) {
+  return String(text ?? '')
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '')
+    .replace(/\r/g, '')
+    .replace(/\t/g, '  ')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+}
+
+function compactWhitespace(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim();
+}
+
+function displayCharWidth(char) {
+  const code = char.codePointAt(0) ?? 0;
+  if (code === 0) return 0;
+  if (code < 32 || (code >= 0x7f && code < 0xa0)) return 0;
+  if ((code >= 0x0300 && code <= 0x036f) || (code >= 0xfe00 && code <= 0xfe0f)) return 0;
+  if (
+    code >= 0x1100 && (
+      code <= 0x115f
+      || code === 0x2329
+      || code === 0x232a
+      || (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f)
+      || (code >= 0xac00 && code <= 0xd7a3)
+      || (code >= 0xf900 && code <= 0xfaff)
+      || (code >= 0xfe10 && code <= 0xfe19)
+      || (code >= 0xfe30 && code <= 0xfe6f)
+      || (code >= 0xff00 && code <= 0xff60)
+      || (code >= 0xffe0 && code <= 0xffe6)
+      || (code >= 0x1f300 && code <= 0x1faff)
+    )
+  ) return 2;
+  return 1;
+}
+
+function displayWidth(text) {
+  let width = 0;
+  for (const char of String(text ?? '')) width += displayCharWidth(char);
+  return width;
+}
+
+function fitText(text, width, { ellipsis = false } = {}) {
+  const safeWidth = Math.max(0, width);
+  const value = String(text ?? '');
+  if (safeWidth === 0) return { text: '', width: 0 };
+  const target = ellipsis ? Math.max(0, safeWidth - 1) : safeWidth;
+  let used = 0;
+  let result = '';
+  for (const char of value) {
+    const charWidth = displayWidth(char);
+    if (used + charWidth > target) break;
+    result += char;
+    used += charWidth;
+  }
+  if (ellipsis && used < displayWidth(value)) {
+    result += '…';
+    used += 1;
+  }
+  return { text: result, width: used };
+}
+
+function wrapDisplayLine(line, cols) {
+  line = sanitizeDisplayText(line);
+  if (cols <= 0) return [line];
+  if (displayWidth(line) <= cols) return [line];
+  const out = [];
+  let rest = line;
+  while (displayWidth(rest) > cols) {
+    let cut = fitText(rest, cols).text.length;
+    let wordCut = rest.lastIndexOf(' ', cut);
+    while (wordCut > 0 && displayWidth(rest.slice(0, wordCut)) > cols) {
+      wordCut = rest.lastIndexOf(' ', wordCut - 1);
+    }
+    if (wordCut > 0) cut = wordCut;
+    if (cut <= 0) cut = 1;
+    out.push(rest.slice(0, cut).trimEnd());
+    rest = rest.slice(cut).trimStart();
+  }
+  if (rest) out.push(rest);
+  return out;
+}
+
+function pluralize(count, singular, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function cleanDisplayLabel(value, fallback) {
+  const cleaned = compactWhitespace(sanitizeDisplayText(value ?? ''));
+  return cleaned || fallback;
+}
+
+function humanizeToken(value, fallback = '') {
+  const cleaned = cleanDisplayLabel(String(value ?? '').replace(/[_-]+/g, ' '), fallback);
+  return cleaned;
+}
+
+function statusLabel(status) {
+  if (status === PaneStatus.Running) return 'Running';
+  if (status === PaneStatus.Completed) return 'Ready';
+  if (status === PaneStatus.Failed) return 'Failed';
+  if (status === PaneStatus.Pending) return 'Waiting';
+  if (status === 'launching') return 'Launching';
+  return compactWhitespace(String(status || 'waiting')) || 'Waiting';
+}
+
+function statusGlyph(status) {
+  if (status === PaneStatus.Running) return '▶';
+  if (status === PaneStatus.Completed) return '✓';
+  if (status === PaneStatus.Failed) return '✖';
+  if (status === PaneStatus.Pending) return '…';
+  if (status === 'launching') return '◌';
+  return '•';
+}
+
+function taskSummary(task) {
+  const summary = compactWhitespace(String(task || '(empty)'));
+  return summary || '(empty)';
+}
+
+export function renderTaskPreviewRows(task, cols, { prefix = 'task:     ', maxRows = 2 } = {}) {
+  const safeCols = Math.max(1, cols);
+  const rows = wrapDisplayLine(`${prefix}${taskSummary(task)}`, safeCols);
+  if (rows.length <= maxRows) return { rows, truncated: false };
+  const hint = ' … [v view full task, e edit]';
+  const visible = rows.slice(0, maxRows);
+  const lastIndex = visible.length - 1;
+  const hintWidth = displayWidth(hint);
+  const room = Math.max(1, safeCols - hintWidth);
+  visible[lastIndex] = `${fitText(visible[lastIndex], room, { ellipsis: true }).text.trimEnd()}${hint}`;
+  return { rows: visible, truncated: true };
+}
+
+export function renderFixedTaskPreviewRows(task, cols, options = {}) {
+  const { rows, truncated } = renderTaskPreviewRows(task, cols, options);
+  const maxRows = options.maxRows ?? 2;
+  const padded = rows.slice(0, maxRows);
+  while (padded.length < maxRows) padded.push('');
+  return { rows: padded, truncated };
+}
+
+export function formatTuiDashboardTitle({ phase, result, selectedRound, totalRounds, maxRounds }) {
+  const phaseText = phase === Phase.Done
+    ? (result?.approved ? 'Approved' : 'Needs review')
+    : phase === Phase.Error
+      ? 'Error'
+      : phase === Phase.Running
+        ? 'Running'
+        : phase === Phase.Launching
+        ? 'Launching'
+        : 'Ready';
+  const roundText = totalRounds > 0
+    ? `Round ${selectedRound ?? totalRounds}/${Math.max(totalRounds, maxRounds ?? totalRounds)}`
+    : 'Standing by for round 1';
+  return `${TUI_STATIC_STATUS_MARK} ACP Author/Reviewer Loop · ${phaseText} · ${roundText}`;
+}
+
+export function formatTuiPaneHeadline({ role, round, status, agent, model }) {
+  const parts = [
+    role,
+    `Round ${round ?? '-'}`,
+    `${statusGlyph(status)} ${statusLabel(status)}`,
+    `${cleanDisplayLabel(agent, '(choose)')} (${cleanDisplayLabel(model, 'default')})`,
+  ];
+  return parts.join(' · ');
+}
+
+export function formatTuiPlanSummary(entries) {
+  const normalized = Array.isArray(entries) ? entries : [];
+  if (normalized.length === 0) return 'Plan --';
+  const total = normalized.length;
+  const completed = normalized.filter((entry) => entry?.status === 'completed').length;
+  const glyphs = normalized
+    .map((entry) => {
+      if (entry?.status === 'completed') return '✓';
+      if (entry?.status === 'in_progress') return '→';
+      if (entry?.status === 'failed' || entry?.status === 'cancelled') return '!';
+      return '·';
+    })
+    .join('');
+  const focus = normalized.find((entry) => entry?.status === 'in_progress')
+    ?? normalized.find((entry) => entry?.status === 'pending')
+    ?? normalized.find((entry) => compactWhitespace(entry?.content));
+  const focusContent = fitText(compactWhitespace(focus?.content || ''), 72, { ellipsis: true }).text;
+  const focusLabel = focusContent
+    ? ` · ${focus?.status === 'in_progress' ? 'working' : 'next'}: ${focusContent}`
+    : '';
+  return `Plan ${completed}/${total} ${glyphs}${focusLabel}`;
+}
+
+export function formatTuiPaneSummary({ pane, plan }) {
+  const tools = Array.isArray(pane?.tools) ? pane.tools.length : 0;
+  const reasoning = Array.isArray(pane?.reasoning?.blocks) ? pane.reasoning.blocks.length : 0;
+  const chars = Number.isFinite(pane?.chars) ? pane.chars : 0;
+  const planEntries = Array.isArray(plan?.entries) ? plan.entries : [];
+  const completed = planEntries.filter((entry) => entry?.status === 'completed').length;
+  const parts = [];
+  if (tools > 0) parts.push(pluralize(tools, 'tool'));
+  if (reasoning > 0) parts.push(pluralize(reasoning, 'thought'));
+  if (chars > 0) parts.push(`${chars} chars`);
+  if (planEntries.length > 0) parts.push(`plan ${completed}/${planEntries.length}`);
+  return parts.join(' · ') || 'No plan or transcript yet.';
+}
+
+export function formatTuiEmptyState({ role, pane, status, phase, selectedRound, plan }) {
+  const planEntries = Array.isArray(plan?.entries) ? plan.entries : [];
+  const focus = planEntries.find((entry) => entry?.status === 'in_progress')
+    ?? planEntries.find((entry) => entry?.status === 'pending')
+    ?? planEntries.find((entry) => compactWhitespace(entry?.content));
+  const focusContent = fitText(compactWhitespace(focus?.content || ''), 72, { ellipsis: true }).text;
+  if (pane?.error) return 'Turn failed before output reached this pane.';
+  if (status === 'launching' || phase === Phase.Launching) return `Launching ${role} session...`;
+  if (selectedRound == null) return 'Standing by for round 1.';
+  if (status === PaneStatus.Pending) {
+    return focusContent
+      ? `Waiting for this turn to start. Up next: ${focusContent}`
+      : 'Waiting for this turn to start.';
+  }
+  if (status === PaneStatus.Completed) return 'Turn completed without visible output in this pane.';
+  if (status === PaneStatus.Failed) return 'Turn failed before output reached this pane.';
+  return 'No output yet.';
+}
+
+export function formatTuiPaneStatusLine({ pane, plan }) {
+  if (pane?.error) return { text: `error: ${cleanDisplayLabel(pane.error, 'unknown error')}`, color: 'red', dim: false };
+  if (pane?.stopReason) return { text: `completed: ${humanizeToken(pane.stopReason)}`, color: undefined, dim: true };
+  if (plan?.entries?.length) return { text: formatTuiPlanSummary(plan.entries), color: 'cyan', dim: false };
+  return { text: formatTuiPaneSummary({ pane, plan }), color: undefined, dim: true };
+}
+
+export function formatTuiAvailabilityLabel(availability) {
+  if (availability?.status === 'ready') return 'Ready';
+  if (availability?.status === 'auto') return 'Via npx';
+  return 'Unavailable';
+}
+
+export function formatTuiPreferenceStatus({ save, path }) {
+  if (!save) return 'Save defaults · Off';
+  return `Save defaults · On (${cleanDisplayLabel(path, '(default path)')})`;
+}
+
+export function formatTuiFinishSummary({ rounds, maxRounds }) {
+  const safeRounds = Number.isFinite(rounds) ? Math.max(0, rounds) : 0;
+  const safeMaxRounds = Number.isFinite(maxRounds) ? Math.max(safeRounds, maxRounds) : safeRounds;
+  return `Approved · ${safeRounds}/${safeMaxRounds} rounds · ready for handoff`;
+}
+
+export function formatTuiTokenCount(tokens) {
+  if (!Number.isFinite(tokens)) return '0';
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(2).replace(/\.?0+$/, '')}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1).replace(/\.?0+$/, '')}K`;
+  return String(tokens);
+}
+
+function formatCost(cost) {
+  if (!Number.isFinite(cost) || cost <= 0) return '';
+  if (cost < 0.01) return `$${cost.toFixed(4)}`;
+  return `$${cost.toFixed(2)}`;
+}
+
+export function formatTuiUsageLabel(usage) {
+  const parts = [];
+  const used = Number.isFinite(usage?.used) ? usage.used : 0;
+  const size = Number.isFinite(usage?.size) ? usage.size : 0;
+  if (used > 0 || size > 0) {
+    parts.push(`ctx ${formatTuiTokenCount(used)}/${formatTuiTokenCount(size)}`);
+  }
+
+  const input = Number.isFinite(usage?.inputTokens) ? usage.inputTokens : 0;
+  const output = Number.isFinite(usage?.outputTokens) ? usage.outputTokens : 0;
+  const total = Number.isFinite(usage?.totalTokens) ? usage.totalTokens : input + output;
+  if (total > 0 || input > 0 || output > 0) {
+    const tokenParts = [];
+    if (total > 0) tokenParts.push(`total ${formatTuiTokenCount(total)}`);
+    if (input > 0) tokenParts.push(`in ${formatTuiTokenCount(input)}`);
+    if (output > 0) tokenParts.push(`out ${formatTuiTokenCount(output)}`);
+    parts.push(tokenParts.join(' '));
+  }
+
+  const cachedRead = Number.isFinite(usage?.cachedReadTokens) ? usage.cachedReadTokens : 0;
+  const cachedWrite = Number.isFinite(usage?.cachedWriteTokens) ? usage.cachedWriteTokens : 0;
+  if (cachedRead > 0 || cachedWrite > 0) {
+    parts.push(`cache r${formatTuiTokenCount(cachedRead)} w${formatTuiTokenCount(cachedWrite)}`);
+  }
+
+  const thoughts = Number.isFinite(usage?.thoughtTokens) ? usage.thoughtTokens : 0;
+  if (thoughts > 0) parts.push(`think ${formatTuiTokenCount(thoughts)}`);
+
+  const cost = formatCost(usage?.cost);
+  if (cost) parts.push(cost);
+
+  return parts.join(' · ') || 'tokens --';
+}
+export function formatTuiTerminalTitle({ state, frame = 0, awaitingSetup = false, awaitingConfirm = false, editingTask = false, screen = 'flow', cancelled = false } = {}) {
+  const spinner = TUI_SPINNER_FRAMES[frame % TUI_SPINNER_FRAMES.length];
+  const titleSpinner = TUI_TITLE_SPINNER_FRAMES[frame % TUI_TITLE_SPINNER_FRAMES.length];
+  const waiting = TUI_WAIT_FRAMES[frame % TUI_WAIT_FRAMES.length];
+  if (cancelled) return 'ACP Review · cancelled';
+  if (editingTask) return `ACP Review ${spinner} · editing task`;
+  if (awaitingSetup) return `ACP Review ${waiting} · setup`;
+  if (awaitingConfirm) return `ACP Review ${waiting} · confirm`;
+  if (state?.phase === Phase.Error) return 'ACP Review · error';
+  if (state?.phase === Phase.Done) return state.result?.approved ? 'ACP Review · approved' : 'ACP Review · not approved';
+  if (state?.phase === Phase.Launching) return `ACP Review ${titleSpinner} · launching`;
+
+  const latestRound = state?.latest ?? state?.order?.[state.order.length - 1] ?? null;
+  const round = latestRound != null ? state?.rounds?.get?.(latestRound) : null;
+  const runningRole = round?.AUTHOR?.status === PaneStatus.Running
+    ? 'AUTHOR'
+    : round?.REVIEWER?.status === PaneStatus.Running
+      ? 'REVIEWER'
+      : null;
+  const waitingRole = round?.AUTHOR?.status === PaneStatus.Pending
+    ? 'AUTHOR'
+    : round?.REVIEWER?.status === PaneStatus.Pending
+      ? 'REVIEWER'
+      : null;
+  const roundText = latestRound != null ? `R${latestRound}` : 'R-';
+  if (runningRole) return `ACP Review ${titleSpinner} · ${roundText} · ${runningRole} running`;
+  if (waitingRole) return `ACP Review ${waiting} · ${roundText} · ${waitingRole} waiting`;
+  if (screen && screen !== 'flow') return `ACP Review · ${screen}`;
+  return `ACP Review ${titleSpinner} · running`;
+}
+
 /**
  * Ink-based TUI renderer.
  *
@@ -135,10 +460,11 @@ export async function runTui({ config }) {
   } = React;
 
   let approvalResolver = null;
-  let exitAfterApproval = false;
+  let notifyApprovalPending = null;
   let approvalBellRung = false;
   config.onApproved = () => new Promise((resolve) => {
     approvalResolver = resolve;
+    notifyApprovalPending?.();
   });
 
   function resolveApproval(decision) {
@@ -146,6 +472,10 @@ export async function runTui({ config }) {
     const resolve = approvalResolver;
     approvalResolver = null;
     resolve?.(decision);
+  }
+
+  function hasPendingApproval() {
+    return Boolean(approvalResolver);
   }
 
   function forceContinueAfterApproval() {
@@ -180,8 +510,16 @@ export async function runTui({ config }) {
     process.stdout.write('\x1b[?25h\x1b[?1049l');
     altScreenActive = false;
   }
+  function setTerminalTitle(title) {
+    if (!process.stdout.isTTY) return;
+    const safe = sanitizeDisplayText(title).replace(/[\u0007\u001b]/g, '').slice(0, 120);
+    process.stdout.write(`\x1b]2;${safe}\x07`);
+  }
   enterAltScreen();
-  const restore = () => leaveAltScreen();
+  const restore = () => {
+    setTerminalTitle('ACP Review · closed');
+    leaveAltScreen();
+  };
   const handleSigint = () => { restore(); process.exit(130); };
   const handleSigterm = () => { restore(); process.exit(143); };
   process.on('exit', restore);
@@ -228,7 +566,7 @@ export async function runTui({ config }) {
   }
 
   function normalizeDisplayText(text) {
-    return text.replace(/([.!?])(?=[A-Z`])/g, '$1 ');
+    return sanitizeDisplayText(text).replace(/([.!?])(?=[A-Z`])/g, '$1 ');
   }
 
   function stringifyValue(value) {
@@ -245,92 +583,21 @@ export async function runTui({ config }) {
     }) || '';
   }
 
-  function compactWhitespace(text) {
-    return String(text || '').replace(/\s+/g, ' ').trim();
-  }
-
   function truncateText(text, max) {
     const value = compactWhitespace(text);
     return fitText(value, max, { ellipsis: true }).text;
-  }
-
-  function fitText(text, width, { ellipsis = false } = {}) {
-    const safeWidth = Math.max(0, width);
-    const value = String(text ?? '');
-    if (safeWidth === 0) return { text: '', width: 0 };
-    const target = ellipsis ? Math.max(0, safeWidth - 1) : safeWidth;
-    let used = 0;
-    let result = '';
-    for (const char of value) {
-      const charWidth = displayWidth(char);
-      if (used + charWidth > target) break;
-      result += char;
-      used += charWidth;
-    }
-    if (ellipsis && used < displayWidth(value)) {
-      result += '\u2026';
-      used += 1;
-    }
-    return { text: result, width: used };
-  }
-
-  function displayWidth(text) {
-    let width = 0;
-    for (const char of String(text ?? '')) width += displayCharWidth(char);
-    return width;
-  }
-
-  function displayCharWidth(char) {
-    const code = char.codePointAt(0) ?? 0;
-    if (code === 0) return 0;
-    if (code < 32 || (code >= 0x7f && code < 0xa0)) return 0;
-    if ((code >= 0x0300 && code <= 0x036f) || (code >= 0xfe00 && code <= 0xfe0f)) return 0;
-    if (
-      code >= 0x1100 && (
-        code <= 0x115f
-        || code === 0x2329
-        || code === 0x232a
-        || (code >= 0x2e80 && code <= 0xa4cf && code !== 0x303f)
-        || (code >= 0xac00 && code <= 0xd7a3)
-        || (code >= 0xf900 && code <= 0xfaff)
-        || (code >= 0xfe10 && code <= 0xfe19)
-        || (code >= 0xfe30 && code <= 0xfe6f)
-        || (code >= 0xff00 && code <= 0xff60)
-        || (code >= 0xffe0 && code <= 0xffe6)
-        || (code >= 0x1f300 && code <= 0x1faff)
-      )
-    ) return 2;
-    return 1;
   }
 
   function firstLine(text) {
     return String(text || '').split('\n')[0] || '';
   }
 
-  function taskSummary(task) {
-    const summary = compactWhitespace(String(task || '(empty)'));
-    return summary || '(empty)';
-  }
-
   function taskPreviewRows(task, cols, { prefix = 'task:     ', maxRows = 2 } = {}) {
-    const safeCols = Math.max(1, cols);
-    const rows = wrapLine(`${prefix}${taskSummary(task)}`, safeCols);
-    if (rows.length <= maxRows) return { rows, truncated: false };
-    const hint = ' … [v view full task, e edit]';
-    const visible = rows.slice(0, maxRows);
-    const lastIndex = visible.length - 1;
-    const hintWidth = displayWidth(hint);
-    const room = Math.max(1, safeCols - hintWidth);
-    visible[lastIndex] = `${fitText(visible[lastIndex], room, { ellipsis: true }).text.trimEnd()}${hint}`;
-    return { rows: visible, truncated: true };
+    return renderTaskPreviewRows(task, cols, { prefix, maxRows });
   }
 
   function fixedTaskPreviewRows(task, cols, options = {}) {
-    const { rows, truncated } = taskPreviewRows(task, cols, options);
-    const maxRows = options.maxRows ?? 2;
-    const padded = rows.slice(0, maxRows);
-    while (padded.length < maxRows) padded.push('');
-    return { rows: padded, truncated };
+    return renderFixedTaskPreviewRows(task, cols, options);
   }
 
   function ensureEngine() {
@@ -418,40 +685,33 @@ export async function runTui({ config }) {
     return parts.join(' - ');
   }
 
-  function mergedToolStatus(items) {
+  function toolRunStats(items) {
     const failed = items.filter((item) => item.status === 'failed' || item.status === 'error').length;
-    if (failed === items.length) return 'failed';
-    if (failed > 0) return 'partial-failed';
-    if (items.some((item) => item.status === 'running')) return 'running';
+    const running = items.filter((item) => !item.status || item.status === 'running').length;
+    const done = items.filter((item) => ['completed', 'done', 'success'].includes(item.status)).length;
+    return { total: items.length, done, failed, running };
+  }
+
+  function mergedToolStatus(items) {
+    const stats = toolRunStats(items);
+    if (stats.failed === items.length) return 'failed';
+    if (stats.failed > 0) return 'partial-failed';
+    if (stats.running > 0) return 'running';
     return items[items.length - 1]?.status || 'completed';
   }
 
-  // Two distinct numbers can arrive for one role:
-  //   * inputTokens / outputTokens are CUMULATIVE session totals reported by
-  //     ACP `PromptResponse.usage` (sum across all turns so far).
-  //   * used / size are a CONTEXT-WINDOW snapshot reported by ACP
-  //     `usage_update` (tokens currently in context vs. context window size).
-  // Show whichever is available; show both when both are.
-  function formatUsage(usage) {
-    const parts = [];
-    const used = Number.isFinite(usage?.used) ? usage.used : 0;
-    const size = Number.isFinite(usage?.size) ? usage.size : 0;
-    if (used > 0 || size > 0) {
-      parts.push(`ctx ${formatTokenCount(used)}/${formatTokenCount(size)} Tk`);
-    }
-    const input = Number.isFinite(usage?.inputTokens) ? usage.inputTokens : 0;
-    const output = Number.isFinite(usage?.outputTokens) ? usage.outputTokens : 0;
-    if (input > 0 || output > 0) {
-      parts.push(`\u03A3 in:${formatTokenCount(input)} out:${formatTokenCount(output)}`);
-    }
-    if (parts.length === 0) return 'Tokens --';
-    return parts.join(' \u00B7 ');
+  function summarizeToolRun(items) {
+    const status = mergedToolStatus(items);
+    const stats = toolRunStats(items);
+    const parts = [`Tools x${stats.total}`, toolStatusLabel(status)];
+    if (stats.running > 0) parts.push(`${stats.running} running`);
+    if (stats.done > 0) parts.push(`${stats.done} done`);
+    if (stats.failed > 0) parts.push(`${stats.failed} failed`);
+    return parts.join(' · ');
   }
 
-  function formatTokenCount(tokens) {
-    if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(2).replace(/\.?0+$/, '')}M`;
-    if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1).replace(/\.?0+$/, '')}K`;
-    return String(tokens);
+  function formatUsage(usage) {
+    return formatTuiUsageLabel(usage);
   }
 
   function formatDuration(durationMs) {
@@ -475,30 +735,16 @@ export async function runTui({ config }) {
   }
 
   function animationLabel(status, frame) {
-    if (status !== PaneStatus.Running && status !== PaneStatus.Pending) return '';
-    return ` ${TUI_PROGRESS_FRAMES[frame % TUI_PROGRESS_FRAMES.length]}`;
+    if (status === 'launching') return ` ${TUI_SPINNER_FRAMES[frame % TUI_SPINNER_FRAMES.length]}`;
+    if (status === PaneStatus.Running) return ` ${TUI_PROGRESS_FRAMES[frame % TUI_PROGRESS_FRAMES.length]}`;
+    if (status === PaneStatus.Pending) return ` ${TUI_WAIT_FRAMES[frame % TUI_WAIT_FRAMES.length]}`;
+    return '';
   }
 
   // Soft-wrap one logical line to display rows. Prefer word boundaries; only
   // hard-cut when a single token is wider than the pane.
   function wrapLine(line, cols) {
-    if (cols <= 0) return [line];
-    if (displayWidth(line) <= cols) return [line];
-    const out = [];
-    let rest = line;
-    while (displayWidth(rest) > cols) {
-      let cut = fitText(rest, cols).text.length;
-      let wordCut = rest.lastIndexOf(' ', cut);
-      while (wordCut > 0 && displayWidth(rest.slice(0, wordCut)) > cols) {
-        wordCut = rest.lastIndexOf(' ', wordCut - 1);
-      }
-      if (wordCut > 0) cut = wordCut;
-      if (cut <= 0) cut = 1;
-      out.push(rest.slice(0, cut).trimEnd());
-      rest = rest.slice(cut).trimStart();
-    }
-    if (rest) out.push(rest);
-    return out;
+    return wrapDisplayLine(line, cols);
   }
 
   function editorCommand() {
@@ -562,7 +808,7 @@ export async function runTui({ config }) {
 
   // Startup UI separates user CLI installation from ACP launch capability.
   // Users care whether their normal CLI is present; launch fallback details are
-  // internal and are summarized as Ready / Will prepare / Unavailable.
+  // internal and are summarized as Ready / Via npx / Unavailable.
   function agentAvailability(agent) {
     const commandFound = isCommandOnPath(agent.command);
     const fallbackFound = (agent.fallbackCommands ?? []).some((fallback) => isCommandOnPath(fallback.command));
@@ -799,12 +1045,6 @@ export async function runTui({ config }) {
     return agentChoices.find((choice) => choice.id === agentId)?.agent.displayName ?? '(choose)';
   }
 
-  function availabilityLabel(availability) {
-    if (availability?.status === 'ready') return 'Ready';
-    if (availability?.status === 'auto') return 'Launch via npx';
-    return 'Unavailable';
-  }
-
   function userCliLabel(found) {
     return found ? 'Found' : 'Missing';
   }
@@ -857,7 +1097,7 @@ export async function runTui({ config }) {
   }
 
   function padCell(value, width) {
-    const fitted = fitText(String(value ?? '').replace(/\r/g, ''), width, { ellipsis: true });
+    const fitted = fitText(sanitizeDisplayText(value), width, { ellipsis: true });
     return fitted.text + ' '.repeat(Math.max(0, width - fitted.width));
   }
 
@@ -1027,7 +1267,7 @@ export async function runTui({ config }) {
       case 'toggleFocus':
         return { ...s, focus: s.focus === 'AUTHOR' ? 'REVIEWER' : 'AUTHOR' };
       case 'toggleWrap':
-        return { ...s, wrap: !s.wrap };
+        return { ...s, wrap: !s.wrap, scrollAuthor: 0, scrollReviewer: 0, scrollTrace: 0, scrollTool: 0, scrollTask: 0, scrollError: 0 };
       case 'toggleHelp':
         return { ...s, showHelp: !s.showHelp };
       case 'startFinish':
@@ -1057,6 +1297,7 @@ export async function runTui({ config }) {
         cols: stdout?.columns || 80,
       });
       const [animationFrame, setAnimationFrame] = useState(0);
+      const [approvalToken, setApprovalToken] = useState(0);
     useEffect(() => {
       const onResize = () => setSize({ rows: stdout.rows, cols: stdout.columns });
       stdout?.on?.('resize', onResize);
@@ -1093,8 +1334,23 @@ export async function runTui({ config }) {
     }, [view.awaitingSetup]);
 
     useEffect(() => {
+      notifyApprovalPending = () => setApprovalToken((token) => token + 1);
+      return () => {
+        if (notifyApprovalPending) notifyApprovalPending = null;
+      };
+    }, []);
+
+    useEffect(() => {
+      if (view.screen === 'finishing') return undefined;
+      if (!hasPendingApproval()) return undefined;
+      dispatchView({ type: 'startFinish' });
+      return undefined;
+    }, [approvalToken, view.screen]);
+
+    useEffect(() => {
       if (view.screen !== 'finishing') return undefined;
       if (view.finishFrame >= FINISH_ANIMATION_FRAMES) {
+        if (hasPendingApproval()) resolveApproval({ continue: false });
         leaveAltScreen();
         app.exit();
         return undefined;
@@ -1105,6 +1361,18 @@ export async function runTui({ config }) {
 
     // Auto-follow: whenever a new round arrives keep the view pinned.
     const state = engine?.getState() ?? createEmptyEngineState();
+    useEffect(() => {
+      setTerminalTitle(formatTuiTerminalTitle({
+        state,
+        frame: animationFrame,
+        awaitingSetup: view.awaitingSetup,
+        awaitingConfirm: view.awaitingConfirm,
+        editingTask: view.editingTask,
+        screen: view.screen,
+        cancelled: view.cancelled,
+      }));
+    }, [animationFrame, state.phase, state.latest, state.result?.approved, view.awaitingSetup, view.awaitingConfirm, view.editingTask, view.screen, view.cancelled]);
+
     useEffect(() => {
       dispatchView({ type: 'autoFollow', order: state.order });
     }, [state.order.length]);
@@ -1118,9 +1386,9 @@ export async function runTui({ config }) {
     useEffect(() => {
       if (view.screen === 'finishing') return undefined;
       if (view.cancelled || state.phase === Phase.Done || state.phase === Phase.Error) return undefined;
-      const timeout = setTimeout(() => setAnimationFrame((frame) => (frame + 1) | 0), ENGINE_RENDER_FRAME_MS * 3);
-      return () => clearTimeout(timeout);
-    }, [animationFrame, view.screen, view.cancelled, state.phase]);
+      const interval = setInterval(() => setAnimationFrame((frame) => (frame + 1) | 0), ENGINE_ANIMATION_FRAME_MS);
+      return () => clearInterval(interval);
+    }, [view.screen, view.cancelled, state.phase]);
 
     // Kick off the run exactly once, but only after the user confirms (or
     // immediately if --yes / ACP_REVIEW_YES skipped the prompt).
@@ -1133,9 +1401,7 @@ export async function runTui({ config }) {
         .finally(() => {
           runDone = true;
           setTick((t) => (t + 1) | 0);
-          if (exitAfterApproval) {
-            dispatchView({ type: 'startFinish' });
-          }
+
         });
     }, [view.awaitingSetup, view.awaitingConfirm, view.cancelled, view.screen]);
 
@@ -1148,7 +1414,7 @@ export async function runTui({ config }) {
     }, [view.cancelled]);
 
     useInput((input, key) => {
-      const approvalPending = Boolean(approvalResolver && state.phase === Phase.Done && state.result?.approved);
+      const approvalPending = Boolean(hasPendingApproval() && state.phase === Phase.Done && state.result?.approved);
       const taskIsLong = taskPreviewRows(config.task, Math.max(1, size.cols - 4)).truncated;
       const openTaskEditor = () => {
         const fromConfirm = view.awaitingConfirm;
@@ -1284,8 +1550,8 @@ export async function runTui({ config }) {
       if (approvalPending && (input === 'f' || input === 'F')) {
         forceContinueAfterApproval();
       } else if (approvalPending && (key.return || input === 'q')) {
-        exitAfterApproval = input === 'q';
         resolveApproval({ continue: false });
+        dispatchView({ type: 'startFinish' });
       } else if (state.phase === Phase.Error && (input === 'x' || input === 'X')) dispatchView({ type: 'showError' });
       else if (key.leftArrow) dispatchView({ type: 'select', delta: -1, order: state.order });
       else if (key.rightArrow)  dispatchView({ type: 'select', delta: 1, order: state.order });
@@ -1325,7 +1591,7 @@ export async function runTui({ config }) {
     // header (truncated to 1 row), and on 0 rows we render nothing. The
     // invariant header + pane + nav + footer === size.rows always holds.
     const totalRows = Math.max(0, size.rows);
-    const idealHeader = 7;        // title + cwd/task/rounds + border; role status lives on pane borders
+    const idealHeader = 6;        // title + workspace + task preview; role status lives on pane borders
     const idealNav = 3;           // 1 line + 2 border
     const idealFooter = state.phase === Phase.Error ? 4 : 0;
 
@@ -1350,6 +1616,20 @@ export async function runTui({ config }) {
     const paneCols = Math.max(1, paneOuterCols - 4);
     const headerCols = Math.max(1, size.cols - 4);
 
+    // ---- panes ---------------------------------------------------------
+    const selectedRound = view.selected ?? state.order[state.order.length - 1] ?? null;
+    const round = selectedRound != null ? state.rounds.get(selectedRound) : null;
+    const total = state.order.length;
+    const idx = selectedRound == null ? -1 : state.order.indexOf(selectedRound);
+
+    function phaseColor(phase, result) {
+      if (phase === Phase.Done) return result?.approved ? 'green' : 'yellow';
+      if (phase === Phase.Error) return 'red';
+      if (phase === Phase.Running) return 'green';
+      if (phase === Phase.Launching) return 'yellow';
+      return 'cyan';
+    }
+
     // ---- header --------------------------------------------------------
     const taskPreview = fixedTaskPreviewRows(config.task, headerCols);
     const header = h(
@@ -1357,21 +1637,25 @@ export async function runTui({ config }) {
       {
         flexDirection: 'column',
         borderStyle: 'round',
+        borderColor: phaseColor(state.phase, state.result),
         paddingX: 1,
         height: headerHeight,
         overflow: 'hidden',
       },
-      line(h(Text, { bold: true, color: 'cyan' }, `${TUI_STATIC_STATUS_MARK} ACP Author/Reviewer Loop`), 'title'),
-      line(h(Text, { color: 'yellow', wrap: 'truncate-end' }, `cwd:      ${config.cwd}`), 'cwd'),
+      line(h(Text, {
+        bold: true,
+        color: phaseColor(state.phase, state.result),
+        wrap: 'truncate-end',
+      }, formatTuiDashboardTitle({
+        phase: state.phase,
+        result: state.result,
+        selectedRound,
+        totalRounds: total,
+        maxRounds: state.result?.maxRounds ?? config.maxRounds,
+      })), 'title'),
+      line(h(Text, { color: 'yellow', wrap: 'truncate-end' }, `workspace: ${config.cwd}`), 'cwd'),
       ...taskPreview.rows.map((row, i) => line(h(Text, { color: i === 0 ? 'white' : 'cyan', wrap: 'truncate-end' }, row || ' '), `task-${i}`)),
-      line(h(Text, { color: 'green', wrap: 'truncate-end' }, `rounds:   max ${config.maxRounds}`), 'rounds'),
     );
-
-    // ---- panes ---------------------------------------------------------
-    const selectedRound = view.selected ?? state.order[state.order.length - 1] ?? null;
-    const round = selectedRound != null ? state.rounds.get(selectedRound) : null;
-    const total = state.order.length;
-    const idx = selectedRound == null ? -1 : state.order.indexOf(selectedRound);
 
     function toolsForSelection() {
       const pane = view.focus === 'AUTHOR' ? round?.AUTHOR : round?.REVIEWER;
@@ -1402,7 +1686,7 @@ export async function runTui({ config }) {
     function roleStatusToPaneStatus(status) {
       if (status === 'ready') return PaneStatus.Completed;
       if (String(status).startsWith('launching') || String(status).startsWith('session ready')) {
-        return PaneStatus.Running;
+        return 'launching';
       }
       return PaneStatus.Pending;
     }
@@ -1432,18 +1716,16 @@ export async function runTui({ config }) {
           }
           if (run.length > 1) {
             const status = mergedToolStatus(run);
-            const failed = run.filter((tool) => tool.status === 'failed' || tool.status === 'error').length;
-            const succeeded = run.filter((tool) => ['completed', 'done', 'success'].includes(tool.status)).length;
-            const summary = `${run.length} Tool Calls (${succeeded} done, ${failed} failed)`;
-            rows.push({ key: `tool-run-${run.map((tool) => tool.toolCallId || tool.id).join('-')}-summary`, kind: 'tool', status, text: summary });
-            run.slice(0, 3).forEach((tool) => {
-              const text = `  ${summarizeTool(tool, { compact: true })}`;
-              const parts = view.wrap ? wrapLine(text, width) : [text];
-              parts.forEach((part, partIndex) => rows.push({ key: `tool-${tool.toolCallId || tool.id}-${partIndex}`, kind: 'tool', status: tool.status || status, text: part, toolCallId: tool.toolCallId }));
+            const runKey = run.map((tool) => tool.toolCallId || tool.id).join('-');
+            const summary = fitText(`┌ ${summarizeToolRun(run)}`, width, { ellipsis: true }).text;
+            rows.push({ key: `tool-run-${runKey}-summary`, kind: 'tool', status, text: summary });
+            run.slice(0, 1).forEach((tool) => {
+              const text = `├ ${summarizeTool(tool, { compact: true })}`;
+              const preview = fitText(text, width, { ellipsis: true }).text;
+              rows.push({ key: `tool-${tool.toolCallId || tool.id}-preview`, kind: 'tool', status: tool.status || status, text: preview, toolCallId: tool.toolCallId });
             });
-            if (run.length > 3) {
-              rows.push({ key: `tool-run-${run.map((tool) => tool.toolCallId || tool.id).join('-')}-more`, kind: 'tool', status, text: `  ... ${run.length - 3} more; press [/] then Enter for full tool details` });
-            }
+            const folded = fitText(`└ ${run.length - 1} folded · [/] select · Enter details`, width, { ellipsis: true }).text;
+            rows.push({ key: `tool-run-${runKey}-more`, kind: 'tool', status, text: folded });
           } else {
             for (const tool of run) {
               const status = tool.status || 'running';
@@ -1454,6 +1736,44 @@ export async function runTui({ config }) {
           }
           continue;
         }
+        // Render a reasoning block as a clearly framed section so users
+        // can spot it among normal message text. We insert:
+        //   ── thinking #N ──────────────
+        //   ▎ <reasoning line 1>
+        //   ▎ <reasoning line 2>
+        // The frame appears once per reasoning item (each item is its own
+        // `sourceId` block, see appendTextFlow). Inline-mixed reasoning
+        // and message text remain in chronological order.
+        if (item.kind === 'reasoning') {
+          const previous = flow[index - 1];
+          const isFirstOfBlock = !previous || previous.kind !== 'reasoning' || previous.sourceId !== item.sourceId;
+          if (isFirstOfBlock) {
+            const label = ` thinking${item.sourceId ? ` · ${String(item.sourceId).slice(-8)}` : ''} `;
+            const fill = Math.min(12, Math.max(2, width - displayWidth(label) - 2));
+            rows.push({
+              key: `reasoning-header-${item.id}`,
+              kind: 'reasoning-header',
+              text: `─${label}${'─'.repeat(fill)}─`,
+            });
+          }
+          const normalized = normalizeDisplayText(item.text || '');
+          const logical = normalized.split('\n');
+          logical.forEach((part, i) => {
+            const isCursorLine = pane.status === PaneStatus.Running
+              && i === logical.length - 1
+              && item === flow[flow.length - 1];
+            const value = isCursorLine ? `${part}\u258F` : part;
+            const prefix = '\u258E ';
+            const contentWidth = Math.max(1, width - displayWidth(prefix));
+            const parts = view.wrap ? (value === '' ? [''] : wrapLine(value, contentWidth)) : [value];
+            parts.forEach((text, partIndex) => rows.push({
+              key: `${item.id || `flow-${index}`}-${i}-${partIndex}`,
+              kind: 'reasoning',
+              text: `${prefix}${text}`,
+            }));
+          });
+          continue;
+        }
         const normalized = normalizeDisplayText(item.text || '');
         const logical = normalized.split('\n');
         logical.forEach((part, i) => {
@@ -1461,13 +1781,12 @@ export async function runTui({ config }) {
             && i === logical.length - 1
             && item === flow[flow.length - 1];
           const value = isCursorLine ? `${part}\u258F` : part;
-          const prefix = item.kind === 'reasoning' ? 'think: ' : '';
-          const contentWidth = Math.max(1, width - displayWidth(prefix));
+          const contentWidth = Math.max(1, width);
           const parts = view.wrap ? (value === '' ? [''] : wrapLine(value, contentWidth)) : [value];
           parts.forEach((text, partIndex) => rows.push({
             key: `${item.id || `flow-${index}`}-${i}-${partIndex}`,
-            kind: item.kind === 'reasoning' ? 'reasoning' : 'text',
-            text: `${partIndex === 0 ? prefix : '   '}${text}`,
+            kind: 'text',
+            text,
           }));
         });
       }
@@ -1500,7 +1819,7 @@ export async function runTui({ config }) {
       const status = paneHasActivity(pane) ? pane.status : roleStatusToPaneStatus(state.statuses?.[role]);
       // Fixed footer rows keep pane height stable: one status row plus the
       // bottom border row that carries token usage.
-      const footerRows = 2;
+      const footerRows = paneInner >= 2 ? 2 : paneInner;
       // Never let textBudget exceed what the pane actually has room for; if
       // the terminal is so small there's no room left after reserved footer rows, drop
       // text entirely (overflow:hidden on the pane keeps us inside bounds).
@@ -1512,7 +1831,17 @@ export async function runTui({ config }) {
       if (textBudget === 0) {
         visible = [];
       } else if (!pane || ((pane.flow?.length ?? 0) === 0 && pane.lines.length === 0 && !pane.current)) {
-        visible = [{ kind: 'text', text: '(no output yet)' }];
+        visible = [{
+          kind: 'text',
+          text: formatTuiEmptyState({
+            role,
+            pane,
+            status,
+            phase: state.phase,
+            selectedRound,
+            plan: state.plans?.[role],
+          }),
+        }];
         while (visible.length < textBudget) visible.push({ kind: 'text', text: '' });
       } else {
         const expanded = visibleFlowRows(pane, paneCols);
@@ -1528,7 +1857,13 @@ export async function runTui({ config }) {
       const agent = agentName(settings);
       const model = settings.model || 'default';
       const progress = animationLabel(status, animationFrame);
-      const headerLabel = `${role} \u2014 Round ${selectedRound ?? '-'} ${status}${progress} \u00B7 ${agent} (${model})`;
+      const headerLabel = `${formatTuiPaneHeadline({
+        role,
+        round: selectedRound,
+        status,
+        agent,
+        model,
+      })}${progress}`;
       const usageLabel = formatUsage(pane?.usage);
       const timingLabel = formatDuration(paneElapsedMs(pane));
       const focused = active && view.focus === role;
@@ -1565,14 +1900,24 @@ export async function runTui({ config }) {
               Text,
               { wrap: 'truncate-end' },
               h(Text, { color: borderColor }, '│ '),
-              h(Text, { color: row.kind === 'reasoning' ? 'gray' : 'white', italic: row.kind === 'reasoning' }, cell),
+              h(
+                Text,
+                {
+                  color: row.kind === 'reasoning-header'
+                    ? 'cyan'
+                    : (row.kind === 'reasoning' ? 'gray' : 'white'),
+                  italic: row.kind === 'reasoning',
+                  bold: row.kind === 'reasoning-header',
+                },
+                cell,
+              ),
               h(Text, { color: borderColor }, ' │'),
             ),
             row.key ?? `l-${role}-${selectedRound ?? 'none'}-${visibleStart + i}`,
           );
         }),
-        paneStatusLine(pane, paneOuterCols, role, borderColor),
-        paneBorderBottom(paneOuterCols, usageLabel, timingLabel, focused, borderColor),
+        footerRows >= 2 ? paneStatusLine(pane, paneOuterCols, role, borderColor, state.plans?.[role]) : null,
+        footerRows >= 1 ? paneBorderBottom(paneOuterCols, usageLabel, timingLabel, focused, borderColor) : null,
       );
     }
 
@@ -1581,7 +1926,7 @@ export async function runTui({ config }) {
       const labelWidth = Math.max(0, safeWidth - 4);
       const fitted = fitText(label, labelWidth, { ellipsis: true });
       const labelText = ` ${fitted.text} `;
-      const fill = Math.max(0, safeWidth - displayWidth(labelText) - 2);
+      const fill = Math.max(0, safeWidth - displayWidth(labelText) - 3);
       return line(
         h(
           Text,
@@ -1596,16 +1941,14 @@ export async function runTui({ config }) {
       );
     }
 
-    function paneStatusLine(pane, width, role, borderColor) {
-      const text = pane?.error
-        ? `error: ${pane.error}`
-        : pane?.stopReason ? `done: ${pane.stopReason}` : '';
+    function paneStatusLine(pane, width, role, borderColor, plan) {
+      const statusLine = formatTuiPaneStatusLine({ pane, plan });
       return line(
         h(
           Text,
           { wrap: 'truncate-end' },
           h(Text, { color: borderColor }, '│ '),
-          h(Text, { color: pane?.error ? 'red' : undefined, dimColor: !pane?.error }, padCell(text, width - 4)),
+          h(Text, { color: statusLine.color, dimColor: statusLine.dim }, padCell(statusLine.text, width - 4)),
           h(Text, { color: borderColor }, ' │'),
         ),
         `${role}-status`,
@@ -1614,12 +1957,12 @@ export async function runTui({ config }) {
 
     function paneBorderBottom(width, usageLabel, timingLabel, focused, borderColor) {
       const safeWidth = Math.max(4, width);
-      const maxUsageWidth = Math.max(0, Math.floor(safeWidth * 0.48));
-      const maxTimingWidth = Math.max(0, Math.floor(safeWidth * 0.24));
-      const fittedUsage = usageLabel ? fitText(usageLabel, maxUsageWidth, { ellipsis: true }) : { text: '', width: 0 };
+      const maxTimingWidth = Math.max(0, Math.min(16, Math.floor(safeWidth * 0.24)));
       const fittedTiming = timingLabel ? fitText(timingLabel, maxTimingWidth, { ellipsis: true }) : { text: '', width: 0 };
-      const usageText = fittedUsage.text ? ` ${fittedUsage.text} ` : '';
       const timingText = fittedTiming.text ? ` ${fittedTiming.text} ` : '';
+      const maxUsageWidth = Math.max(0, safeWidth - displayWidth(timingText) - 4);
+      const fittedUsage = usageLabel ? fitText(usageLabel, maxUsageWidth, { ellipsis: true }) : { text: '', width: 0 };
+      const usageText = fittedUsage.text ? ` ${fittedUsage.text} ` : '';
       const labelWidth = displayWidth(usageText) + displayWidth(timingText);
       const fill = Math.max(0, safeWidth - labelWidth - 2);
       return line(
@@ -1664,7 +2007,7 @@ export async function runTui({ config }) {
           height: paneOuter,
           overflow: 'hidden',
         },
-        line(h(Text, { bold: true, color: 'yellow' }, 'ACP Trace - raw redacted wire messages'), 'trace-header'),
+        line(h(Text, { bold: true, color: 'yellow' }, 'ACP Trace · redacted wire messages'), 'trace-header'),
         ...visible.map((row, i) => rowText(row === '' ? ' ' : row, `trace-${i}`)),
       );
     }
@@ -1730,7 +2073,7 @@ export async function runTui({ config }) {
         },
         line(
           shortcutLine(
-            h(Text, { bold: true, color: '#ffa500' }, 'Tool Call Details'),
+            h(Text, { bold: true, color: '#ffa500' }, 'Selected Tool Call'),
             muted(' - '),
             shortcutLabel('[/]'),
             muted(' select, '),
@@ -1764,7 +2107,7 @@ export async function runTui({ config }) {
         },
         line(
           shortcutLine(
-            h(Text, { bold: true, color: 'cyan' }, 'Full Task'),
+            h(Text, { bold: true, color: 'cyan' }, 'Full Task Brief'),
             muted(' - '),
             shortcutLabel('e'),
             muted(' edit, '),
@@ -1817,18 +2160,16 @@ export async function runTui({ config }) {
     function FinishView() {
       const frame = Math.min(view.finishFrame, FINISH_ANIMATION_FRAMES);
       const progress = frame / FINISH_ANIMATION_FRAMES;
-      const innerWidth = Math.max(8, Math.min(64, size.cols - 8));
+      const innerWidth = Math.max(12, Math.min(56, size.cols - 12));
       const filled = Math.min(innerWidth, Math.floor(innerWidth * progress));
       const block = String.fromCodePoint(0x2588);
-      const shade = String.fromCodePoint(0x2591);
-      const sparkleGlyph = String.fromCodePoint(0x2726);
-      const diamondGlyph = String.fromCodePoint(0x25C6);
-      const bar = `${block.repeat(filled)}${shade.repeat(innerWidth - filled)}`;
-      const sparkle = Array.from({ length: Math.max(1, Math.min(7, Math.floor(size.cols / 12))) }, (_, index) => (index + frame) % 2 ? sparkleGlyph : diamondGlyph).join(' ');
-      const finishTop = `${String.fromCodePoint(0x2554)}${String.fromCodePoint(0x2550).repeat(31)}${String.fromCodePoint(0x2557)}`;
-      const finishMiddle = `${String.fromCodePoint(0x2551)}            APPROVED           ${String.fromCodePoint(0x2551)}`;
-      const finishBottom = `${String.fromCodePoint(0x255A)}${String.fromCodePoint(0x2550).repeat(31)}${String.fromCodePoint(0x255D)}`;
-      const topPad = Math.max(0, Math.floor((size.rows - 11) / 2));
+      const line = String.fromCodePoint(0x2500);
+      const pulse = ['   ', '.  ', '.. ', '...'][frame % 4];
+      const bar = `${block.repeat(filled)}${line.repeat(innerWidth - filled)}`;
+      const cardWidth = Math.max(24, Math.min(64, size.cols - 8));
+      const topRule = `${String.fromCodePoint(0x256D)}${String.fromCodePoint(0x2500).repeat(cardWidth - 2)}${String.fromCodePoint(0x256E)}`;
+      const bottomRule = `${String.fromCodePoint(0x2570)}${String.fromCodePoint(0x2500).repeat(cardWidth - 2)}${String.fromCodePoint(0x256F)}`;
+      const topPad = Math.max(0, Math.floor((size.rows - 10) / 2));
       return h(
         Box,
         {
@@ -1839,15 +2180,16 @@ export async function runTui({ config }) {
           overflow: 'hidden',
         },
         ...Array.from({ length: topPad }, (_, i) => h(Text, { key: `finish-pad-${i}` }, '')),
-        h(Text, { color: 'green', bold: true }, sparkle),
-        h(Text, { color: 'cyan', bold: true }, finishTop),
-        h(Text, { color: 'cyan', bold: true }, finishMiddle),
-        h(Text, { color: 'cyan', bold: true }, finishBottom),
-        h(Text, { color: 'green', bold: true }, 'Author/Reviewer loop finished'),
-        h(Text, { dimColor: true }, `Rounds ${state.result?.rounds ?? state.order.length}/${state.result?.maxRounds ?? config.maxRounds}`),
-        h(Text, { color: 'yellow' }, `[${bar}]`),
-        h(Text, { dimColor: true }, 'Closing TUI...'),
-        h(Text, { color: 'green', bold: true }, sparkle),
+        h(Text, { color: 'green', bold: true }, topRule),
+        h(Text, { color: 'green', bold: true }, 'APPROVED'),
+        h(Text, { color: 'cyan' }, 'Author/Reviewer loop complete'),
+        h(Text, { dimColor: true }, formatTuiFinishSummary({
+          rounds: state.result?.rounds ?? state.order.length,
+          maxRounds: state.result?.maxRounds ?? config.maxRounds,
+        })),
+        h(Text, { color: 'yellow' }, bar),
+        h(Text, { dimColor: true }, `Closing TUI${pulse}`),
+        h(Text, { color: 'green', bold: true }, bottomRule),
       );
     }
 
@@ -2004,7 +2346,7 @@ export async function runTui({ config }) {
         ? `Custom ${view.setup.activeRole.toUpperCase()} model`
         : view.setup.mode === 'model'
         ? `Choose ${view.setup.activeRole.toUpperCase()} model`
-        : 'Start author/reviewer loop';
+        : 'Prepare author/reviewer run';
       const bodyBudget = Math.max(0, size.rows - (compact ? 21 : 23));
       const authorStatus = setupRoleStatus(view.setup, 'author');
       const reviewerStatus = setupRoleStatus(view.setup, 'reviewer');
@@ -2052,8 +2394,8 @@ export async function runTui({ config }) {
             },
             h(Text, { bold: true, color: 'cyan' }, 'Selected roles'),
             h(Text, { dimColor: true }, compact
-              ? `${padCell('Role', 10)} ${padCell('Agent', 16)} ${padCell('Model', 14)} ${padCell('Source', sourceWidth)} Launch`
-              : `${padCell('Role', 10)} ${padCell('Agent', 20)} ${padCell('Model', 18)} ${padCell('Source', sourceWidth)} ${padCell('CLI', 8)} Launch`),
+              ? `${padCell('Role', 10)} ${padCell('Agent', 16)} ${padCell('Model', 14)} ${padCell('Source', sourceWidth)} Startup`
+              : `${padCell('Role', 10)} ${padCell('Agent', 20)} ${padCell('Model', 18)} ${padCell('Source', sourceWidth)} ${padCell('CLI', 8)} Startup`),
             ...roleRows.map((row) => h(
               Text,
               { key: `role-${row.role}`, wrap: 'truncate-end' },
@@ -2066,9 +2408,12 @@ export async function runTui({ config }) {
               compact ? '' : ' ',
               compact ? null : h(Text, { color: userCliColor(row.userCliFound) }, padCell(userCliLabel(row.userCliFound), 8)),
               ' ',
-              h(Text, { color: availabilityColor(row.availability) }, availabilityLabel(row.availability)),
+               h(Text, { color: availabilityColor(row.availability) }, formatTuiAvailabilityLabel(row.availability)),
             )),
-            h(Text, { dimColor: true, wrap: 'truncate-end' }, `Save config ${view.setup.selections.save ? `yes (${config.preferencesPath})` : 'no'}`),
+            h(Text, { dimColor: true, wrap: 'truncate-end' }, formatTuiPreferenceStatus({
+              save: view.setup.selections.save,
+              path: config.preferencesPath,
+            })),
           ),
           h(Text, null, ''),
           h(Text, { color: 'gray', dimColor: true }, '─'.repeat(Math.max(8, Math.min(innerCols, 72)))),
@@ -2076,8 +2421,8 @@ export async function runTui({ config }) {
           ...(view.setup.mode === 'summary'
             ? [
               h(Text, { key: 'agents-header', dimColor: true }, compact
-                ? `${padCell('Agent', 18)} ${padCell('Default model', 14)} Launch`
-                : `${padCell('Agent', 22)} ${padCell('Default model', 18)} ${padCell('CLI', 8)} Launch`),
+                ? `${padCell('Agent', 18)} ${padCell('Default model', 14)} Startup`
+                : `${padCell('Agent', 22)} ${padCell('Default model', 18)} ${padCell('CLI', 8)} Startup`),
               ...options.slice(0, bodyBudget).map((option, i) => h(
                 Text,
                 {
@@ -2090,7 +2435,7 @@ export async function runTui({ config }) {
                 `${i === view.setup.cursor ? '>' : ' '} ${padCell(option.label, compact ? 16 : 20)} ${padCell(defaultModelLabel(option), compact ? 14 : 18)} `,
                 compact ? null : h(Text, { color: userCliColor(option.userCliFound) }, padCell(userCliLabel(option.userCliFound), 8)),
                 ' ',
-                h(Text, { color: availabilityColor(option.availability) }, availabilityLabel(option.availability)),
+                h(Text, { color: availabilityColor(option.availability) }, formatTuiAvailabilityLabel(option.availability)),
               )),
             ]
             : view.setup.mode === 'customModel'
@@ -2116,7 +2461,7 @@ export async function runTui({ config }) {
           h(Text, null, ''),
           view.setup.error
             ? h(Text, { color: 'red', wrap: 'wrap' }, view.setup.error)
-            : h(Text, { dimColor: true, wrap: 'truncate-end' }, 'CLI means the agent launcher is on PATH. Launch shows whether this run starts locally or via npx.'),
+            : h(Text, { dimColor: true, wrap: 'truncate-end' }, 'CLI means the everyday agent command is on PATH. Startup shows whether this run starts directly, uses npx fallback, or is unavailable.'),
           view.setup.mode === 'summary'
             ? h(Text, null, shortcutLabel('Tab'), ' role   ', shortcutLabel('\u2191/\u2193'), ' agent   ', shortcutLabel('Space'), ' assign   ', shortcutLabel('m'), ' model   ', shortcutLabel('e'), ' edit   ', taskPreview.truncated ? shortcutLabel('v') : null, taskPreview.truncated ? ' view   ' : null, shortcutLabel('s'), ' save   ', shortcutLabel('Enter'), ' start   ', shortcutLabel('q', 'red'), ' cancel')
             : view.setup.mode === 'customModel'
@@ -2153,7 +2498,7 @@ export async function runTui({ config }) {
             height: size.rows,
             overflow: 'hidden',
           },
-          h(Text, { bold: true, color: 'yellow' }, 'Confirm updated task'),
+          h(Text, { bold: true, color: 'yellow' }, 'Review updated task'),
           h(Text, null, ''),
           ...visibleLines.map((row, i) =>
             h(Text, { key: `task-confirm-${start}-${i}`, wrap: 'wrap' }, start + i === 0 ? 'task:     ' : '          ', row),
@@ -2211,7 +2556,7 @@ export async function runTui({ config }) {
             height: size.rows,
             overflow: 'hidden',
           },
-          h(Text, { bold: true, color: 'cyan' }, 'Start author/reviewer loop?'),
+          h(Text, { bold: true, color: 'cyan' }, 'Launch author/reviewer loop?'),
           h(Text, null, ''),
           ...lines.map((row, i) =>
             h(
@@ -2303,7 +2648,7 @@ export async function runTui({ config }) {
           keyBindingLine('Tab', 'Switch focused pane (AUTHOR \u2194 REVIEWER)'),
           keyBindingLine('g', 'Jump to latest round, re-enable follow'),
           keyBindingLine('G', 'Reset scroll to bottom in focused pane'),
-          keyBindingLine('[ / ] / /', 'Select previous/next tool call in focused pane'),
+          keyBindingLine('[ / ]', 'Select previous/next tool call in focused pane'),
           keyBindingLine('Enter / d', 'Open selected tool call details'),
           keyBindingLine('Esc / q', 'Return from tool detail view'),
           keyBindingLine('v', 'View full task text'),
@@ -2317,6 +2662,10 @@ export async function runTui({ config }) {
           shortcutLine(muted('Press '), shortcutLabel('?'), muted(' again to dismiss.')),
         ),
       );
+    }
+
+    if (view.screen === 'finishing') {
+      return h(FinishView);
     }
 
     function keyBindingLine(keys, description) {

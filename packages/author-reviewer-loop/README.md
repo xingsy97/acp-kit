@@ -134,6 +134,12 @@ Keybindings:
 
 The plain console renderer also includes tool command/output previews and collapses continuous tool-event bursts after three lines.
 
+## Prompt Contract
+
+- The AUTHOR prompt is intentionally opinionated: it asks the coding agent to turn vague quality bars into concrete work on disk, use adversarial thinking before implementation, prefer meaningful unit/integration/scenario/E2E coverage over vanity tests, and fix real bugs at the root cause when testing exposes them.
+- The REVIEWER prompt evaluates the whole workspace against that same bar instead of rubber-stamping local diffs or happy-path checks.
+- The failure-oriented checklist that informed these prompts lives in [`docs/adversarial-scenarios.md`](../../docs/adversarial-scenarios.md).
+
 ## Architecture
 
 The package is split into a renderer-agnostic engine and a thin renderer layer:

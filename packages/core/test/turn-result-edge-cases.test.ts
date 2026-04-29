@@ -134,6 +134,32 @@ describe('collectTurnResult – edge cases', () => {
     await expect(collectTurnResult(session as never, 'cancel test')).rejects.toThrow('cancelled by user');
   });
 
+  it('rejects when an adapter emits session.error even if prompt resolves', async () => {
+    const { session, unsubscribe } = createSession([
+      { type: 'message.delta', sessionId: 's1', at: 1, messageId: 'm1', delta: 'partial output' },
+      { type: 'session.error', sessionId: 's1', at: 2, message: 'adapter lost connection' } as never,
+      { type: 'turn.completed', sessionId: 's1', at: 3, turnId: 'turn1', stopReason: 'end_turn' },
+    ]);
+    const updates: CollectedTurnResult[] = [];
+
+    await expect(collectTurnResult(session as never, 'unstable turn', {
+      includeEvents: true,
+      onUpdate: (snapshot) => updates.push(snapshot),
+    })).rejects.toThrow('adapter lost connection');
+
+    expect(updates.at(-1)).toMatchObject({
+      text: 'partial output',
+      status: 'failed',
+      error: 'adapter lost connection',
+      events: [
+        expect.objectContaining({ type: 'message.delta' }),
+        expect.objectContaining({ type: 'session.error' }),
+        expect.objectContaining({ type: 'turn.completed' }),
+      ],
+    });
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
   it('calls onEvent callback with each event and snapshot', async () => {
     const { session } = createSession([
       { type: 'message.delta', sessionId: 's1', at: 1, messageId: 'm1', delta: 'hi' },

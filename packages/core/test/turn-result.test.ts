@@ -56,6 +56,24 @@ describe('collectTurnResult', () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
+  it('uses completed message content when it corrects partial streamed deltas', async () => {
+    const { session } = createSession([
+      { type: 'message.delta', sessionId: 's1', at: 1, messageId: 'm1', delta: 'APP' },
+      { type: 'message.delta', sessionId: 's1', at: 2, messageId: 'm1', delta: 'RO' },
+      { type: 'message.completed', sessionId: 's1', at: 3, messageId: 'm1', content: 'APPROVED\nFinal answer with corrected content.' } as RuntimeSessionEvent,
+      { type: 'turn.completed', sessionId: 's1', at: 4, turnId: 'turn1', stopReason: 'end_turn' },
+    ]);
+    const updates: string[] = [];
+
+    const result = await collectTurnResult(session as never, 'review', {
+      onUpdate: (snapshot) => updates.push(snapshot.text),
+    });
+
+    expect(result.text).toBe('APPROVED\nFinal answer with corrected content.');
+    expect(result.text).not.toBe('APPRO');
+    expect(updates).toContain('APPROVED\nFinal answer with corrected content.');
+  });
+
   it('forwards reasoning events to callbacks without mixing them into message text', async () => {
     const { session } = createSession([
       { type: 'reasoning.delta', sessionId: 's1', at: 1, reasoningId: 'r1', delta: 'Think first.' },
@@ -142,6 +160,21 @@ describe('collectTurnResult', () => {
       outputTokens: 2,
       totalTokens: 12,
     });
+  });
+
+  it('completes from prompt result when an adapter omits turn.completed', async () => {
+    const { session, unsubscribe } = createSession([
+      { type: 'message.delta', sessionId: 's1', at: 1, messageId: 'm1', delta: 'final answer' },
+    ]);
+
+    const result = await collectTurnResult(session as never, 'review');
+
+    expect(result).toMatchObject({
+      text: 'final answer',
+      status: 'completed',
+      stopReason: 'end_turn',
+    });
+    expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
   it('unsubscribes when the prompt fails', async () => {

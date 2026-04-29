@@ -83,6 +83,43 @@ describe('author-reviewer-loop state reducer', () => {
     ]);
   });
 
+  it('deduplicates cumulative reasoning chunks and repairs plain-word boundaries', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'reasoningDelta', flowId: 1, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'Plan' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 2, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'Plan first' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 3, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: ' then patch' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 4, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'files' });
+
+    const pane = state.rounds.get(1)?.AUTHOR;
+    expect(pane?.flow[0]).toMatchObject({ kind: 'reasoning', text: 'Plan first then patch files' });
+    expect(pane?.reasoning.blocks[0]).toMatchObject({ content: 'Plan first then patch files', charCount: 'Plan first then patch files'.length });
+    expect(pane?.reasoning.totalChars).toBe('Plan first then patch files'.length);
+  });
+
+  it('deduplicates overlapping reasoning chunks', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'reasoningDelta', flowId: 1, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'read package' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 2, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'package json' });
+
+    expect(state.rounds.get(1)?.AUTHOR.flow[0]).toMatchObject({ text: 'read package json' });
+    expect(state.rounds.get(1)?.AUTHOR.reasoning.blocks[0]).toMatchObject({ content: 'read package json' });
+  });
+
+  it('keeps non-contiguous reasoning fragments separate in inline flow', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'reasoningDelta', flowId: 1, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'Plan first.' });
+    state = reduce(state, { type: 'delta', flowId: 2, round: 1, role: 'AUTHOR', delta: 'Visible answer.' });
+    state = reduce(state, { type: 'toolStart', flowId: 3, round: 1, role: 'AUTHOR', toolCallId: 'tool-1', status: PaneStatus.Running, title: 'Read file' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 4, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'Check result.' });
+    state = reduce(state, { type: 'reasoningCompleted', round: 1, role: 'AUTHOR', reasoningId: 'r1', content: 'Plan first. Check result.' });
+
+    const pane = state.rounds.get(1)?.AUTHOR;
+    expect(pane?.flow.map((item) => item.kind)).toEqual(['reasoning', 'text', 'tool', 'reasoning']);
+    expect(pane?.flow.filter((item) => item.kind === 'reasoning').map((item) => item.text)).toEqual(['Plan first.', 'Check result.']);
+    expect(pane?.flow.map((item) => item.id)).toEqual(['flow-r1', 'flow-2', 'flow-3', 'flow-r1-4']);
+    expect(pane?.reasoning.blocks).toHaveLength(1);
+    expect(pane?.reasoning.blocks[0]).toMatchObject({ id: 'r1', content: 'Plan first. Check result.', completed: true });
+  });
   it('updates a live tool call from tool.update without adding a new row', () => {
     let state = initialState();
     state = reduce(state, { type: 'toolStart', flowId: 1, round: 1, role: 'REVIEWER', toolCallId: 'tool-1', status: PaneStatus.Running, name: 'shell', title: 'Run command' });
@@ -91,6 +128,39 @@ describe('author-reviewer-loop state reducer', () => {
     const pane = state.rounds.get(1)?.REVIEWER;
     expect(pane?.flow.filter((item) => item.kind === 'tool')).toHaveLength(1);
     expect(pane?.tools[0]).toMatchObject({ id: 'tool-1', status: 'running', output: 'partial output', chars: 14 });
+  });
+
+  it('merges id-less tool lifecycle events with the same normalized title', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'toolStart', flowId: 1, round: 1, role: 'REVIEWER', status: PaneStatus.Running, name: 'Read', title: 'Read file: package.json' });
+    state = reduce(state, { type: 'toolEnd', flowId: 2, round: 1, role: 'REVIEWER', status: 'completed', title: '  Read   file: package.json  ', output: 'ok', chars: 2 });
+
+    const pane = state.rounds.get(1)?.REVIEWER;
+    expect(pane?.flow.filter((item) => item.kind === 'tool')).toHaveLength(1);
+    expect(pane?.tools).toHaveLength(1);
+    expect(pane?.tools[0]).toMatchObject({ status: 'completed', output: 'ok', chars: 2 });
+  });
+
+  it('keeps repeated id-less tool starts separate even when titles match', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'toolStart', flowId: 1, round: 1, role: 'AUTHOR', status: PaneStatus.Running, name: 'Read', title: 'Read file: package.json' });
+    state = reduce(state, { type: 'toolEnd', flowId: 2, round: 1, role: 'AUTHOR', status: 'completed', name: 'Read', title: 'Read file: package.json' });
+    state = reduce(state, { type: 'toolStart', flowId: 3, round: 1, role: 'AUTHOR', status: PaneStatus.Running, name: 'Read', title: 'Read file: package.json' });
+
+    const pane = state.rounds.get(1)?.AUTHOR;
+    expect(pane?.tools.map((tool) => tool.id)).toEqual(['tool-event-1', 'tool-event-3']);
+    expect(pane?.flow.filter((item) => item.kind === 'tool')).toHaveLength(2);
+  });
+
+  it('avoids synthetic tool id collisions when later id-less events follow flow-based ids', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'delta', flowId: 1, round: 1, role: 'AUTHOR', delta: 'working' });
+    state = reduce(state, { type: 'toolStart', flowId: 2, round: 1, role: 'AUTHOR', status: PaneStatus.Running, title: 'First synthetic tool' });
+    state = reduce(state, { type: 'toolStart', round: 1, role: 'AUTHOR', status: PaneStatus.Running, title: 'Second synthetic tool without flow id' });
+
+    const pane = state.rounds.get(1)?.AUTHOR;
+    expect(pane?.tools.map((tool) => tool.id)).toEqual(['tool-event-2', 'tool-event-3']);
+    expect(new Set(pane?.tools.map((tool) => tool.id)).size).toBe(2);
   });
 
   it('records per-role turn duration', () => {
@@ -188,6 +258,24 @@ describe('author-reviewer-loop state reducer', () => {
     expect(state.rounds.get(1)?.AUTHOR.usage).toMatchObject({ used: 0, size: 100_000 });
   });
 
+  it('accepts same-size context resets when token telemetry shows a real post-summarization update', () => {
+    let state = initialState();
+    state = reduce(state, {
+      type: 'turnSnapshot',
+      round: 1,
+      role: 'AUTHOR',
+      snapshot: { status: 'running', usage: { used: 1234, size: 200_000, totalTokens: 100 } },
+    });
+    state = reduce(state, {
+      type: 'turnSnapshot',
+      round: 1,
+      role: 'AUTHOR',
+      snapshot: { status: 'running', usage: { used: 0, size: 200_000, totalTokens: 140 } },
+    });
+
+    expect(state.rounds.get(1)?.AUTHOR.usage).toMatchObject({ used: 0, size: 200_000, totalTokens: 140 });
+  });
+
   it('does not double count live usage updates already included in the final turn snapshot', () => {
     let state = initialState();
     state = reduce(state, { type: 'turnStart', round: 1, role: 'AUTHOR' });
@@ -247,5 +335,97 @@ describe('author-reviewer-loop state reducer', () => {
     expect(state.trace.length).toBeGreaterThan(0);
     expect(JSON.stringify(state.trace).length).toBeLessThan(1_000_000);
     expect(state.trace.at(-1)?.entry.frame).toContain('omitted');
+  });
+
+  it('stores per-role plan and replaces it wholesale on each plan update', () => {
+    let state = initialState();
+    expect(state.plans).toEqual({ AUTHOR: null, REVIEWER: null });
+
+    state = reduce(state, {
+      type: 'planUpdate',
+      role: 'AUTHOR',
+      entries: [
+        { content: 'Step A', priority: 'high', status: 'in_progress' },
+        { content: 'Step B', priority: 'medium', status: 'pending' },
+      ],
+    });
+    expect(state.plans.AUTHOR?.entries).toHaveLength(2);
+    expect(state.plans.AUTHOR?.entries[0].status).toBe('in_progress');
+
+    // ACP spec: each plan update is the complete current plan and must
+    // replace the previous one wholesale.
+    state = reduce(state, {
+      type: 'planUpdate',
+      role: 'AUTHOR',
+      entries: [
+        { content: 'Step A', priority: 'high', status: 'completed' },
+        { content: 'Step B', priority: 'medium', status: 'in_progress' },
+        { content: 'Step C', priority: 'low', status: 'pending' },
+      ],
+    });
+    expect(state.plans.AUTHOR?.entries).toHaveLength(3);
+    expect(state.plans.AUTHOR?.entries[0].status).toBe('completed');
+    expect(state.plans.AUTHOR?.entries[2].content).toBe('Step C');
+    // REVIEWER plan unaffected.
+    expect(state.plans.REVIEWER).toBeNull();
+  });
+
+  it('falls back to an empty entries array when planUpdate has no entries', () => {
+    const state = reduce(initialState(), { type: 'planUpdate', role: 'REVIEWER' } as any);
+    expect(state.plans.REVIEWER?.entries).toEqual([]);
+  });
+
+  it('accumulates reasoning blocks separately per reasoningId and tracks total chars', () => {
+    let state = initialState();
+    state = reduce(state, {
+      type: 'reasoningDelta', flowId: 1, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'Plan first. ',
+    });
+    state = reduce(state, {
+      type: 'reasoningDelta', flowId: 2, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'Then patch.',
+    });
+    state = reduce(state, {
+      type: 'reasoningDelta', flowId: 3, reasoningId: 'r2', round: 1, role: 'AUTHOR', delta: 'Check.',
+    });
+
+    const reasoning = state.rounds.get(1)?.AUTHOR.reasoning;
+    expect(reasoning?.blocks).toHaveLength(2);
+    expect(reasoning?.blocks[0]).toMatchObject({ id: 'r1', content: 'Plan first. Then patch.', completed: false });
+    expect(reasoning?.blocks[1]).toMatchObject({ id: 'r2', content: 'Check.' });
+    expect(reasoning?.totalChars).toBe('Plan first. Then patch.'.length + 'Check.'.length);
+  });
+
+  it('marks a reasoning block completed and replaces its content with the canonical text', () => {
+    let state = initialState();
+    state = reduce(state, {
+      type: 'reasoningDelta', flowId: 1, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'partial',
+    });
+    state = reduce(state, {
+      type: 'reasoningCompleted', round: 1, role: 'AUTHOR', reasoningId: 'r1', content: 'final reasoning text',
+    });
+
+    const reasoning = state.rounds.get(1)?.AUTHOR.reasoning;
+    expect(reasoning?.blocks).toHaveLength(1);
+    expect(reasoning?.blocks[0]).toMatchObject({
+      id: 'r1',
+      content: 'final reasoning text',
+      completed: true,
+    });
+    // totalChars must reflect the canonical content length, not the
+    // sum of partial deltas + completion content.
+    expect(reasoning?.totalChars).toBe('final reasoning text'.length);
+  });
+
+  it('also replaces inline reasoning flow content with canonical completion text', () => {
+    let state = initialState();
+    state = reduce(state, {
+      type: 'reasoningDelta', flowId: 1, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'partial',
+    });
+    state = reduce(state, {
+      type: 'reasoningCompleted', round: 1, role: 'AUTHOR', reasoningId: 'r1', content: 'final reasoning text',
+    });
+
+    expect(state.rounds.get(1)?.AUTHOR.flow).toEqual([
+      { id: 'flow-r1', sourceId: 'r1', kind: 'reasoning', text: 'final reasoning text' },
+    ]);
   });
 });

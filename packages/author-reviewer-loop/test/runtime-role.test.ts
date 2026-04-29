@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
     on: vi.fn(),
   },
   sessionUsageListeners: [] as Array<(event: unknown) => void>,
+  sessionPlanListeners: [] as Array<(event: unknown) => void>,
   terminalHost: {
     terminals: new Map(),
   },
@@ -40,7 +41,7 @@ vi.mock('@acp-kit/core/node', () => ({
   }),
 }));
 
-const { openRole } = await import('../lib/runtime/role.mjs');
+const { closeRole, openRole } = await import('../lib/runtime/role.mjs');
 
 describe('runtime role adapter', () => {
   beforeEach(() => {
@@ -52,10 +53,14 @@ describe('runtime role adapter', () => {
     mocks.terminalResolveCwd = undefined;
     mocks.inspectorListeners.length = 0;
     mocks.sessionUsageListeners.length = 0;
+    mocks.sessionPlanListeners.length = 0;
     mocks.session.on.mockReset();
     mocks.session.on.mockImplementation((type: string, listener: (event: unknown) => void) => {
       if (type === 'session.usage.updated') {
         mocks.sessionUsageListeners.push(listener);
+      }
+      if (type === 'session.plan.updated') {
+        mocks.sessionPlanListeners.push(listener);
       }
       return () => {};
     });
@@ -152,5 +157,61 @@ describe('runtime role adapter', () => {
     }
 
     await state.close();
+  });
+
+  it('forwards ACP session.plan.updated events to the renderer while the role is open', async () => {
+    const onPlanUpdate = vi.fn();
+
+    const state = await openRole({
+      role: 'REVIEWER',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: false,
+      renderer: { onPlanUpdate },
+      settings: {
+        agent: { displayName: 'Reviewer', command: 'reviewer' },
+        model: null,
+        modelEnvName: 'REVIEWER_MODEL',
+      },
+    });
+
+    expect(mocks.sessionPlanListeners.length).toBe(1);
+    const entries = [
+      { content: 'Step A', priority: 'high', status: 'in_progress' },
+      { content: 'Step B', priority: 'medium', status: 'pending' },
+    ];
+    mocks.sessionPlanListeners[0]?.({ type: 'session.plan.updated', entries });
+    expect(onPlanUpdate).toHaveBeenCalledWith({ role: 'REVIEWER', entries });
+
+    // A subsequent close must not re-emit, and a malformed (non-array) entries
+    // payload should still produce an empty entries list rather than throwing.
+    onPlanUpdate.mockClear();
+    mocks.sessionPlanListeners[0]?.({ type: 'session.plan.updated' });
+    expect(onPlanUpdate).toHaveBeenCalledWith({ role: 'REVIEWER', entries: [] });
+
+    await state.close();
+  });
+
+  it('surfaces cleanup failures when closing a real role state', async () => {
+    const state = await openRole({
+      role: 'AUTHOR',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: false,
+      renderer: {},
+      settings: {
+        agent: { displayName: 'Author', command: 'author' },
+        model: null,
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    });
+    mocks.session.dispose.mockRejectedValueOnce(new Error('disk full while persisting transcript'));
+
+    const thrown = await closeRole(state).catch((error) => error);
+
+    expect(thrown).toBeInstanceOf(AggregateError);
+    expect(thrown.message).toBe('Failed to clean up ACP role resources.');
+    expect(thrown.errors.map((error: Error) => error.message)).toContain('disk full while persisting transcript');
+    expect(mocks.runtime.shutdown).toHaveBeenCalledTimes(1);
   });
 });

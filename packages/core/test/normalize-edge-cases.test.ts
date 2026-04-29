@@ -57,6 +57,23 @@ describe('normalizeAcpUpdate – edge cases', () => {
     expect(events[0]).toMatchObject({ type: 'reasoning.delta', delta: 'look ahead' });
   });
 
+  it('inserts spaces between adjacent plain-text thinking content blocks', () => {
+    const events = normalizeAcpUpdate(
+      { sessionId: 'session-1', update: { sessionUpdate: 'thinking_chunk', content: [{ text: 'check' }, { text: 'files' }] } } as never,
+      ctx,
+    );
+    expect(events[0]).toMatchObject({ type: 'reasoning.delta', delta: 'check files' });
+  });
+
+  it('reads reasoning text from top-level thinking payloads', () => {
+    const events = normalizeAcpUpdate(
+      { sessionId: 'session-1', update: { sessionUpdate: 'agent_thought_chunk', thinking: 'top-level thought' } } as never,
+      ctx,
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'reasoning.delta', delta: 'top-level thought' });
+  });
+
   it('normalizes thinking completion aliases as reasoning completed', () => {
     const events = normalizeAcpUpdate(
       { sessionId: 'session-1', update: { sessionUpdate: 'thinking_completed', content: { text: 'done thinking' } } } as never,
@@ -72,6 +89,35 @@ describe('normalizeAcpUpdate – edge cases', () => {
       ctx,
     );
     expect(events).toEqual([]);
+  });
+
+  it('ignores hostile mixed content arrays without text instead of leaking object text', () => {
+    const events = normalizeAcpUpdate(
+      {
+        sessionId: 'session-1',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: [null, { type: 'image', url: 'x' }, { content: [{ type: 'tool_result', payload: { ok: true } }] }],
+        },
+      } as never,
+      ctx,
+    );
+    expect(events).toEqual([]);
+  });
+
+  it('extracts only real text from malformed mixed content arrays', () => {
+    const events = normalizeAcpUpdate(
+      {
+        sessionId: 'session-1',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: [{ type: 'image', url: 'x' }, { text: 'safe text' }, { delta: [' plus ', { text: 'nested' }] }],
+        },
+      } as never,
+      ctx,
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'message.delta', delta: 'safe text plus nested' });
   });
 
   it('drops tool_call with missing toolCallId', () => {
@@ -152,6 +198,20 @@ describe('normalizeAcpUpdate – edge cases', () => {
       ctx,
     );
     expect(events[0]).toMatchObject({ name: 'Bash' });
+  });
+
+  it('reads tool call ids from snake_case and Claude Code metadata', () => {
+    const snake = normalizeAcpUpdate(
+      { sessionId: 'session-1', update: { sessionUpdate: 'tool_call', tool_call_id: 'snake-id', status: 'pending' } } as never,
+      ctx,
+    );
+    const meta = normalizeAcpUpdate(
+      { sessionId: 'session-1', update: { sessionUpdate: 'tool_call_update', status: 'completed', _meta: { claudeCode: { toolCallId: 'meta-id' } } } } as never,
+      ctx,
+    );
+
+    expect(snake[0]).toMatchObject({ type: 'tool.start', toolCallId: 'snake-id' });
+    expect(meta[0]).toMatchObject({ type: 'tool.end', toolCallId: 'meta-id' });
   });
 
   it('falls back to "tool" when no name source is available', () => {

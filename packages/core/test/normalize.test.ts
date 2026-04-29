@@ -178,6 +178,100 @@ describe('normalizeAcpUpdate', () => {
       }),
     ]);
   });
+
+  it('maps plan updates with full entry list', () => {
+    const sessionId = 'session-plan';
+    const entries = [
+      { content: 'Read repo layout', status: 'completed', priority: 'high' },
+      { content: 'Add normalize case for plan', status: 'in_progress', priority: 'high' },
+      { content: 'Update transcript', status: 'pending', priority: 'medium' },
+    ];
+    const events = normalizeAcpUpdate(
+      {
+        sessionId,
+        update: { sessionUpdate: 'plan', entries },
+      } as never,
+      { sessionId, turnId: 'turn-1' },
+    );
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'session.plan.updated',
+        sessionId,
+        turnId: 'turn-1',
+        entries,
+      }),
+    ]);
+  });
+
+  it('emits an empty entries array when plan has no entries', () => {
+    const sessionId = 'session-plan-empty';
+    const events = normalizeAcpUpdate(
+      {
+        sessionId,
+        update: { sessionUpdate: 'plan' },
+      } as never,
+      { sessionId },
+    );
+
+    expect(events).toEqual([
+      expect.objectContaining({ type: 'session.plan.updated', entries: [] }),
+    ]);
+  });
+
+  it('forwards locations and structured content on tool events', () => {
+    const sessionId = 'session-tool-content';
+    const locations = [{ path: '/repo/src/index.ts', line: 12 }];
+    const content = [
+      { type: 'content', content: { type: 'text', text: 'patched index.ts' } },
+      {
+        type: 'diff',
+        path: '/repo/src/index.ts',
+        oldText: 'foo\n',
+        newText: 'bar\n',
+      },
+    ];
+    const started = normalizeAcpUpdate(
+      {
+        sessionId,
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'tool-rich',
+          toolName: 'edit_file',
+          status: 'in_progress',
+          locations,
+          content,
+        },
+      } as never,
+      { sessionId },
+    );
+    const ended = normalizeAcpUpdate(
+      {
+        sessionId,
+        update: {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'tool-rich',
+          status: 'completed',
+          locations,
+          content,
+        },
+      } as never,
+      { sessionId },
+    );
+
+    expect(started[0]).toMatchObject({
+      type: 'tool.start',
+      toolCallId: 'tool-rich',
+      locations,
+      content,
+    });
+    expect(ended[0]).toMatchObject({
+      type: 'tool.end',
+      status: 'completed',
+      locations,
+      content,
+    });
+  });
 });
 
 describe('transcript reducer', () => {
@@ -210,5 +304,75 @@ describe('transcript reducer', () => {
       expect.objectContaining({ type: 'reasoning.completed', content: 'thinking' }),
     ]);
     expect(state.blocks.every((block) => block.completed)).toBe(true);
+  });
+
+  it('stores currentPlan on session metadata and replaces it wholesale', () => {
+    const state = createTranscriptState();
+
+    applyRuntimeEvents(state, [
+      {
+        type: 'session.plan.updated',
+        sessionId: 'session-1',
+        at: 1,
+        turnId: 'turn-1',
+        entries: [
+          { content: 'Step A', status: 'completed', priority: 'high' },
+          { content: 'Step B', status: 'in_progress', priority: 'medium' },
+        ],
+      },
+    ]);
+    expect(state.session.currentPlan?.entries).toHaveLength(2);
+
+    // Subsequent plan update wins outright.
+    applyRuntimeEvents(state, [
+      {
+        type: 'session.plan.updated',
+        sessionId: 'session-1',
+        at: 2,
+        turnId: 'turn-1',
+        entries: [
+          { content: 'Step A', status: 'completed', priority: 'high' },
+          { content: 'Step B', status: 'completed', priority: 'medium' },
+          { content: 'Step C', status: 'pending', priority: 'low' },
+        ],
+      },
+    ]);
+    expect(state.session.currentPlan?.entries).toHaveLength(3);
+    expect(state.session.currentPlan?.entries[1].status).toBe('completed');
+  });
+
+  it('carries tool locations and structured content into the transcript record', () => {
+    const state = createTranscriptState();
+    const locations = [{ path: '/repo/src/index.ts', line: 1 }];
+    const content = [{ type: 'diff', path: '/repo/src/index.ts', oldText: 'a', newText: 'b' }];
+
+    applyRuntimeEvents(state, [
+      {
+        type: 'tool.start',
+        sessionId: 's',
+        at: 1,
+        turnId: 't',
+        toolCallId: 'tc',
+        name: 'edit_file',
+        status: 'running',
+        locations,
+        content,
+      } as never,
+      {
+        type: 'tool.update',
+        sessionId: 's',
+        at: 2,
+        turnId: 't',
+        toolCallId: 'tc',
+        status: 'running',
+        // Empty update without content/locations must not erase the prior fields.
+      } as never,
+    ]);
+
+    expect(state.tools.tc).toMatchObject({
+      locations,
+      content,
+      status: 'running',
+    });
   });
 });

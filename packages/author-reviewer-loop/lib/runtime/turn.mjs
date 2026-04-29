@@ -7,11 +7,13 @@ import { collectTurnResult } from '@acp-kit/core';
 export async function runTurn({ round, role, state, prompt, renderer }) {
   renderer.onTurnStart?.({ round, role, at: Date.now() });
   let failureEmitted = false;
+  let terminalFailure = null;
 
   try {
     const result = await collectTurnResult(state.session, prompt, {
       onUpdate: (snapshot) => renderer.onTurnSnapshot?.({ round, role, snapshot }),
       onEvent: (event, snapshot) => {
+        if (!event || typeof event !== 'object') return;
         const tools = Array.isArray(snapshot?.tools) ? snapshot.tools : [];
         switch (event.type) {
           case 'message.delta':
@@ -21,7 +23,7 @@ export async function runTurn({ round, role, state, prompt, renderer }) {
             renderer.onReasoningDelta?.({ round, role, delta: event.delta, reasoningId: event.reasoningId });
             return;
           case 'reasoning.completed':
-            renderer.onReasoningCompleted?.({ round, role, reasoningId: event.reasoningId });
+            renderer.onReasoningCompleted?.({ round, role, reasoningId: event.reasoningId, content: event.content });
             return;
           case 'tool.start': {
             const tool = tools.find((item) => item.id === event.toolCallId);
@@ -32,7 +34,10 @@ export async function runTurn({ round, role, state, prompt, renderer }) {
               tag: tool?.tag ?? '#?',
               name: event.name,
               title: event.title || event.name,
+              kind: event.kind,
               input: event.input,
+              locations: event.locations,
+              content: event.content,
             });
             return;
           }
@@ -47,6 +52,8 @@ export async function runTurn({ round, role, state, prompt, renderer }) {
               status: event.status,
               chars: maxFinite(tool?.inputChars, tool?.outputChars),
               output: event.output,
+              locations: event.locations,
+              content: event.content,
             });
             return;
           }
@@ -61,6 +68,8 @@ export async function runTurn({ round, role, state, prompt, renderer }) {
               status: event.status,
               chars: maxFinite(tool?.inputChars, tool?.outputChars),
               output: event.output,
+              locations: event.locations,
+              content: event.content,
             });
             return;
           }
@@ -68,12 +77,40 @@ export async function runTurn({ round, role, state, prompt, renderer }) {
             renderer.onTurnCompleted?.({ round, role, stopReason: event.stopReason ?? 'unknown', at: event.at ?? Date.now() });
             return;
           case 'turn.failed':
+            terminalFailure = emitTerminalFailure({
+              round,
+              role,
+              renderer,
+              failure: terminalFailure,
+              error: event.error,
+              fallback: 'Turn failed',
+              at: event.at,
+            });
             failureEmitted = true;
-            renderer.onTurnFailed?.({ round, role, error: event.error, at: event.at ?? Date.now() });
             return;
           case 'turn.cancelled':
+            terminalFailure = emitTerminalFailure({
+              round,
+              role,
+              renderer,
+              failure: terminalFailure,
+              error: event.reason,
+              fallback: 'Turn cancelled',
+              at: event.at,
+            });
             failureEmitted = true;
-            renderer.onTurnFailed?.({ round, role, error: event.reason, at: event.at ?? Date.now() });
+            return;
+          case 'session.error':
+            terminalFailure = emitTerminalFailure({
+              round,
+              role,
+              renderer,
+              failure: terminalFailure,
+              error: event.message,
+              fallback: 'Session error',
+              at: event.at,
+            });
+            failureEmitted = true;
             return;
           default:
             return;
@@ -82,6 +119,7 @@ export async function runTurn({ round, role, state, prompt, renderer }) {
     });
 
     renderer.onTurnSnapshot?.({ round, role, snapshot: result });
+    if (terminalFailure) throw new Error(terminalFailure.error);
     return typeof result.text === 'string' ? result.text : '';
   } catch (error) {
     if (!failureEmitted) {
@@ -99,4 +137,16 @@ function formatError(error) {
 
 function maxFinite(...values) {
   return values.reduce((max, value) => Number.isFinite(value) ? Math.max(max, value) : max, 0);
+}
+
+function emitTerminalFailure({ round, role, renderer, failure, error, fallback, at }) {
+  if (failure) return failure;
+  const next = { error: compactErrorMessage(error, fallback), at: at ?? Date.now() };
+  renderer.onTurnFailed?.({ round, role, error: next.error, at: next.at });
+  return next;
+}
+
+function compactErrorMessage(error, fallback) {
+  const message = typeof error === 'string' ? error.trim() : '';
+  return message || fallback;
 }

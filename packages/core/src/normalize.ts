@@ -1,6 +1,8 @@
 import type {
+  PlanEntry,
   SessionConfigOption,
   SessionNotification,
+  ToolCallContent,
 } from '@agentclientprotocol/sdk';
 
 import type { RuntimeEvent, RuntimeToolStatus } from './events.js';
@@ -23,13 +25,22 @@ function resolveAt(context: NormalizeUpdateContext): number {
 
 function readTextPayload(value: unknown): string {
   if (typeof value === 'string') return value;
-  if (Array.isArray(value)) return value.map(readTextPayload).join('');
+  if (Array.isArray(value)) return joinTextPayloads(value.map(readTextPayload));
   if (!value || typeof value !== 'object') return '';
   const record = value as Record<string, unknown>;
   for (const key of ['text', 'content', 'delta', 'thinking', 'reasoning']) {
     if (typeof record[key] === 'string' || Array.isArray(record[key])) return readTextPayload(record[key]);
   }
   return '';
+}
+
+function joinTextPayloads(parts: string[]): string {
+  return parts.filter((part) => part.length > 0).reduce((text, part) => {
+    if (!text) return part;
+    if (/\s$/.test(text) || /^\s/.test(part)) return text + part;
+    if (/[A-Za-z0-9)]$/.test(text) && /^[A-Za-z0-9(`]/.test(part)) return `${text} ${part}`;
+    return text + part;
+  }, '');
 }
 
 function normalizeToolStatus(status: unknown): RuntimeToolStatus {
@@ -51,6 +62,19 @@ function readToolName(update: RawUpdate): string {
     }
   }
   return 'tool';
+}
+
+function readToolCallId(update: RawUpdate): string {
+  if (typeof update.toolCallId === 'string' && update.toolCallId) return update.toolCallId;
+  if (typeof update.tool_call_id === 'string' && update.tool_call_id) return update.tool_call_id;
+  if (typeof update.id === 'string' && update.id) return update.id;
+  const meta = update._meta;
+  if (meta && typeof meta === 'object') {
+    const claudeCode = (meta as { claudeCode?: { toolCallId?: unknown; id?: unknown } }).claudeCode;
+    if (claudeCode && typeof claudeCode.toolCallId === 'string' && claudeCode.toolCallId) return claudeCode.toolCallId;
+    if (claudeCode && typeof claudeCode.id === 'string' && claudeCode.id) return claudeCode.id;
+  }
+  return '';
 }
 
 function readToolInput(update: RawUpdate): unknown {
@@ -93,6 +117,19 @@ function readConfigOptions(update: RawUpdate): SessionConfigOption[] | null {
   return null;
 }
 
+function readToolContent(update: RawUpdate): ToolCallContent[] | undefined {
+  // ACP spec: `tool_call.content` and `tool_call_update.content` are arrays of
+  // ToolCallContent (typed text/image content blocks, file diffs, embedded
+  // terminals). Some agents emit `null` to clear the slot; preserve that as
+  // an empty array so consumers can distinguish "no update" from "explicit
+  // clear", but we collapse it to undefined here for simplicity since the
+  // transcript reducer treats undefined as "leave existing untouched".
+  if (Array.isArray(update.content)) {
+    return update.content as ToolCallContent[];
+  }
+  return undefined;
+}
+
 function readFiniteNumber(update: RawUpdate, key: string, ...fallbackKeys: string[]): number | undefined {
   const sourceKey = [key, ...fallbackKeys].find((candidate) => candidate in update);
   const raw = sourceKey ? update[sourceKey] : undefined;
@@ -127,7 +164,7 @@ export function normalizeAcpUpdate(
     case 'agent_reasoning_chunk':
     case 'reasoning_chunk':
     case 'thinking_chunk': {
-      const delta = readTextPayload(update.content);
+      const delta = readTextPayload(update.content) || readTextPayload(update);
       if (!delta) return [];
       return [{
         type: 'reasoning.delta',
@@ -142,7 +179,7 @@ export function normalizeAcpUpdate(
     case 'agent_reasoning_completed':
     case 'reasoning_completed':
     case 'thinking_completed': {
-      const content = readTextPayload(update.content);
+      const content = readTextPayload(update.content) || readTextPayload(update);
       return [{
         type: 'reasoning.completed',
         sessionId,
@@ -153,7 +190,8 @@ export function normalizeAcpUpdate(
       }];
     }
     case 'tool_call': {
-      if (typeof update.toolCallId !== 'string' || !update.toolCallId) {
+      const toolCallId = readToolCallId(update);
+      if (!toolCallId) {
         return [];
       }
       return [{
@@ -161,31 +199,37 @@ export function normalizeAcpUpdate(
         sessionId,
         at,
         turnId,
-        toolCallId: update.toolCallId,
+        toolCallId,
         name: readToolName(update),
         title: typeof update.title === 'string' ? update.title : undefined,
         kind: typeof update.kind === 'string' ? update.kind : undefined,
         status: normalizeToolStatus(update.status),
         input: readToolInput(update),
         locations: Array.isArray(update.locations) ? update.locations : undefined,
+        content: readToolContent(update),
         meta: readMeta(update),
       }];
     }
     case 'tool_call_update': {
-      if (typeof update.toolCallId !== 'string' || !update.toolCallId) {
+      const toolCallId = readToolCallId(update);
+      if (!toolCallId) {
         return [];
       }
       const status = normalizeToolStatus(update.status);
+      const locations = Array.isArray(update.locations) ? update.locations : undefined;
+      const content = readToolContent(update);
       if (status === 'completed' || status === 'failed') {
         return [{
           type: 'tool.end',
           sessionId,
           at,
           turnId,
-          toolCallId: update.toolCallId,
+          toolCallId,
           status,
           title: typeof update.title === 'string' ? update.title : undefined,
           output: readToolOutput(update),
+          locations,
+          content,
           meta: readMeta(update),
         }];
       }
@@ -194,11 +238,25 @@ export function normalizeAcpUpdate(
         sessionId,
         at,
         turnId,
-        toolCallId: update.toolCallId,
+        toolCallId,
         status,
         title: typeof update.title === 'string' ? update.title : undefined,
         output: readToolOutput(update),
+        locations,
+        content,
         meta: readMeta(update),
+      }];
+    }
+    case 'plan': {
+      // Per the ACP spec, every `plan` update carries the *complete* current
+      // plan. Consumers replace any prior plan with the new entries.
+      const entries = Array.isArray(update.entries) ? (update.entries as PlanEntry[]) : [];
+      return [{
+        type: 'session.plan.updated',
+        sessionId,
+        at,
+        turnId,
+        entries,
       }];
     }
     case 'available_commands_update': {

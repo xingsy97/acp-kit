@@ -17,7 +17,10 @@ const { runAuthorReviewerLoop } = await import('../lib/runtime/loop.mjs');
 describe('author-reviewer-loop legacy runtime adapter', () => {
   it('forwards stateful engine events to legacy renderers', async () => {
     const renderer = {
+      onReasoningDelta: vi.fn(),
+      onReasoningCompleted: vi.fn(),
       onTurnSnapshot: vi.fn(),
+      onToolUpdate: vi.fn(),
       onTraceEntry: vi.fn(),
       onUsageUpdate: vi.fn(),
     };
@@ -28,6 +31,28 @@ describe('author-reviewer-loop legacy runtime adapter', () => {
         round: 1,
         role: 'AUTHOR',
         snapshot: { text: 'draft', status: 'running' },
+      });
+      listener({
+        type: 'reasoningDelta',
+        round: 1,
+        role: 'AUTHOR',
+        delta: 'thinking',
+        reasoningId: 'r1',
+      });
+      listener({
+        type: 'reasoningCompleted',
+        round: 1,
+        role: 'AUTHOR',
+        reasoningId: 'r1',
+        content: 'thinking',
+      });
+      listener({
+        type: 'toolUpdate',
+        round: 1,
+        role: 'AUTHOR',
+        toolCallId: 'tool-1',
+        status: 'running',
+        output: 'partial',
       });
       listener({
         type: 'traceEntry',
@@ -50,6 +75,28 @@ describe('author-reviewer-loop legacy runtime adapter', () => {
       round: 1,
       role: 'AUTHOR',
       snapshot: { text: 'draft', status: 'running' },
+    });
+    expect(renderer.onReasoningDelta).toHaveBeenCalledWith({
+      type: 'reasoningDelta',
+      round: 1,
+      role: 'AUTHOR',
+      delta: 'thinking',
+      reasoningId: 'r1',
+    });
+    expect(renderer.onReasoningCompleted).toHaveBeenCalledWith({
+      type: 'reasoningCompleted',
+      round: 1,
+      role: 'AUTHOR',
+      reasoningId: 'r1',
+      content: 'thinking',
+    });
+    expect(renderer.onToolUpdate).toHaveBeenCalledWith({
+      type: 'toolUpdate',
+      round: 1,
+      role: 'AUTHOR',
+      toolCallId: 'tool-1',
+      status: 'running',
+      output: 'partial',
     });
     expect(renderer.onTraceEntry).toHaveBeenCalledWith({
       type: 'traceEntry',

@@ -228,17 +228,21 @@ export class RuntimeSession {
       this.flushPendingStreams();
       const stopReason = typeof response?.stopReason === 'string' ? response.stopReason : null;
       if (response?.usage) {
+        const usage = response.usage as RuntimeUsage;
         this.emitRuntimeEvent({
           type: 'session.usage.updated',
           sessionId: this.sessionId,
           at: Date.now(),
           turnId,
-          inputTokens: response.usage.inputTokens,
-          outputTokens: response.usage.outputTokens,
-          totalTokens: response.usage.totalTokens,
-          cachedReadTokens: response.usage.cachedReadTokens,
-          cachedWriteTokens: response.usage.cachedWriteTokens,
-          thoughtTokens: response.usage.thoughtTokens,
+          used: usage.used,
+          size: usage.size,
+          cost: usage.cost,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          totalTokens: usage.totalTokens,
+          cachedReadTokens: usage.cachedReadTokens,
+          cachedWriteTokens: usage.cachedWriteTokens,
+          thoughtTokens: usage.thoughtTokens,
         });
       }
       this.emitEvent({

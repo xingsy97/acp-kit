@@ -17,7 +17,11 @@ export async function runAuthorReviewerLoop({ config, renderer }) {
         case 'turnStart':       return renderer.onTurnStart?.(event);
         case 'turnSnapshot':    return renderer.onTurnSnapshot?.(event);
         case 'delta':           return renderer.onMessageDelta?.(event);
+        case 'reasoningDelta':  return renderer.onReasoningDelta?.(event);
+        case 'reasoningCompleted': return renderer.onReasoningCompleted?.(event);
+        case 'planUpdate':      return renderer.onPlanUpdate?.(event);
         case 'toolStart':       return renderer.onToolStart?.(event);
+        case 'toolUpdate':      return renderer.onToolUpdate?.(event);
         case 'toolEnd':         return renderer.onToolEnd?.(event);
         case 'traceEntry':      return renderer.onTraceEntry?.(event);
         case 'usageUpdate':     return renderer.onUsageUpdate?.(event);

@@ -1,4 +1,11 @@
-# ACP Kit Author/Reviewer Loop
+# Spar
+
+**Spar** is a CLI that runs two ACP agents — an author and a reviewer —
+over the same workspace, and keeps them sparring until the work is
+approved. Built on [`@acp-kit/core`](https://www.npmjs.com/package/@acp-kit/core).
+
+> Currently published as `@acp-kit/author-reviewer-loop`. A future release
+> will republish it as `@acp-kit/spar` and deprecate the old name.
 
 A split-context ACP Kit demo that hosts two ACP agents over the same workspace:
 

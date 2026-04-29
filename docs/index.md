@@ -40,7 +40,7 @@ hero:
 ## Examples
 
 - [quick-start](https://github.com/AcpKit/acp-kit/tree/main/examples/quick-start)
-- [author-reviewer-loop](https://github.com/AcpKit/acp-kit/tree/main/packages/author-reviewer-loop)
+- [Spar](https://github.com/AcpKit/acp-kit/tree/main/packages/author-reviewer-loop) &mdash; flagship CLI built on `@acp-kit/core`: two agents spar over one workspace until the work is approved.
 - [mock-runtime](https://github.com/AcpKit/acp-kit/tree/main/examples/mock-runtime)
 - [real-agent-cli](https://github.com/AcpKit/acp-kit/tree/main/examples/real-agent-cli)
 - [web-daemon](https://github.com/AcpKit/acp-kit/tree/main/examples/web-daemon)

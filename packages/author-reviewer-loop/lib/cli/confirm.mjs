@@ -11,7 +11,7 @@ export async function confirmRun() {
   }
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    const answer = await rl.question('Start author/reviewer loop? [y/N] ');
+    const answer = await rl.question('Start run? [y/N] ');
     return /^y(?:es)?$/i.test(answer.trim());
   } finally {
     rl.close();

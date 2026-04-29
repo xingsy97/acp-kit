@@ -91,6 +91,30 @@ describe('runtime role adapter', () => {
     expect(mocks.runtime.shutdown).toHaveBeenCalledTimes(1);
   });
 
+  it('surfaces cleanup failure alongside the original startup failure', async () => {
+    mocks.session.dispose.mockRejectedValueOnce(new Error('cleanup failed while disposing session'));
+
+    const thrown = await openRole({
+      role: 'AUTHOR',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: false,
+      renderer: {},
+      settings: {
+        agent: { displayName: 'Author', command: 'author' },
+        model: 'bad-model',
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    }).catch((error) => error);
+
+    expect(thrown).toBeInstanceOf(AggregateError);
+    expect(thrown.message).toBe('Role startup failed and cleanup also failed.');
+    expect(thrown.errors.map((error: Error) => error.message)).toEqual(expect.arrayContaining([
+      expect.stringContaining('bad-model'),
+      'cleanup failed while disposing session',
+    ]));
+  });
+
   it('reports ACP session.usage.updated events to the renderer while the role is open', async () => {
     const onUsageUpdate = vi.fn();
 

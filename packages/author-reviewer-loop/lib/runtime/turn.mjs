@@ -147,6 +147,27 @@ function emitTerminalFailure({ round, role, renderer, failure, error, fallback, 
 }
 
 function compactErrorMessage(error, fallback) {
-  const message = typeof error === 'string' ? error.trim() : '';
+  const message = extractErrorMessage(error);
   return message || fallback;
+}
+
+function extractErrorMessage(error, depth = 0, seen = new WeakSet()) {
+  if (typeof error === 'string') return error.trim();
+  if (error instanceof Error) return error.message.trim();
+  if (typeof error === 'number' || typeof error === 'boolean') return String(error);
+  if (!error || typeof error !== 'object' || depth > 4) return '';
+  if (seen.has(error)) return '';
+  seen.add(error);
+
+  for (const key of ['message', 'error', 'reason', 'detail', 'details', 'content', 'text']) {
+    const nested = extractErrorMessage(error[key], depth + 1, seen);
+    if (nested) return nested;
+  }
+
+  try {
+    const serialized = JSON.stringify(error);
+    return typeof serialized === 'string' ? serialized.trim() : '';
+  } catch {
+    return '';
+  }
 }

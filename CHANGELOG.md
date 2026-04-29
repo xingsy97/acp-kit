@@ -8,6 +8,21 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.6.11] - 2026-04-29
+
+### Added
+
+- `@acp-kit/core` now emits ACP `plan`, `reasoning`, tool `locations`, and tool structured `content` through the normalized event stream and transcript reducer. New runtime event `session.plan.updated` carries the latest `Plan` for a session; `tool.start` / `tool.update` / `tool.end` now carry `locations` and `content`. The transcript records `currentPlan` per session and `content` per tool record.
+- `@acp-kit/author-reviewer-loop` reframed as **Spar**: TUI now shows a centered `Spar` brand line with two boxing-glove emojis that spar in toward the title and clash on the impact frame while agents are launching, in place of the previous `ACP Author/Reviewer Loop` header. All user-facing strings (finish view, launch confirmation, plain renderer divider, CLI confirm prompt) now say `Spar`. The npm package name is unchanged in this release.
+- `@acp-kit/author-reviewer-loop` TUI dedicates a section to streaming agent reasoning (─ thinking · \<id\> ─ with ▎ prefixed lines) and shows a per-pane plan summary line (`Plan c/t  ✓✓→·· · in progress: <step>`) when the agent emits a plan.
+
+### Changed
+
+- `@acp-kit/author-reviewer-loop` TUI focused pane is now drawn with a double-line border (`╔═╗║╚╝`) plus bold rails, while the inactive pane keeps the thin round border (`╭─╮│╰╯`), so the active pane is obvious at a glance. Pane top-border title is centered between the corners.
+- `@acp-kit/author-reviewer-loop` TUI tool selection (`[` / `]`): when the selected tool lives inside a folded tool-run, that run is automatically expanded inline so the selection is visible. The selected tool row is marked with a `▶` arrow plus bold yellow text instead of an inverse block, which is far easier to spot.
+- `@acp-kit/author-reviewer-loop` TUI finish view no longer renders a progress bar or `Closing TUI...` pulse on approval; it shows a static APPROVED card and exits on the next tick, so the run feels finished rather than still in flight.
+- Documentation site renames the *Author/Reviewer Loop* sidebar entry and page to **Spar** (`docs/spar.md`); the page now positions Spar as a flagship CLI built on `@acp-kit/core`.
+
 ## [0.6.10] - 2026-04-29
 
 ### Fixed

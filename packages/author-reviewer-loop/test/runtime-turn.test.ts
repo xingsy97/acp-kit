@@ -62,6 +62,34 @@ describe('runtime turn adapter', () => {
     expect(renderer.onTurnEnd).toHaveBeenCalledWith(expect.objectContaining({ round: 2, role: 'REVIEWER' }));
   });
 
+  it('preserves structured runtime failure details instead of falling back to generic text', async () => {
+    const error = new Error('collector stopped after ACP failure');
+    const renderer = {
+      onTurnStart: vi.fn(),
+      onTurnFailed: vi.fn(),
+      onTurnEnd: vi.fn(),
+    };
+    mocks.collectTurnResult.mockImplementation(async (_session, _prompt, { onEvent }) => {
+      onEvent({ type: 'turn.failed', error: { message: 'disk full while applying patch' } }, {});
+      throw error;
+    });
+
+    await expect(runTurn({
+      round: 8,
+      role: 'AUTHOR',
+      state: { session: {} },
+      prompt: 'apply patch',
+      renderer,
+    })).rejects.toThrow('collector stopped after ACP failure');
+
+    expect(renderer.onTurnFailed).toHaveBeenCalledTimes(1);
+    expect(renderer.onTurnFailed).toHaveBeenCalledWith(expect.objectContaining({
+      round: 8,
+      role: 'AUTHOR',
+      error: 'disk full while applying patch',
+    }));
+  });
+
   it('treats session.error as a terminal user-visible turn failure', async () => {
     const error = new Error('adapter lost connection');
     const renderer = {

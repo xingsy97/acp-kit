@@ -34,6 +34,8 @@ function isConflictingApprovalLine(line) {
   if (/\b(?:not approved|cannot approve|can't approve|do not approve|rejected)\b/.test(normalized)) return true;
   if (/^(?:issues?|problems?|remaining(?: issues?)?|fix(?:es)?|todo)\b/.test(normalized)) return true;
   if (/^(?:[-*]|\d+[.)])\s*(?:fix|missing|issue|problem|todo|remaining|still|cannot|can't|do not approve|not approved|rejected)\b/.test(normalized)) return true;
+  if (/\b(?:however|but|except|although|though|yet)\b.*\b(?:fail(?:s|ed|ing)?|broken|missing|issue|problem|todo|remaining|regress(?:ion|ed|ing)?|blocked|incomplete|unverified|cannot|can't|won't|does(?:\s+not|n't)\s+work)\b/.test(normalized)) return true;
+  if (/\b(?:still|remains?|remaining)\b.*\b(?:fail(?:s|ed|ing)?|broken|missing|issue|problem|todo|regress(?:ion|ed|ing)?|blocked|incomplete|unverified)\b/.test(normalized)) return true;
   return false;
 }
 
@@ -231,9 +233,11 @@ async function runRounds({ author, reviewer, maxRounds, cwd, config, authorSetti
       if (!approved) continue;
 
     const result = { approved: true, feedback, maxRounds: roundLimit, rounds: lastRound, cwd };
-    renderer.onResult(result);
     const decision = await config.onApproved?.(result);
-    if (!decision?.continue) return result;
+    if (!decision?.continue) {
+      renderer.onResult(result);
+      return result;
+    }
 
     if (approvalContinuations >= continuationLimit || round >= hardRoundLimit) {
       const cappedResult = {

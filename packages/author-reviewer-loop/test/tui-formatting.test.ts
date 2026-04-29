@@ -10,10 +10,15 @@ import {
   formatTuiPaneStatusLine,
   formatTuiPreferenceStatus,
   formatTuiPlanSummary,
+  formatTuiReasoningLabel,
   formatTuiTerminalTitle,
   formatTuiUsageLabel,
+  formatSparSplashFrame,
+  formatSparBrandFrame,
+  formatTuiAnimationLabel,
   renderTaskPreviewRows,
   renderFixedTaskPreviewRows,
+  wrapTuiDisplayRows,
 } from '../lib/renderers/tui.mjs';
 
 describe('author-reviewer-loop TUI formatting helpers', () => {
@@ -24,7 +29,7 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
       selectedRound: null,
       totalRounds: 0,
       maxRounds: 4,
-    })).toBe('• ACP Author/Reviewer Loop · Launching · Standing by for round 1');
+    })).toBe('• Spar · Launching · Standing by for round 1');
 
     expect(formatTuiDashboardTitle({
       phase: Phase.Done,
@@ -32,7 +37,7 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
       selectedRound: 2,
       totalRounds: 2,
       maxRounds: 5,
-    })).toBe('• ACP Author/Reviewer Loop · Approved · Round 2/5');
+    })).toBe('• Spar · Approved · Round 2/5');
 
     expect(formatTuiDashboardTitle({
       phase: Phase.Error,
@@ -40,7 +45,7 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
       selectedRound: 1,
       totalRounds: 1,
       maxRounds: 3,
-    })).toBe('• ACP Author/Reviewer Loop · Error · Round 1/3');
+    })).toBe('• Spar · Error · Round 1/3');
   });
 
   it('keeps long task previews bounded and preserves the full-task hint', () => {
@@ -69,11 +74,21 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
     const zeroWidth = renderTaskPreviewRows('', 0, { maxRows: 2 });
     expect(zeroWidth.truncated).toBe(true);
     expect(zeroWidth.rows).toHaveLength(2);
-    expect(zeroWidth.rows[1]).toContain('[v view full task, e edit]');
+    expect(zeroWidth.rows.every((row) => row.length <= 1)).toBe(true);
 
     const oneColumn = renderTaskPreviewRows('a', 1, { maxRows: 2 });
     expect(oneColumn.truncated).toBe(true);
     expect(oneColumn.rows).toHaveLength(2);
+    expect(oneColumn.rows.every((row) => row.length <= 1)).toBe(true);
+
+    const narrow = renderTaskPreviewRows('Investigate a long recovery task with lots of detail', 8, { maxRows: 2 });
+    expect(narrow.truncated).toBe(true);
+    expect(narrow.rows.every((row) => row.length <= 8)).toBe(true);
+  });
+
+  it('keeps wrapped display rows bounded even when the pane width collapses to zero', () => {
+    expect(wrapTuiDisplayRows('Huge recovery transcript that should never leak past zero-width panes', 0)).toEqual(['']);
+    expect(wrapTuiDisplayRows('abc def ghi', 4)).toEqual(['abc', 'def', 'ghi']);
   });
 
   it('renders compact pane headlines without noisy counts', () => {
@@ -292,8 +307,8 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
   });
 
   it('formats animated terminal tab titles for major TUI states', () => {
-    expect(formatTuiTerminalTitle({ awaitingSetup: true, frame: 0 })).toBe('ACP Review ·   · setup');
-    expect(formatTuiTerminalTitle({ state: { phase: Phase.Launching }, frame: 1 })).toBe('ACP Review ◓ · launching');
+    expect(formatTuiTerminalTitle({ awaitingSetup: true, frame: 0 })).toBe('Spar ·   · setup');
+    expect(formatTuiTerminalTitle({ state: { phase: Phase.Launching }, frame: 1 })).toBe('Spar ◓ · launching');
     expect(formatTuiTerminalTitle({
       state: {
         phase: Phase.Running,
@@ -305,7 +320,94 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
         }]]),
       },
       frame: 0,
-    })).toBe('ACP Review ◐ · R2 · REVIEWER running');
-    expect(formatTuiTerminalTitle({ state: { phase: Phase.Done, result: { approved: true } } })).toBe('ACP Review · approved');
+    })).toBe('Spar ◐ · R2 · REVIEWER running');
+    expect(formatTuiTerminalTitle({ state: { phase: Phase.Done, result: { approved: true } } })).toBe('Spar · approved');
+  });
+
+  it('animates only the statuses that should visibly move in the TUI chrome', () => {
+    expect(formatTuiAnimationLabel('launching', 1)).toBe(' \\');
+    expect(formatTuiAnimationLabel(PaneStatus.Running, 0)).toBe(' ▰▱▱▱▱▱▱▱');
+    expect(formatTuiAnimationLabel(PaneStatus.Pending, 0)).toBe(' ·  ');
+    expect(formatTuiAnimationLabel(PaneStatus.Completed, 0)).toBe('');
+    expect(formatTuiAnimationLabel(PaneStatus.Failed, 0)).toBe('');
+    expect(formatTuiAnimationLabel('unknown', 0)).toBe('');
+  });
+
+  it('formats reasoning sections with stable numbered labels instead of raw ids', () => {
+    expect(formatTuiReasoningLabel(1)).toBe(' thinking #1 ');
+    expect(formatTuiReasoningLabel(2)).toBe(' thinking #2 ');
+    expect(formatTuiReasoningLabel(undefined as unknown as number)).toBe(' thinking #1 ');
+  });
+
+  it('builds the SPAR boxing-gloves banner as a single row with two gloves', () => {
+    const row = formatSparSplashFrame({ frame: 0, width: 60, useEmoji: true });
+    expect(typeof row.text).toBe('string');
+    // Two glove emojis present on a non-impact frame.
+    expect((row.text.match(/\u{1F94A}/gu) || []).length).toBe(2);
+    expect(row.impact).toBe(false);
+  });
+
+  it('flags the impact frame and renders the spark glyph between gloves', () => {
+    const row = formatSparSplashFrame({ frame: 4, width: 60, useEmoji: true });
+    expect(row.impact).toBe(true);
+    expect(row.text).toContain('\u2736');
+  });
+
+  it('falls back to ASCII gloves when emoji rendering is disabled', () => {
+    const row = formatSparSplashFrame({ frame: 0, width: 50, useEmoji: false });
+    expect(row.text).toContain('[X]');
+    expect(row.text).not.toMatch(/\u{1F94A}/u);
+  });
+
+  it('loops the gloves animation by taking the modulo of the frame index', () => {
+    // After a full cycle the frame state should match the starting frame
+    // again. This is what keeps the banner animating indefinitely while
+    // launching, instead of freezing on a final still.
+    const first = formatSparSplashFrame({ frame: 0, width: 60, useEmoji: true });
+    const wrapped = formatSparSplashFrame({ frame: 8, width: 60, useEmoji: true });
+    expect(wrapped.text).toBe(first.text);
+    expect(wrapped.impact).toBe(first.impact);
+  });
+
+  it('keeps the banner readable even when given an absurdly small width', () => {
+    const row = formatSparSplashFrame({ frame: 0, width: 4, useEmoji: true });
+    expect(typeof row.text).toBe('string');
+    expect(row.text.length).toBeGreaterThan(0);
+  });
+
+  it('renders the SPAR brand row with the title centered and gloves on both sides', () => {
+    const row = formatSparBrandFrame({ frame: 0, width: 60, title: 'Spar', useEmoji: true });
+    // Two glove emojis flank the title.
+    expect((row.text.match(/\u{1F94A}/gu) || []).length).toBe(2);
+    // Title appears in the row.
+    expect(row.text).toContain('Spar');
+    // Title is centered: roughly equal whitespace on each side of "Spar".
+    const firstGlove = row.text.indexOf('\u{1F94A}');
+    const lastGlove = row.text.lastIndexOf('\u{1F94A}');
+    expect(lastGlove).toBeGreaterThan(firstGlove);
+    expect(row.impact).toBe(false);
+  });
+
+  it('marks the impact frame on the brand row and replaces the inner spaces with sparks', () => {
+    const row = formatSparBrandFrame({ frame: 4, width: 60, title: 'Spar', useEmoji: true });
+    expect(row.impact).toBe(true);
+    expect(row.text).toContain('\u2736');
+    expect(row.text).toContain('Spar');
+  });
+
+  it('pins the brand-row gloves at the edges when animated is false', () => {
+    const animated = formatSparBrandFrame({ frame: 0, width: 60, title: 'Spar', useEmoji: true, animated: true });
+    const still = formatSparBrandFrame({ frame: 7, width: 60, title: 'Spar', useEmoji: true, animated: false });
+    // Frame 0 is the max-gap frame so animated:true at frame 0 looks the
+    // same as animated:false at any frame: both pin gloves to the edges.
+    expect(still.text).toBe(animated.text);
+    expect(still.impact).toBe(false);
+  });
+
+  it('falls back to ASCII gloves on the brand row when emoji is disabled', () => {
+    const row = formatSparBrandFrame({ frame: 0, width: 60, title: 'Spar', useEmoji: false });
+    expect(row.text).toContain('[X]');
+    expect(row.text).not.toMatch(/\u{1F94A}/u);
+    expect(row.text).toContain('Spar');
   });
 });

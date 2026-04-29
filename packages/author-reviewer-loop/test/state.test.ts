@@ -316,6 +316,26 @@ describe('author-reviewer-loop state reducer', () => {
     expect(state.rounds.get(1)?.REVIEWER.turnUsage).toMatchObject({ inputTokens: 20, outputTokens: 5, totalTokens: 25 });
   });
 
+  it('does not attach delayed usage updates to a later pending round for the same role', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'turnStart', round: 1, role: 'REVIEWER', at: 100 });
+    state = reduce(state, { type: 'turnCompleted', round: 1, role: 'REVIEWER', at: 200, stopReason: 'end_turn' });
+    state = reduce(state, { type: 'turnStart', round: 2, role: 'AUTHOR', at: 300 });
+    state = reduce(state, {
+      type: 'usageUpdate',
+      role: 'REVIEWER',
+      usage: { inputTokens: 50, totalTokens: 50 },
+    });
+
+    expect(state.usage.REVIEWER).toMatchObject({ inputTokens: 50, totalTokens: 50 });
+    expect(state.rounds.get(2)?.REVIEWER).toMatchObject({
+      status: PaneStatus.Pending,
+      startedAt: null,
+      usage: null,
+      turnUsage: null,
+    });
+  });
+
   it('bounds retained trace entries by approximate serialized size', () => {
     let state = initialState();
     for (let index = 0; index < 30; index += 1) {

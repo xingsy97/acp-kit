@@ -136,6 +136,27 @@ describe('author-reviewer-loop engine', () => {
     expect(secondAuthorPrompt).toContain('treated as NOT APPROVED because it mixed APPROVED with conflicting issue text');
   });
 
+  it('treats prose contradictions after APPROVED as not approved until the reviewer sends a clean verdict', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    const reviewerReplies = [
+      'APPROVED\nHowever, restart recovery still fails on Windows.',
+      'APPROVED\nRestart recovery verified after a clean rerun.',
+    ];
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role, round }: { role: 'AUTHOR' | 'REVIEWER'; round: number }) =>
+      role === 'REVIEWER' ? reviewerReplies[round - 1] : '',
+    );
+
+    const result = await createLoopEngine({ config: config(2) }).run();
+    const secondAuthorPrompt = mocks.runTurn.mock.calls.find(([arg]) => arg.role === 'AUTHOR' && arg.round === 2)?.[0].prompt;
+
+    expect(result).toMatchObject({ approved: true, rounds: 2 });
+    expect(secondAuthorPrompt).toContain('However, restart recovery still fails on Windows.');
+  });
+
   it('captures wire traces in TUI mode even when trace logging is disabled', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
@@ -440,6 +461,49 @@ describe('author-reviewer-loop engine', () => {
     const authorTurns = mocks.runTurn.mock.calls.filter(([arg]) => arg.role === 'AUTHOR');
     expect(authorTurns.map(([arg]) => arg.state)).toEqual([authorState, authorState]);
     expect(authorTurns[1]?.[0].prompt).toContain('force another round');
+  });
+
+  it('does not publish a terminal result until approval continuation is resolved', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    let resolveApproval;
+    let markApprovalPending;
+    const approvalPending = new Promise<void>((resolve) => {
+      markApprovalPending = resolve;
+    });
+    const cfg = config(1) as ReturnType<typeof config> & {
+      onApproved?: () => Promise<{ continue: boolean; feedback?: string }>;
+    };
+    cfg.onApproved = vi.fn().mockImplementation(() => {
+      markApprovalPending?.();
+      return new Promise((resolve) => {
+        resolveApproval = resolve;
+      });
+    });
+
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'REVIEWER' ? 'APPROVED' : '',
+    );
+
+    const engine = createLoopEngine({ config: cfg });
+    const results: unknown[] = [];
+    engine.onEvent((event: { type: string; result?: unknown }) => {
+      if (event.type === 'result') results.push(event.result);
+    });
+
+    const runPromise = engine.run();
+    await approvalPending;
+
+    expect(results).toEqual([]);
+    expect(engine.getState().phase).not.toBe('done');
+
+    resolveApproval?.({ continue: false });
+
+    await expect(runPromise).resolves.toMatchObject({ approved: true, rounds: 1 });
+    expect(results).toHaveLength(1);
   });
 
   it('caps repeated approval continuations to prevent runaway approval loops', async () => {

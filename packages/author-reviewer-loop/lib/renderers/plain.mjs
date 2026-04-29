@@ -53,6 +53,25 @@ export function createPlainRenderer() {
   let toolBurstCount = 0;
   let toolBurstHidden = 0;
   const lastUsageByRole = new Map();
+  const reasoningNumbersByRole = new Map();
+  const nextReasoningNumberByRole = new Map();
+
+  const reasoningNumber = (role, reasoningId) => {
+    if (!reasoningId) return null;
+    const roleKey = String(role || 'unknown');
+    const byId = reasoningNumbersByRole.get(roleKey) ?? new Map();
+    if (byId.has(reasoningId)) return byId.get(reasoningId);
+    const next = (nextReasoningNumberByRole.get(roleKey) ?? 0) + 1;
+    byId.set(reasoningId, next);
+    reasoningNumbersByRole.set(roleKey, byId);
+    nextReasoningNumberByRole.set(roleKey, next);
+    return next;
+  };
+
+  const reasoningLabel = (role, reasoningId, noun = 'thinking') => {
+    const number = reasoningNumber(role, reasoningId);
+    return number ? `${noun} #${number}` : noun;
+  };
 
   const stringifyValue = (value) => {
     if (value == null) return '';
@@ -205,8 +224,9 @@ export function createPlainRenderer() {
 
   const writeReasoningDelta = (event) => {
     if (!event.delta) return;
-    if (!midLine) process.stdout.write(color('gray', `\n  [${event.role.toLowerCase()} thinking] `));
-    process.stdout.write(color('gray', event.delta.replace(/\n/g, '\n  [thinking] ')));
+    const label = reasoningLabel(event.role, event.reasoningId);
+    if (!midLine) process.stdout.write(color('gray', `\n  [${event.role.toLowerCase()} ${label}] `));
+    process.stdout.write(color('gray', event.delta.replace(/\n/g, `\n  [${label}] `)));
     midLine = !event.delta.endsWith('\n');
   };
 
@@ -221,7 +241,8 @@ export function createPlainRenderer() {
     if (!trimmed) return;
     const charCount = text.length;
     const role = (event.role ?? '').toLowerCase();
-    console.log(color('gray', `  [${role} thought] ${charCount} chars (id=${event.reasoningId ?? '?'})`));
+    const label = reasoningLabel(event.role, event.reasoningId, 'thought');
+    console.log(color('gray', `  [${role} ${label}] ${charCount} chars`));
   };
 
   const planGlyph = (status) => {
@@ -289,7 +310,7 @@ export function createPlainRenderer() {
         switch (event.type) {
           case 'launching':
             flushToolBurst();
-            console.log(color('cyan', divider('ACP Author/Reviewer Loop')));
+            console.log(color('cyan', divider('Spar')));
             console.log(color('gray', 'Launching agents in parallel. Cold starts can take a few seconds.'));
             return;
           case 'roleStatus':

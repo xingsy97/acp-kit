@@ -5,7 +5,7 @@ Each example is a **standalone npm package** that depends on the published [`@ac
 | Example | What it shows |
 | --- | --- |
 | [`quick-start/`](./quick-start/) | The minimum one-shot path: `runOneShotPrompt({ agent, cwd, prompt })` returning an async iterable of normalized `RuntimeSessionEvent`s (`message.delta`, `tool.start`, `turn.completed`, ...). Process is auto-disposed. |
-| [`author-reviewer-loop`](../packages/author-reviewer-loop/) | Runnable `npx` package: AUTHOR writes files, REVIEWER inspects them in a separate context, and the loop continues until `APPROVED`. Demonstrates split-context multi-agent orchestration over one workspace. |
+| [`Spar`](../packages/author-reviewer-loop/) | Flagship CLI built on `@acp-kit/core`: AUTHOR writes files, REVIEWER inspects them in a separate context, and the loop continues until `APPROVED`. Demonstrates split-context multi-agent orchestration over one workspace. |
 | [`mock-runtime/`](./mock-runtime/) | A fully self-contained mock ACP server so you can see the complete event flow (auth retry, permission, tool lifecycle, message / reasoning / usage updates, transcript snapshot) without installing any agent. |
 | [`real-agent-cli/`](./real-agent-cli/) | A small CLI that drives a real ACP agent (Copilot CLI, Claude ACP, Codex ACP) with an interactive host adapter for auth and permission prompts. |
 | [`web-daemon/`](./web-daemon/) | Tiny `node:http` + Server-Sent Events server: POST a prompt to `/prompt` and stream normalized events back to a browser or `curl -N`. |

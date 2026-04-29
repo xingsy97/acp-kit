@@ -1,20 +1,23 @@
 ---
-title: Author/Reviewer Loop
-description: Split-context demo that pairs an AUTHOR agent and a REVIEWER agent over the same workspace.
+title: Spar
+description: Two ACP agents — an author and a reviewer — sparring over the same workspace until the work is approved.
 ---
 
-# Author/Reviewer Loop
+# Spar
 
-`@acp-kit/author-reviewer-loop` is a split-context ACP Kit demo that hosts two
-ACP agents over the same workspace:
+**Spar** is a CLI that runs two ACP agents over the same workspace and keeps
+them sparring until one approves the other's work:
 
 - **AUTHOR** modifies files for the requested task.
 - **REVIEWER** inspects the working tree in a separate context and replies
   `APPROVED` or a numbered list of issues.
 
 The two agents share the same workspace, but **not** the same conversation
-history. The CLI loops until the reviewer approves the result or `MAX_ROUNDS`
+history. Spar loops until the reviewer approves the result or `MAX_ROUNDS`
 is reached. The deliverable is the working tree on disk, not pasted code.
+
+Spar is built on top of [`@acp-kit/core`](./getting-started.md) and ships as
+its own runnable npm package.
 
 ## Why this is useful
 
@@ -24,11 +27,11 @@ context being asked to find the bug &mdash; the agent tends to re-justify
 what it just wrote, miss obvious regressions, hallucinate that tests pass,
 and overlook files it didn't touch in this turn.
 
-This demo addresses that with **context isolation**: the REVIEWER runs in a
-completely separate ACP session with no memory of how the AUTHOR reasoned. It
-only sees the original task, the AUTHOR's summary of what they changed this
-round, and the actual files on disk. That is enough to consistently catch
-issues that the AUTHOR alone cannot, including:
+Spar addresses that with **context isolation**: the REVIEWER runs in a
+completely separate ACP session with no memory of how the AUTHOR reasoned.
+It only sees the original task, the AUTHOR's summary of what they changed
+this round, and the actual files on disk. That is enough to consistently
+catch issues that the AUTHOR alone cannot, including:
 
 - Logic errors and off-by-one mistakes the AUTHOR convinced itself were fine.
 - Missing edge cases, error handling, and validation.
@@ -191,4 +194,11 @@ To add a new renderer (HTML report, JSONL log, web dashboard), subscribe to
 needed.
 
 For full CLI flag, environment variable, and keybinding reference, see the
-[package README on GitHub](https://github.com/AcpKit/acp-kit/tree/main/packages/author-reviewer-loop#readme).
+[Spar package README on GitHub](https://github.com/AcpKit/acp-kit/tree/main/packages/author-reviewer-loop#readme).
+
+::: tip Note
+Spar currently ships under the package name
+[`@acp-kit/author-reviewer-loop`](https://www.npmjs.com/package/@acp-kit/author-reviewer-loop)
+for backwards compatibility. A future release will republish it as
+`@acp-kit/spar` and deprecate the old name.
+:::

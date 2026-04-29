@@ -133,4 +133,60 @@ describe('author-reviewer-loop simulated E2E', () => {
     expect(secondAuthorPrompt).toContain('Do not assume approval.');
     expect(renderer.onResult).toHaveBeenCalledWith(expect.objectContaining({ approved: true, rounds: 2 }));
   });
+
+  it('does not emit a final renderer result while a post-approval continuation is still pending', async () => {
+    const renderer = {
+      onLaunching: vi.fn(),
+      onResult: vi.fn(),
+    };
+    let resolveApproval;
+    let markApprovalPending;
+    const approvalPending = new Promise<void>((resolve) => {
+      markApprovalPending = resolve;
+    });
+    const config = {
+      cwd: process.cwd(),
+      maxRounds: 1,
+      trace: false,
+      tui: false,
+      task: 'initial task',
+      onApproved: vi.fn().mockImplementation(() => {
+        markApprovalPending?.();
+        return new Promise((resolve) => {
+          resolveApproval = resolve;
+        });
+      }),
+      authorSettings: {
+        agent: { id: 'author', displayName: 'Author', command: 'author', args: [] },
+        model: null,
+        prompt: ({ round, feedback }: { round: number; feedback: string }) =>
+          `AUTHOR round=${round}; feedback=${feedback || '<none>'}`,
+      },
+      reviewerSettings: {
+        agent: { id: 'reviewer', displayName: 'Reviewer', command: 'reviewer', args: [] },
+        model: null,
+        prompt: ({ round, authorReply }: { round: number; authorReply: string }) =>
+          `REVIEWER round=${round}; author=${authorReply}`,
+      },
+    };
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'REVIEWER' ? 'APPROVED' : 'implementation 1',
+    );
+
+    const runPromise = runAuthorReviewerLoop({ config, renderer });
+    await approvalPending;
+
+    expect(renderer.onResult).not.toHaveBeenCalled();
+
+    resolveApproval?.({ continue: false });
+
+    await expect(runPromise).resolves.toMatchObject({ approved: true, rounds: 1 });
+    expect(renderer.onResult).toHaveBeenCalledTimes(1);
+  });
 });

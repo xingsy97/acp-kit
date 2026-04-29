@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.11] - 2026-04-29
+
+### Added
+
+- Reframed as **Spar**: TUI header line is now a centered `Spar` wordmark flanked by two boxing-glove emojis that spar in toward the title and clash on the impact frame while agents are launching. All user-facing strings (finish view, launch confirmation, plain renderer divider, CLI confirm prompt) now say `Spar`. The npm package name is unchanged in this release.
+- TUI now consumes the ACP `plan` and `reasoning` streams that core surfaces. A dedicated reasoning section (─ thinking · \<id\> ─ with ▎ prefixed lines) appears inside each pane, and the per-pane status line shows a plan summary `Plan c/t  ✓✓→·· · in progress: <step>` when the agent emits a plan.
+- Tool flow now records ACP tool `locations` and structured `content` items per call, so future renderers can show file/line attributions and rich tool output.
+
+### Changed
+
+- Focused pane is drawn with a double-line border (`╔═╗║╚╝`) plus bold rails; inactive pane keeps the thin round border (`╭─╮│╰╯`). Pane top-border title is centered between the corners.
+- Tool selection (`[` / `]`): when the selected tool lives inside a folded tool-run, that run is automatically expanded inline so the selection is visible. The selected tool row is marked with a `▶` arrow plus bold yellow text instead of an inverse block.
+- Finish view no longer renders a progress bar or `Closing TUI...` pulse on approval; it shows a static APPROVED card and exits on the next tick.
+
 ## [0.6.10] - 2026-04-29
 
 ### Fixed

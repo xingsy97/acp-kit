@@ -74,11 +74,20 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
     unsubscribeUsage();
     unsubscribePlan();
     unsubscribeTrace();
-    await cleanupRoleResources({ session, runtime, terminalHost }).catch((cleanupError) => {
-      console.error(cleanupError instanceof Error ? cleanupError.message : String(cleanupError));
-    });
+    let cleanupError = null;
+    try {
+      await cleanupRoleResources({ session, runtime, terminalHost });
+    } catch (errorDuringCleanup) {
+      cleanupError = errorDuringCleanup;
+    }
     if (trace) {
       console.error(inspector.toJSONL());
+    }
+    if (cleanupError) {
+      throw new AggregateError(
+        [toError(error), ...toErrorList(cleanupError)],
+        'Role startup failed and cleanup also failed.',
+      );
     }
     throw error;
   }
@@ -243,6 +252,17 @@ async function cleanupRoleResources({ session, runtime, terminalHost }) {
   if (errors.length > 0) {
     throw new AggregateError(errors, 'Failed to clean up ACP role resources.');
   }
+}
+
+function toErrorList(error) {
+  if (error instanceof AggregateError && Array.isArray(error.errors)) {
+    return error.errors.map((item) => toError(item));
+  }
+  return [toError(error)];
+}
+
+function toError(error) {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 export async function closeRole(state) {

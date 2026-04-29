@@ -444,6 +444,15 @@ function approximateJsonBytes(value) {
   }
 }
 
+function findLatestActiveRoundForRole(state, role) {
+  for (let index = state.order.length - 1; index >= 0; index -= 1) {
+    const round = state.order[index];
+    const pane = state.rounds.get(round)?.[role];
+    if (pane?.startedAt != null && pane.finishedAt == null) return round;
+  }
+  return null;
+}
+
 export function reduce(state, action) {
   switch (action.type) {
     case 'launching':
@@ -521,15 +530,16 @@ export function reduce(state, action) {
     case 'traceEntry':
       return pushTrace(state, action);
     case 'usageUpdate': {
-      if (state.latest == null) {
+      const activeRound = findLatestActiveRoundForRole(state, action.role);
+      if (activeRound == null) {
         const roleUsage = addUsage(state.usage[action.role], action.usage);
         return { ...state, usage: { ...state.usage, [action.role]: roleUsage } };
       }
-      const pane = state.rounds.get(state.latest)?.[action.role] ?? emptyPane();
+      const pane = state.rounds.get(activeRound)?.[action.role] ?? emptyPane();
       const turnUsage = mergeUsage(pane.turnUsage, action.usage);
       const roleUsage = addUsage(subtractUsage(state.usage[action.role], pane.turnUsage), turnUsage);
       const next = { ...state, usage: { ...state.usage, [action.role]: roleUsage } };
-      return patchPane(next, next.latest, action.role, (currentPane) => ({
+      return patchPane(next, activeRound, action.role, (currentPane) => ({
         ...currentPane,
         usage: roleUsage,
         turnUsage,

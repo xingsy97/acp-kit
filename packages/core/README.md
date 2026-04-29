@@ -84,7 +84,7 @@ The repository ships with five runnable examples under [`examples/`](examples/).
 | Example | What it shows |
 | --- | --- |
 | [`quick-start/`](examples/quick-start/) | Minimal single-prompt script. |
-| [`author-reviewer-loop`](../../packages/author-reviewer-loop/) | Runnable `npx` package: AUTHOR writes files, REVIEWER inspects them in a separate context, and the loop continues until `APPROVED`. |
+| [`Spar`](../../packages/author-reviewer-loop/) | Flagship CLI built on `@acp-kit/core`: AUTHOR writes files, REVIEWER inspects them in a separate context, and the loop continues until `APPROVED`. |
 | [`mock-runtime/`](examples/mock-runtime/) | Self-contained mock ACP server. Use this to see the full event flow without installing an agent. |
 | [`real-agent-cli/`](examples/real-agent-cli/) | Interactive CLI driver for real agents (`copilot`, `claude`, `codex`, `gemini`, `qwen`, `opencode`) with prompts for auth and permission decisions. |
 | [`web-daemon/`](examples/web-daemon/) | Tiny `node:http` + Server-Sent Events demo: POST a prompt, stream normalized events back to a browser. |

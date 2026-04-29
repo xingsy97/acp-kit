@@ -20,6 +20,26 @@ const TUI_PROGRESS_FRAMES = ['▰▱▱▱▱▱▱▱', '▰▰▱▱▱▱▱�
 const FINISH_ANIMATION_FRAME_MS = 70;
 const FINISH_ANIMATION_FRAMES = 24;
 
+// Frame interval for the SPAR boxing-gloves banner shown while the
+// engine cold-starts its two ACP agents. Kept short enough (~120 ms)
+// for fluid motion. The banner is a slim 3-row strip above the
+// author/reviewer split (NOT a full-screen splash) so users always see
+// the panes and know which agents are starting.
+const SPAR_SPLASH_FRAME_MS = 120;
+// Per-frame inner gap (in columns) between the two gloves. The cycle
+// approaches → clashes → recoils → approaches again, looping
+// indefinitely so users keep seeing motion while launching takes time.
+const SPAR_SPLASH_GAPS = [16, 12, 8, 4, 0, 4, 8, 12];
+// Frames within the cycle that count as "impact" — gap == 0. Used to
+// trigger the spark glyph and bold wordmark accent.
+const SPAR_SPLASH_IMPACT_INDEX = 4;
+// Boxing glove emoji renders as a wide character (2 columns) in most
+// modern terminals (Windows Terminal, iTerm2, kitty, alacritty,
+// gnome-terminal). Falls back to "[X]" / "[X]" for terminals without
+// emoji support — controlled by `process.env.ACP_SPLASH_NO_EMOJI`.
+const SPAR_SPLASH_GLOVE_EMOJI = '\u{1F94A}'; // 🥊
+const SPAR_SPLASH_GLOVE_FALLBACK = '[X]';
+
 export function parseEditorCommand(raw, { platform = process.platform } = {}) {
   const parsed = splitCommandLine(String(raw ?? '').trim(), { platform });
   if (parsed.length === 0) return { command: String(raw ?? '').trim(), args: [] };
@@ -160,7 +180,7 @@ function fitText(text, width, { ellipsis = false } = {}) {
 
 function wrapDisplayLine(line, cols) {
   line = sanitizeDisplayText(line);
-  if (cols <= 0) return [line];
+  if (cols <= 0) return [''];
   if (displayWidth(line) <= cols) return [line];
   const out = [];
   let rest = line;
@@ -177,6 +197,10 @@ function wrapDisplayLine(line, cols) {
   }
   if (rest) out.push(rest);
   return out;
+}
+
+export function wrapTuiDisplayRows(line, cols) {
+  return wrapDisplayLine(line, cols);
 }
 
 function pluralize(count, singular, plural = `${singular}s`) {
@@ -223,9 +247,13 @@ export function renderTaskPreviewRows(task, cols, { prefix = 'task:     ', maxRo
   const hint = ' … [v view full task, e edit]';
   const visible = rows.slice(0, maxRows);
   const lastIndex = visible.length - 1;
-  const hintWidth = displayWidth(hint);
-  const room = Math.max(1, safeCols - hintWidth);
-  visible[lastIndex] = `${fitText(visible[lastIndex], room, { ellipsis: true }).text.trimEnd()}${hint}`;
+  const fittedHint = fitText(hint, safeCols, { ellipsis: true }).text;
+  const hintWidth = displayWidth(fittedHint);
+  const room = Math.max(0, safeCols - hintWidth);
+  const prefixText = room > 0
+    ? fitText(visible[lastIndex], room, { ellipsis: true }).text.trimEnd()
+    : '';
+  visible[lastIndex] = `${prefixText}${fittedHint}`;
   return { rows: visible, truncated: true };
 }
 
@@ -250,7 +278,7 @@ export function formatTuiDashboardTitle({ phase, result, selectedRound, totalRou
   const roundText = totalRounds > 0
     ? `Round ${selectedRound ?? totalRounds}/${Math.max(totalRounds, maxRounds ?? totalRounds)}`
     : 'Standing by for round 1';
-  return `${TUI_STATIC_STATUS_MARK} ACP Author/Reviewer Loop · ${phaseText} · ${roundText}`;
+  return `${TUI_STATIC_STATUS_MARK} Spar · ${phaseText} · ${roundText}`;
 }
 
 export function formatTuiPaneHeadline({ role, round, status, agent, model }) {
@@ -343,6 +371,86 @@ export function formatTuiFinishSummary({ rounds, maxRounds }) {
   return `Approved · ${safeRounds}/${safeMaxRounds} rounds · ready for handoff`;
 }
 
+export function formatTuiReasoningLabel(index) {
+  const safeIndex = Number.isInteger(index) && index > 0 ? index : 1;
+  return ` thinking #${safeIndex} `;
+}
+
+/**
+ * Build the SPAR brand row shown as the first line of the header box.
+ * The product name (e.g. `Spar · Launching · ...`) is rendered in the
+ * exact center of the row. While the engine is launching, two boxing
+ * gloves enter from the left and right edges and step closer to the
+ * title each frame, clash, then recoil — looping forever.
+ *
+ * When `animated` is false the gloves are pinned at the edges (max gap)
+ * and `impact` is always false, giving a static brand line for the
+ * Running / Done / Error phases.
+ *
+ * Returns `{ text, impact }` where `impact` is true on the clash frame
+ * (caller renders that frame in yellow + bold).
+ */
+export function formatSparBrandFrame({ frame = 0, width = 60, title = 'Spar', useEmoji = true, animated = true } = {}) {
+  const SPARK = '\u2736';
+  const glove = useEmoji ? SPAR_SPLASH_GLOVE_EMOJI : SPAR_SPLASH_GLOVE_FALLBACK;
+  const gloveWidth = useEmoji ? 2 : SPAR_SPLASH_GLOVE_FALLBACK.length;
+  const titleW = displayWidth(title);
+  const minWidth = titleW + gloveWidth * 2 + 4;
+  const safeWidth = Math.max(minWidth, Math.floor(width) || minWidth);
+
+  const safeFrame = Math.max(0, Math.floor(frame) || 0);
+  const gapIndex = safeFrame % SPAR_SPLASH_GAPS.length;
+  const gapBase = animated ? SPAR_SPLASH_GAPS[gapIndex] : SPAR_SPLASH_GAPS[0];
+  const impact = animated && gapIndex === SPAR_SPLASH_IMPACT_INDEX;
+
+  // Each side has at most this much room between glove and title.
+  const halfRoom = Math.floor((safeWidth - titleW) / 2) - gloveWidth;
+  const dist = impact ? 1 : Math.min(gapBase, Math.max(0, halfRoom));
+
+  // Filler between glove and title — spaces normally, sparkles on impact.
+  const leftFiller = impact ? `${SPARK} ` : ' '.repeat(Math.max(0, dist));
+  const rightFiller = impact ? ` ${SPARK}` : ' '.repeat(Math.max(0, dist));
+  const middleW = gloveWidth + displayWidth(leftFiller) + titleW + displayWidth(rightFiller) + gloveWidth;
+  const totalEdge = Math.max(0, safeWidth - middleW);
+  const leftEdge = Math.floor(totalEdge / 2);
+  const rightEdge = totalEdge - leftEdge;
+
+  const text = `${' '.repeat(leftEdge)}${glove}${leftFiller}${title}${rightFiller}${glove}${' '.repeat(rightEdge)}`;
+  return { text, impact };
+}
+
+/**
+ * Build a single text row of the SPAR boxing-gloves banner shown while
+ * the engine is cold-starting agents. Two gloves approach each other
+ * along one row, clash, recoil, and loop. Pure / deterministic so it
+ * can be unit-tested without Ink.
+ *
+ * Returns `{ text, impact }` where `impact` is true on the gap-0 frame
+ * (gloves clash → caller renders the row in yellow + bold + spark).
+ *
+ * The banner is rendered as a slim strip ABOVE the author/reviewer
+ * panes — never as a full-screen splash — so users always retain the
+ * mental model of "two agents are starting".
+ */
+export function formatSparSplashFrame({ frame = 0, width = 60, useEmoji = true } = {}) {
+  const safeWidth = Math.max(20, Math.floor(width) || 20);
+  const glove = useEmoji ? SPAR_SPLASH_GLOVE_EMOJI : SPAR_SPLASH_GLOVE_FALLBACK;
+  // 🥊 displays as 2 columns wide in most terminals; the fallback is 3.
+  const gloveWidth = useEmoji ? 2 : SPAR_SPLASH_GLOVE_FALLBACK.length;
+  const safeFrame = Math.max(0, Math.floor(frame) || 0);
+  const gapIndex = safeFrame % SPAR_SPLASH_GAPS.length;
+  const gap = SPAR_SPLASH_GAPS[gapIndex];
+  const impact = gapIndex === SPAR_SPLASH_IMPACT_INDEX;
+
+  // Compose the strip: <glove><gap or spark><glove>, centered in width.
+  const innerSpark = impact ? ' \u2736 ' : ' '.repeat(Math.max(1, gap));
+  const stripCore = `${glove}${innerSpark}${glove}`;
+  const stripDisplayWidth = gloveWidth * 2 + (impact ? 3 : Math.max(1, gap));
+  const leftPad = Math.max(0, Math.floor((safeWidth - stripDisplayWidth) / 2));
+  const text = `${' '.repeat(leftPad)}${stripCore}`;
+  return { text, impact };
+}
+
 export function formatTuiTokenCount(tokens) {
   if (!Number.isFinite(tokens)) return '0';
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(2).replace(/\.?0+$/, '')}M`;
@@ -393,13 +501,13 @@ export function formatTuiTerminalTitle({ state, frame = 0, awaitingSetup = false
   const spinner = TUI_SPINNER_FRAMES[frame % TUI_SPINNER_FRAMES.length];
   const titleSpinner = TUI_TITLE_SPINNER_FRAMES[frame % TUI_TITLE_SPINNER_FRAMES.length];
   const waiting = TUI_WAIT_FRAMES[frame % TUI_WAIT_FRAMES.length];
-  if (cancelled) return 'ACP Review · cancelled';
-  if (editingTask) return `ACP Review ${spinner} · editing task`;
-  if (awaitingSetup) return `ACP Review ${waiting} · setup`;
-  if (awaitingConfirm) return `ACP Review ${waiting} · confirm`;
-  if (state?.phase === Phase.Error) return 'ACP Review · error';
-  if (state?.phase === Phase.Done) return state.result?.approved ? 'ACP Review · approved' : 'ACP Review · not approved';
-  if (state?.phase === Phase.Launching) return `ACP Review ${titleSpinner} · launching`;
+  if (cancelled) return 'Spar · cancelled';
+  if (editingTask) return `Spar ${spinner} · editing task`;
+  if (awaitingSetup) return `Spar ${waiting} · setup`;
+  if (awaitingConfirm) return `Spar ${waiting} · confirm`;
+  if (state?.phase === Phase.Error) return 'Spar · error';
+  if (state?.phase === Phase.Done) return state.result?.approved ? 'Spar · approved' : 'Spar · not approved';
+  if (state?.phase === Phase.Launching) return `Spar ${titleSpinner} · launching`;
 
   const latestRound = state?.latest ?? state?.order?.[state.order.length - 1] ?? null;
   const round = latestRound != null ? state?.rounds?.get?.(latestRound) : null;
@@ -414,10 +522,17 @@ export function formatTuiTerminalTitle({ state, frame = 0, awaitingSetup = false
       ? 'REVIEWER'
       : null;
   const roundText = latestRound != null ? `R${latestRound}` : 'R-';
-  if (runningRole) return `ACP Review ${titleSpinner} · ${roundText} · ${runningRole} running`;
-  if (waitingRole) return `ACP Review ${waiting} · ${roundText} · ${waitingRole} waiting`;
-  if (screen && screen !== 'flow') return `ACP Review · ${screen}`;
-  return `ACP Review ${titleSpinner} · running`;
+  if (runningRole) return `Spar ${titleSpinner} · ${roundText} · ${runningRole} running`;
+  if (waitingRole) return `Spar ${waiting} · ${roundText} · ${waitingRole} waiting`;
+  if (screen && screen !== 'flow') return `Spar · ${screen}`;
+  return `Spar ${titleSpinner} · running`;
+}
+
+export function formatTuiAnimationLabel(status, frame = 0) {
+  if (status === 'launching') return ` ${TUI_SPINNER_FRAMES[frame % TUI_SPINNER_FRAMES.length]}`;
+  if (status === PaneStatus.Running) return ` ${TUI_PROGRESS_FRAMES[frame % TUI_PROGRESS_FRAMES.length]}`;
+  if (status === PaneStatus.Pending) return ` ${TUI_WAIT_FRAMES[frame % TUI_WAIT_FRAMES.length]}`;
+  return '';
 }
 
 /**
@@ -460,11 +575,9 @@ export async function runTui({ config }) {
   } = React;
 
   let approvalResolver = null;
-  let notifyApprovalPending = null;
   let approvalBellRung = false;
   config.onApproved = () => new Promise((resolve) => {
     approvalResolver = resolve;
-    notifyApprovalPending?.();
   });
 
   function resolveApproval(decision) {
@@ -517,7 +630,7 @@ export async function runTui({ config }) {
   }
   enterAltScreen();
   const restore = () => {
-    setTerminalTitle('ACP Review · closed');
+    setTerminalTitle('Spar · closed');
     leaveAltScreen();
   };
   const handleSigint = () => { restore(); process.exit(130); };
@@ -735,10 +848,7 @@ export async function runTui({ config }) {
   }
 
   function animationLabel(status, frame) {
-    if (status === 'launching') return ` ${TUI_SPINNER_FRAMES[frame % TUI_SPINNER_FRAMES.length]}`;
-    if (status === PaneStatus.Running) return ` ${TUI_PROGRESS_FRAMES[frame % TUI_PROGRESS_FRAMES.length]}`;
-    if (status === PaneStatus.Pending) return ` ${TUI_WAIT_FRAMES[frame % TUI_WAIT_FRAMES.length]}`;
-    return '';
+    return formatTuiAnimationLabel(status, frame);
   }
 
   // Soft-wrap one logical line to display rows. Prefer word boundaries; only
@@ -1297,7 +1407,12 @@ export async function runTui({ config }) {
         cols: stdout?.columns || 80,
       });
       const [animationFrame, setAnimationFrame] = useState(0);
-      const [approvalToken, setApprovalToken] = useState(0);
+      // Splash animation runs on its own faster timer so the boxing-
+      // gloves frames feel fluid (~120 ms) without forcing the rest of
+      // the dashboard to redraw at that rate. The interval below auto-
+      // stops once the engine leaves Phase.Launching, so the splash is
+      // strictly bounded to the cold-start window.
+      const [splashFrame, setSplashFrame] = useState(0);
     useEffect(() => {
       const onResize = () => setSize({ rows: stdout.rows, cols: stdout.columns });
       stdout?.on?.('resize', onResize);
@@ -1334,23 +1449,8 @@ export async function runTui({ config }) {
     }, [view.awaitingSetup]);
 
     useEffect(() => {
-      notifyApprovalPending = () => setApprovalToken((token) => token + 1);
-      return () => {
-        if (notifyApprovalPending) notifyApprovalPending = null;
-      };
-    }, []);
-
-    useEffect(() => {
-      if (view.screen === 'finishing') return undefined;
-      if (!hasPendingApproval()) return undefined;
-      dispatchView({ type: 'startFinish' });
-      return undefined;
-    }, [approvalToken, view.screen]);
-
-    useEffect(() => {
       if (view.screen !== 'finishing') return undefined;
       if (view.finishFrame >= FINISH_ANIMATION_FRAMES) {
-        if (hasPendingApproval()) resolveApproval({ continue: false });
         leaveAltScreen();
         app.exit();
         return undefined;
@@ -1358,7 +1458,6 @@ export async function runTui({ config }) {
       const timeout = setTimeout(() => dispatchView({ type: 'finishTick' }), FINISH_ANIMATION_FRAME_MS);
       return () => clearTimeout(timeout);
     }, [view.screen, view.finishFrame]);
-
     // Auto-follow: whenever a new round arrives keep the view pinned.
     const state = engine?.getState() ?? createEmptyEngineState();
     useEffect(() => {
@@ -1389,6 +1488,27 @@ export async function runTui({ config }) {
       const interval = setInterval(() => setAnimationFrame((frame) => (frame + 1) | 0), ENGINE_ANIMATION_FRAME_MS);
       return () => clearInterval(interval);
     }, [view.screen, view.cancelled, state.phase]);
+
+    // Drive the SPAR launch banner animation only while the engine is
+    // still cold-starting (Phase.Launching). The frame counter
+    // increments forever; `formatSparSplashFrame` takes the modulo of
+    // SPAR_SPLASH_GAPS so the gloves loop approach → clash → recoil
+    // continuously, signaling ongoing work to the user. Once the
+    // engine flips to Phase.Running this interval is torn down and the
+    // banner unmounts on the next render.
+    useEffect(() => {
+      if (state.phase !== Phase.Launching) {
+        if (splashFrame !== 0) setSplashFrame(0);
+        return undefined;
+      }
+      if (view.awaitingSetup || view.awaitingConfirm || view.cancelled) return undefined;
+      const interval = setInterval(
+        () => setSplashFrame((frame) => (frame + 1) | 0),
+        SPAR_SPLASH_FRAME_MS,
+      );
+      return () => clearInterval(interval);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [state.phase, view.awaitingSetup, view.awaitingConfirm, view.cancelled]);
 
     // Kick off the run exactly once, but only after the user confirms (or
     // immediately if --yes / ACP_REVIEW_YES skipped the prompt).
@@ -1591,7 +1711,7 @@ export async function runTui({ config }) {
     // header (truncated to 1 row), and on 0 rows we render nothing. The
     // invariant header + pane + nav + footer === size.rows always holds.
     const totalRows = Math.max(0, size.rows);
-    const idealHeader = 6;        // title + workspace + task preview; role status lives on pane borders
+    const idealHeader = 6;        // brand row + workspace + task preview
     const idealNav = 3;           // 1 line + 2 border
     const idealFooter = state.phase === Phase.Error ? 4 : 0;
 
@@ -1632,6 +1752,23 @@ export async function runTui({ config }) {
 
     // ---- header --------------------------------------------------------
     const taskPreview = fixedTaskPreviewRows(config.task, headerCols);
+    const brandTitle = formatTuiDashboardTitle({
+      phase: state.phase,
+      result: state.result,
+      selectedRound,
+      totalRounds: total,
+      maxRounds: state.result?.maxRounds ?? config.maxRounds,
+    });
+    // Row 1 of the header: animated boxing gloves close in on the brand
+    // name during launch; gloves stay pinned at the edges otherwise.
+    const useBrandEmoji = !process.env.ACP_SPLASH_NO_EMOJI;
+    const brandRow = formatSparBrandFrame({
+      frame: splashFrame,
+      width: Math.max(20, headerCols),
+      title: brandTitle,
+      useEmoji: useBrandEmoji,
+      animated: state.phase === Phase.Launching,
+    });
     const header = h(
       Box,
       {
@@ -1642,17 +1779,18 @@ export async function runTui({ config }) {
         height: headerHeight,
         overflow: 'hidden',
       },
-      line(h(Text, {
-        bold: true,
-        color: phaseColor(state.phase, state.result),
-        wrap: 'truncate-end',
-      }, formatTuiDashboardTitle({
-        phase: state.phase,
-        result: state.result,
-        selectedRound,
-        totalRounds: total,
-        maxRounds: state.result?.maxRounds ?? config.maxRounds,
-      })), 'title'),
+      line(
+        h(
+          Text,
+          {
+            bold: true,
+            color: brandRow.impact ? 'yellow' : phaseColor(state.phase, state.result),
+            wrap: 'truncate-end',
+          },
+          brandRow.text,
+        ),
+        'title',
+      ),
       line(h(Text, { color: 'yellow', wrap: 'truncate-end' }, `workspace: ${config.cwd}`), 'cwd'),
       ...taskPreview.rows.map((row, i) => line(h(Text, { color: i === 0 ? 'white' : 'cyan', wrap: 'truncate-end' }, row || ' '), `task-${i}`)),
     );
@@ -1695,9 +1833,10 @@ export async function runTui({ config }) {
       return Boolean(pane?.startedAt || pane?.finishedAt || pane?.flow?.length || pane?.lines?.length || pane?.current || pane?.tools?.length);
     }
 
-    function visibleFlowRows(pane, width) {
+    function visibleFlowRows(pane, width, selectedToolId) {
       if (!pane) return [];
       const rows = [];
+      let reasoningBlockCount = 0;
       const flow = pane.flow?.length
         ? pane.flow
         : [{ id: 'snapshot-text', kind: 'text', text: [...pane.lines, pane.current].join('\n') }];
@@ -1714,7 +1853,12 @@ export async function runTui({ config }) {
           if (run.length === 1) {
             for (const blank of skipped) rows.push({ key: blank.id, kind: 'text', text: blank.text || '' });
           }
-          if (run.length > 1) {
+          // If the user has selected a tool that lives inside this run,
+          // un-fold the whole run inline so the selection is visible.
+          // Otherwise we still fold runs of >1 to keep things compact.
+          const selectionIsInRun = selectedToolId
+            && run.some((tool) => tool.toolCallId === selectedToolId);
+          if (run.length > 1 && !selectionIsInRun) {
             const status = mergedToolStatus(run);
             const runKey = run.map((tool) => tool.toolCallId || tool.id).join('-');
             const summary = fitText(`┌ ${summarizeToolRun(run)}`, width, { ellipsis: true }).text;
@@ -1724,7 +1868,7 @@ export async function runTui({ config }) {
               const preview = fitText(text, width, { ellipsis: true }).text;
               rows.push({ key: `tool-${tool.toolCallId || tool.id}-preview`, kind: 'tool', status: tool.status || status, text: preview, toolCallId: tool.toolCallId });
             });
-            const folded = fitText(`└ ${run.length - 1} folded · [/] select · Enter details`, width, { ellipsis: true }).text;
+            const folded = fitText(`└ ${run.length - 1} more · press ] to step into`, width, { ellipsis: true }).text;
             rows.push({ key: `tool-run-${runKey}-more`, kind: 'tool', status, text: folded });
           } else {
             for (const tool of run) {
@@ -1748,7 +1892,8 @@ export async function runTui({ config }) {
           const previous = flow[index - 1];
           const isFirstOfBlock = !previous || previous.kind !== 'reasoning' || previous.sourceId !== item.sourceId;
           if (isFirstOfBlock) {
-            const label = ` thinking${item.sourceId ? ` · ${String(item.sourceId).slice(-8)}` : ''} `;
+            reasoningBlockCount += 1;
+            const label = formatTuiReasoningLabel(reasoningBlockCount);
             const fill = Math.min(12, Math.max(2, width - displayWidth(label) - 2));
             rows.push({
               key: `reasoning-header-${item.id}`,
@@ -1844,7 +1989,11 @@ export async function runTui({ config }) {
         }];
         while (visible.length < textBudget) visible.push({ kind: 'text', text: '' });
       } else {
-        const expanded = visibleFlowRows(pane, paneCols);
+        const selectedToolIdHere = view.selectedTool?.round === selectedRound
+          && view.selectedTool?.role === role
+          ? view.selectedTool.toolCallId
+          : null;
+        const expanded = visibleFlowRows(pane, paneCols, selectedToolIdHere);
         // Scroll: 0 means pin to bottom (last `textBudget` lines visible).
         const end = Math.max(textBudget, expanded.length - scroll);
         const start = Math.max(0, end - textBudget);
@@ -1868,6 +2017,12 @@ export async function runTui({ config }) {
       const timingLabel = formatDuration(paneElapsedMs(pane));
       const focused = active && view.focus === role;
       const borderColor = color;
+      // When the pane is focused we draw the side rails with double-line
+      // box characters (║) so the active pane stands out clearly from
+      // the inactive one. The unfocused pane keeps the thin │ rail.
+      const sideL = focused ? '║ ' : '│ ';
+      const sideR = focused ? ' ║' : ' │';
+      const innerWidth = paneOuterCols - 4;
       return h(
         Box,
         {
@@ -1879,27 +2034,39 @@ export async function runTui({ config }) {
         paneBorderTop(headerLabel, borderColor, focused, paneOuterCols),
         ...visible.map((row, i) => {
           const text = row.text === '' ? ' ' : row.text;
-          const cell = padCell(text, paneOuterCols - 4);
           if (row.kind === 'tool') {
             const selected = view.selectedTool?.round === selectedRound
               && view.selectedTool?.role === role
               && view.selectedTool?.toolCallId === row.toolCallId;
+            // Selection marker: a bright ► arrow in the leftmost cell of
+            // the line plus a bold, brighter row. This is far more
+            // visible than `inverse:` over a single tool summary line.
+            const marker = selected ? '\u25b6 ' : '  ';
+            const cell = padCell(`${marker}${text}`, innerWidth);
             return line(
               h(
                 Text,
                 { wrap: 'truncate-end' },
-                h(Text, { color: borderColor }, '│ '),
-                h(Text, { color: toolStatusColor(row.status), inverse: selected }, cell),
-                h(Text, { color: borderColor }, ' │'),
+                h(Text, { color: borderColor, bold: focused }, sideL),
+                h(
+                  Text,
+                  {
+                    color: selected ? 'yellow' : toolStatusColor(row.status),
+                    bold: selected,
+                  },
+                  cell,
+                ),
+                h(Text, { color: borderColor, bold: focused }, sideR),
               ),
               row.key ?? `l-${role}-${selectedRound ?? 'none'}-${visibleStart + i}`,
             );
           }
+          const cell = padCell(text, innerWidth);
           return line(
             h(
               Text,
               { wrap: 'truncate-end' },
-              h(Text, { color: borderColor }, '│ '),
+              h(Text, { color: borderColor, bold: focused }, sideL),
               h(
                 Text,
                 {
@@ -1911,7 +2078,7 @@ export async function runTui({ config }) {
                 },
                 cell,
               ),
-              h(Text, { color: borderColor }, ' │'),
+              h(Text, { color: borderColor, bold: focused }, sideR),
             ),
             row.key ?? `l-${role}-${selectedRound ?? 'none'}-${visibleStart + i}`,
           );
@@ -1923,19 +2090,26 @@ export async function runTui({ config }) {
 
     function paneBorderTop(label, color, focused, width) {
       const safeWidth = Math.max(4, width);
+      // Focused pane uses double-line corners (╔══ ══╗) so users can
+      // tell active vs inactive at a glance. The inner glyph differs
+      // too, so the whole frame visibly thickens around the active pane.
+      const corners = focused ? { l: '\u2554', r: '\u2557', dash: '\u2550' } : { l: '\u256d', r: '\u256e', dash: '\u2500' };
+      // Title is centered between the corners.
       const labelWidth = Math.max(0, safeWidth - 4);
       const fitted = fitText(label, labelWidth, { ellipsis: true });
       const labelText = ` ${fitted.text} `;
-      const fill = Math.max(0, safeWidth - displayWidth(labelText) - 3);
+      const totalFill = Math.max(0, safeWidth - displayWidth(labelText) - 2);
+      const leftFill = Math.floor(totalFill / 2);
+      const rightFill = totalFill - leftFill;
       return line(
         h(
           Text,
           { wrap: 'truncate-end' },
-          h(Text, { color }, '╭'),
-          h(Text, { color }, '─'),
+          h(Text, { color, bold: focused }, corners.l),
+          h(Text, { color, bold: focused }, corners.dash.repeat(leftFill)),
           h(Text, { color, bold: focused }, labelText),
-          h(Text, { color }, '─'.repeat(fill)),
-          h(Text, { color }, '╮'),
+          h(Text, { color, bold: focused }, corners.dash.repeat(rightFill)),
+          h(Text, { color, bold: focused }, corners.r),
         ),
         `border-top-${color}-${focused ? 'focused' : 'idle'}`,
       );
@@ -1943,13 +2117,18 @@ export async function runTui({ config }) {
 
     function paneStatusLine(pane, width, role, borderColor, plan) {
       const statusLine = formatTuiPaneStatusLine({ pane, plan });
+      // Side rail glyph mirrors the row above; status line appears
+      // immediately above the bottom border, still inside the pane.
+      const focused = view.focus === role;
+      const sideL = focused ? '\u2551 ' : '\u2502 ';
+      const sideR = focused ? ' \u2551' : ' \u2502';
       return line(
         h(
           Text,
           { wrap: 'truncate-end' },
-          h(Text, { color: borderColor }, '│ '),
+          h(Text, { color: borderColor, bold: focused }, sideL),
           h(Text, { color: statusLine.color, dimColor: statusLine.dim }, padCell(statusLine.text, width - 4)),
-          h(Text, { color: borderColor }, ' │'),
+          h(Text, { color: borderColor, bold: focused }, sideR),
         ),
         `${role}-status`,
       );
@@ -1957,6 +2136,7 @@ export async function runTui({ config }) {
 
     function paneBorderBottom(width, usageLabel, timingLabel, focused, borderColor) {
       const safeWidth = Math.max(4, width);
+      const corners = focused ? { l: '\u255a', r: '\u255d', dash: '\u2550' } : { l: '\u2570', r: '\u256f', dash: '\u2500' };
       const maxTimingWidth = Math.max(0, Math.min(16, Math.floor(safeWidth * 0.24)));
       const fittedTiming = timingLabel ? fitText(timingLabel, maxTimingWidth, { ellipsis: true }) : { text: '', width: 0 };
       const timingText = fittedTiming.text ? ` ${fittedTiming.text} ` : '';
@@ -1969,10 +2149,10 @@ export async function runTui({ config }) {
         h(
           Text,
           { wrap: 'truncate-end' },
-          h(Text, { color: borderColor }, `╰${'─'.repeat(fill)}`),
+          h(Text, { color: borderColor, bold: focused }, `${corners.l}${corners.dash.repeat(fill)}`),
           usageText ? h(Text, { color: 'yellow', bold: focused }, usageText) : null,
           timingText ? h(Text, { color: 'cyan', bold: focused }, timingText) : null,
-          h(Text, { color: borderColor }, '╯'),
+          h(Text, { color: borderColor, bold: focused }, corners.r),
         ),
         `border-bottom-${borderColor}-${focused ? 'focused' : 'idle'}`,
       );
@@ -2182,7 +2362,7 @@ export async function runTui({ config }) {
         ...Array.from({ length: topPad }, (_, i) => h(Text, { key: `finish-pad-${i}` }, '')),
         h(Text, { color: 'green', bold: true }, topRule),
         h(Text, { color: 'green', bold: true }, 'APPROVED'),
-        h(Text, { color: 'cyan' }, 'Author/Reviewer loop complete'),
+        h(Text, { color: 'cyan' }, 'Spar complete'),
         h(Text, { dimColor: true }, formatTuiFinishSummary({
           rounds: state.result?.rounds ?? state.order.length,
           maxRounds: state.result?.maxRounds ?? config.maxRounds,
@@ -2194,7 +2374,6 @@ export async function runTui({ config }) {
     }
 
     if (view.screen === 'finishing') return h(FinishView);
-
     const mainView = view.screen === 'trace'
       ? h(TraceView)
       : view.screen === 'tool' ? h(ToolView)
@@ -2346,7 +2525,7 @@ export async function runTui({ config }) {
         ? `Custom ${view.setup.activeRole.toUpperCase()} model`
         : view.setup.mode === 'model'
         ? `Choose ${view.setup.activeRole.toUpperCase()} model`
-        : 'Prepare author/reviewer run';
+        : 'Prepare Spar run';
       const bodyBudget = Math.max(0, size.rows - (compact ? 21 : 23));
       const authorStatus = setupRoleStatus(view.setup, 'author');
       const reviewerStatus = setupRoleStatus(view.setup, 'reviewer');
@@ -2556,7 +2735,7 @@ export async function runTui({ config }) {
             height: size.rows,
             overflow: 'hidden',
           },
-          h(Text, { bold: true, color: 'cyan' }, 'Launch author/reviewer loop?'),
+          h(Text, { bold: true, color: 'cyan' }, 'Launch Spar?'),
           h(Text, null, ''),
           ...lines.map((row, i) =>
             h(

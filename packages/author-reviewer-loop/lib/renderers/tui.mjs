@@ -8,6 +8,7 @@ import { createLoopEngine, PaneStatus, Phase } from '../engine.mjs';
 import { applyRoleSelection } from '../cli/config.mjs';
 import { agentChoices, defaultModelForAgent, modelChoicesForAgent } from '../config/agents.mjs';
 import { writePreferences } from '../config/preferences.mjs';
+import { createStartupProfiler } from '../runtime/startup-profile.mjs';
 
 const DEFAULT_EDITOR_TIMEOUT_MS = 30 * 60 * 1000;
 const ENGINE_RENDER_FRAME_MS = 160;
@@ -328,13 +329,17 @@ export function formatTuiPaneSummary({ pane, plan }) {
   return parts.join(' · ') || 'No plan or transcript yet.';
 }
 
-export function formatTuiEmptyState({ role, pane, status, phase, selectedRound, plan }) {
+export function formatTuiEmptyState({ role, pane, status, phase, selectedRound, plan, roleStatus }) {
   const planEntries = Array.isArray(plan?.entries) ? plan.entries : [];
   const focus = planEntries.find((entry) => entry?.status === 'in_progress')
     ?? planEntries.find((entry) => entry?.status === 'pending')
     ?? planEntries.find((entry) => compactWhitespace(entry?.content));
   const focusContent = fitText(compactWhitespace(focus?.content || ''), 72, { ellipsis: true }).text;
   if (pane?.error) return 'Turn failed before output reached this pane.';
+  if (typeof roleStatus === 'string' && roleStatus.length > 0 && phase === Phase.Launching) {
+    if (roleStatus === 'ready') return 'Ready.';
+    if (roleStatus !== 'launching') return roleStatus;
+  }
   if (status === 'launching' || phase === Phase.Launching) return `Launching ${role} session...`;
   if (selectedRound == null) return 'Standing by for round 1.';
   if (status === PaneStatus.Pending) {
@@ -554,6 +559,8 @@ export function formatTuiAnimationLabel(status, frame = 0) {
  * Returns 0 on approval, 1 otherwise.
  */
 export async function runTui({ config }) {
+  const startupProfiler = createStartupProfiler({ scope: 'tui-startup' });
+  startupProfiler.mark({ phase: 'tui startup begin', detail: { cwd: config.cwd } });
   let ink;
   let React;
   try {
@@ -927,11 +934,21 @@ export async function runTui({ config }) {
     return { status: 'unavailable', launchKind: 'none', commandFound, fallbackFound };
   }
 
+  startupProfiler.mark({ phase: 'agent detection begin', detail: { mode: 'tui', agentCount: agentChoices.length } });
   const availabilityByAgentId = new Map(agentChoices.map(({ id, agent }) => [id, agentAvailability(agent)]));
   const userCliByAgentId = new Map(agentChoices.map(({ id }) => [
     id,
     (userCliCommands[id] ?? []).some((command) => isCommandOnPath(command)),
   ]));
+  startupProfiler.mark({
+    phase: 'agent detection end',
+    detail: {
+      mode: 'tui',
+      available: [...availabilityByAgentId.entries()]
+        .filter(([, availability]) => availability.status !== 'unavailable')
+        .map(([id]) => id),
+    },
+  });
 
   function agentOptions() {
     return agentChoices.map(({ id, agent }) => {
@@ -1823,7 +1840,13 @@ export async function runTui({ config }) {
 
     function roleStatusToPaneStatus(status) {
       if (status === 'ready') return PaneStatus.Completed;
-      if (String(status).startsWith('launching') || String(status).startsWith('session ready')) {
+      if (
+        String(status).startsWith('launching')
+        || String(status).startsWith('session ready')
+        || String(status).startsWith('spawning')
+        || String(status).startsWith('handshaking')
+        || String(status).startsWith('new session')
+      ) {
         return 'launching';
       }
       return PaneStatus.Pending;
@@ -1985,6 +2008,7 @@ export async function runTui({ config }) {
             phase: state.phase,
             selectedRound,
             plan: state.plans?.[role],
+            roleStatus: state.statuses?.[role],
           }),
         }];
         while (visible.length < textBudget) visible.push({ kind: 'text', text: '' });

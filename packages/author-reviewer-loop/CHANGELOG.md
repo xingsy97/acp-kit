@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.13] - 2026-04-30
+
+### Added
+
+- Startup profiling now reports role startup, fallback adapter preparation, and first-turn latency details for diagnosing slow ACP adapter launches.
+
+### Changed
+
+- The AUTHOR role now begins the first turn as soon as it is ready while the REVIEWER role keeps launching in the background, reducing startup wait time when the REVIEWER adapter is slower.
+
+### Fixed
+
+- TUI regressions around task wrapping, thinking text rendering, tool-call folding, token usage display, terminal title animation, approval exit behavior, and distinct launch/wait/run animation states were tightened.
+- Startup failure handling still aggregates both role failures when both roles cannot launch, while allowing delayed REVIEWER startup failures to surface after the AUTHOR's first turn and cleaning up any opened roles.
+
 ## [0.6.12] - 2026-04-29
 
 ### Added

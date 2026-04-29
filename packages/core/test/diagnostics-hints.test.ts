@@ -149,6 +149,28 @@ describe('diagnostics hint generation', () => {
     expect(diag.hints.find((h) => h.code === 'process-exited')).toBeDefined();
   });
 
+  it('reports npx fallback launch metadata and hint when ACP used a fallback wrapper', () => {
+    const diag = createAcpStartupDiagnostics({
+      agent,
+      label: 'ACP connect',
+      error: new Error('connect failed'),
+      transportDiagnostics: {
+        launchSource: 'fallback',
+        resolvedCommand: 'C:\\Users\\me\\AppData\\Roaming\\npm\\npx.cmd',
+        resolvedArgs: ['--yes', '@zed-industries/codex-acp@latest'],
+        lookupDurationMs: 14,
+        usedNpxFallback: true,
+        firstStdoutMs: 420,
+      },
+    });
+
+    expect(diag.launchSource).toBe('fallback');
+    expect(diag.usedNpxFallback).toBe(true);
+    expect(diag.hints.find((hint) => hint.code === 'npx-fallback')).toBeDefined();
+    expect(formatStartupDiagnostics(diag)).toContain('Launch source: fallback (via npx)');
+    expect(formatStartupDiagnostics(diag)).toContain('First stdout: 420ms');
+  });
+
   it('does not generate process-exited hint when other hints already match', () => {
     const diag = createAcpStartupDiagnostics({
       agent,

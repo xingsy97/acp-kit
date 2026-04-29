@@ -8,6 +8,24 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.6.13] - 2026-04-30
+
+### Added
+
+- `@acp-kit/core` now prepares package-based ACP fallback adapters into a persistent user cache before spawning them, so missing local wrappers such as `claude-code-acp` and `codex-acp` do not require repeated cold `npx --yes ...@latest` launches. Startup profiling now records fallback package preparation and first adapter stdout/stderr timing.
+- `@acp-kit/author-reviewer-loop` startup profiling now covers role startup and first-turn latency so slow adapter launches and first response delays can be diagnosed from `ACP_STARTUP_PROFILE=1` output.
+
+### Changed
+
+- `@acp-kit/author-reviewer-loop` starts the AUTHOR turn as soon as the AUTHOR role is ready while the REVIEWER role continues launching in the background, reducing time-to-first-author-token when the REVIEWER adapter is slower to initialize.
+
+### Fixed
+
+- `@acp-kit/core` command lookup is cached across process starts and handles Windows npm/nvm shims more reliably, including PowerShell `.ps1` launchers.
+- `@acp-kit/core` startup diagnostics now retain stdout, launch source, resolved command, lookup duration, npx fallback usage, and first output timing for easier adapter startup debugging.
+- `@acp-kit/author-reviewer-loop` preserves aggregated startup errors when both roles fail while still allowing the AUTHOR to begin before a slow REVIEWER finishes launching.
+- `@acp-kit/author-reviewer-loop` TUI regressions around task wrapping, thinking text rendering, tool-call folding, token usage display, terminal title animation, approval exit behavior, and launch/wait/run animation state were tightened.
+
 ## [0.6.12] - 2026-04-29
 
 ### Added

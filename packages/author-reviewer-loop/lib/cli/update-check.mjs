@@ -99,7 +99,14 @@ async function writeCache(latest, now, fs = fsp) {
  * registry. Resolves to the version string on success, or null on any
  * failure (network, timeout, malformed JSON, missing version field).
  */
-export async function fetchLatestVersion({ url = REGISTRY_URL, timeoutMs = FETCH_TIMEOUT_MS, fetchImpl = globalThis.fetch } = {}) {
+export async function fetchLatestVersion(options = {}) {
+  const {
+    url = REGISTRY_URL,
+    timeoutMs = FETCH_TIMEOUT_MS,
+  } = options;
+  const fetchImpl = Object.prototype.hasOwnProperty.call(options, 'fetchImpl')
+    ? options.fetchImpl
+    : globalThis.fetch;
   if (typeof fetchImpl !== 'function') return null;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), Math.max(50, timeoutMs));

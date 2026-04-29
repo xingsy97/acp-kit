@@ -6,8 +6,22 @@ import {
 } from '@acp-kit/core';
 import { createLocalFileSystemHost, createLocalTerminalHost } from '@acp-kit/core/node';
 import { formatEnvAssignment } from '../config/shell.mjs';
+import { createStartupProfiler, roleStatusMessageForPhase } from './startup-profile.mjs';
 
 export async function openRole({ role, settings, cwd, trace, captureTrace, renderer }) {
+  const startupProfile = createStartupProfiler({
+    scope: 'role-startup',
+    role,
+    agent: settings.agent,
+    onEvent: (event) => {
+      const message = roleStatusMessageForPhase(event);
+      if (message) renderer.onRoleStatus?.({ role, message });
+    },
+  });
+  startupProfile.mark({
+    phase: role === 'AUTHOR' ? 'author role open begin' : 'reviewer role open begin',
+    detail: { cwd },
+  });
   const inspector = createRuntimeInspector({ includeWire: Boolean(trace || captureTrace) });
   const unsubscribeTrace = renderer.onTraceEntry
     ? inspector.onEntry((entry) => {
@@ -30,6 +44,7 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
       requestPermission: async () => PermissionDecision.AllowAlways,
       chooseAuthMethod: async ({ methods }) => methods[0]?.id ?? null,
     },
+    startupObserver: startupProfile,
   });
 
   let session;
@@ -58,11 +73,16 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
     } else {
       renderer.onRoleStatus?.({ role, message: 'session ready, leaving default model unchanged...' });
     }
+    startupProfile.mark({
+      phase: 'role ready',
+      detail: { model: settings.model ?? null },
+    });
     renderer.onRoleStatus?.({ role, message: 'ready' });
     return {
       role,
       inspector,
       session,
+      startupProfile,
       close: async () => {
         unsubscribeUsage();
         unsubscribePlan();
@@ -83,6 +103,10 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
     if (trace) {
       console.error(inspector.toJSONL());
     }
+    startupProfile.mark({
+      phase: 'role startup failed',
+      detail: { error: error instanceof Error ? error.message : String(error) },
+    });
     if (cleanupError) {
       throw new AggregateError(
         [toError(error), ...toErrorList(cleanupError)],

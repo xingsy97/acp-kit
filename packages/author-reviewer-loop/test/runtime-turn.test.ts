@@ -295,6 +295,36 @@ describe('runtime turn adapter', () => {
     }));
   });
 
+  it('records first-turn profiling milestones once per role state', async () => {
+    const seen = new Set<string>();
+    const startupProfile = {
+      once: vi.fn((event) => {
+        if (seen.has(event.phase)) return null;
+        seen.add(event.phase);
+        return event;
+      }),
+    };
+    mocks.collectTurnResult.mockImplementation(async (_session, _prompt, { onEvent }) => {
+      onEvent({ type: 'reasoning.delta', reasoningId: 'r1', delta: 'thinking' }, {});
+      onEvent({ type: 'message.delta', delta: 'draft' }, {});
+      return { text: 'done', status: 'completed' };
+    });
+
+    await runTurn({
+      round: 1,
+      role: 'AUTHOR',
+      state: { session: {}, startupProfile },
+      prompt: 'do it',
+      renderer: {},
+    });
+
+    expect([...new Set(startupProfile.once.mock.calls.map(([event]) => event.phase))]).toEqual([
+      'first turn request sent',
+      'first runtime event received',
+      'first message/reasoning/tool event received',
+    ]);
+  });
+
   it('forwards ACP tool locations and structured content to renderer callbacks', async () => {
     const renderer = {
       onTurnStart: vi.fn(),

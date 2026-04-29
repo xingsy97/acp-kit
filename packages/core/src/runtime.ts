@@ -83,6 +83,17 @@ export interface AcpTransportSession {
   getDiagnostics?(): AcpTransportDiagnostics;
 }
 
+export interface AcpStartupObserverEvent {
+  phase: string;
+  at?: number;
+  detail?: Record<string, unknown>;
+}
+
+export interface AcpStartupObserver {
+  mark(event: AcpStartupObserverEvent): void;
+  once?(event: AcpStartupObserverEvent): void;
+}
+
 /**
  * Transport abstraction. Owns the underlying transport (child process, IPC,
  * websocket, etc.) and produces an {@link AcpTransportConnection} ready for
@@ -96,6 +107,7 @@ export interface AcpTransport {
     client: Client;
     cwd: string | undefined;
     onSessionUpdate: (notification: SessionNotification) => void;
+    startupObserver?: AcpStartupObserver;
   }): Promise<AcpTransportSession>;
 }
 
@@ -133,6 +145,8 @@ export interface RuntimeOptions {
   approvals?: RuntimeApprovalQueue;
   /** Runtime inspector that receives observations and, when enabled, ACP wire frames. */
   inspector?: RuntimeInspector;
+  /** Optional observer for startup profiling and startup-phase UI updates. */
+  startupObserver?: AcpStartupObserver;
   /**
    * Pluggable transport. Defaults to the node child-process transport
    * (`@acp-kit/core/node` → `nodeChildProcessTransport`). Browser/Webview hosts
@@ -208,6 +222,7 @@ export class AcpRuntime {
   private readonly recording: RuntimeEventStore | undefined;
   private readonly approvals: RuntimeApprovalQueue | undefined;
   private readonly inspector: RuntimeInspector | undefined;
+  private readonly startupObserver: AcpStartupObserver | undefined;
   private readonly explicitTransport: AcpTransport | undefined;
   private readonly legacySpawnProcess: SpawnProcess | undefined;
   private readonly legacyConnectionFactory: AcpConnectionFactory | undefined;
@@ -231,6 +246,7 @@ export class AcpRuntime {
     this.recording = options.recording;
     this.approvals = options.approvals;
     this.explicitTransport = options.transport;
+    this.startupObserver = options.startupObserver;
     this.legacySpawnProcess = options.spawnProcess;
     this.legacyConnectionFactory = options.connectionFactory;
   }
@@ -296,6 +312,10 @@ export class AcpRuntime {
     const cwd = this.requireCwd(options.cwd, 'newSession');
     const state = await this.connect();
     const startupTimeoutMs = startupTimeoutMsFor(this.agent);
+    this.markStartup('newSession begin', {
+      cwd,
+      mcpServerCount: Array.isArray(options.mcpServers) ? options.mcpServers.length : 0,
+    });
 
     const sessionResponse = await withAuthRetry({
       operation: () => withStartupDiagnostics(
@@ -319,6 +339,12 @@ export class AcpRuntime {
       transportSession: state.transportSession,
       agent: this.agent,
       timeoutMs: startupTimeoutMs,
+    });
+    this.markStartup('newSession end', {
+      sessionId: sessionResponse.sessionId,
+      configOptionCount: Array.isArray(sessionResponse.configOptions) ? sessionResponse.configOptions.length : 0,
+      hasModes: Boolean(sessionResponse.modes),
+      hasModels: Boolean(sessionResponse.models),
     });
 
     return this.adoptSession({
@@ -484,6 +510,7 @@ export class AcpRuntime {
   private async doConnect(): Promise<ConnectionState> {
     const startedAt = Date.now();
     this.recordObservation({ type: 'runtime.connect.started', at: startedAt });
+    this.markStartup('ACP connect begin', { cwd: this.cwd });
     const sessionsById = new Map<string, RuntimeSession>();
     const sessionUpdateRouter = (notification: SessionNotification) => {
       const sessionId = (notification as { sessionId?: string }).sessionId;
@@ -509,10 +536,13 @@ export class AcpRuntime {
         client,
         cwd: this.cwd,
         onSessionUpdate: sessionUpdateRouter,
+        startupObserver: this.startupObserver,
       });
+      this.markStartup('ACP connect end');
 
       const startupTimeoutMs = startupTimeoutMsFor(this.agent);
       const promptCapabilities = this.host.promptCapabilities;
+      this.markStartup('ACP initialize begin');
       const initResponse = await withStartupDiagnostics(
         withTimeout(
           transportSession.connection.initialize({
@@ -551,6 +581,9 @@ export class AcpRuntime {
         'initialize',
         this.cwd,
       );
+      this.markStartup('ACP initialize end', {
+        authMethodCount: Array.isArray(initResponse.authMethods) ? initResponse.authMethods.length : 0,
+      });
 
       const state: ConnectionState = {
         transportSession,
@@ -575,6 +608,10 @@ export class AcpRuntime {
       });
       throw error;
     }
+  }
+
+  private markStartup(phase: string, detail?: Record<string, unknown>): void {
+    this.startupObserver?.mark({ phase, at: Date.now(), detail });
   }
 
   private async resolveTransport(): Promise<AcpTransport> {

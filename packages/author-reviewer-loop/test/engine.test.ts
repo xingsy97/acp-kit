@@ -136,6 +136,102 @@ describe('author-reviewer-loop engine', () => {
     expect(secondAuthorPrompt).toContain('treated as NOT APPROVED because it mixed APPROVED with conflicting issue text');
   });
 
+  it('accepts APPROVED replies with clean negated issue summaries instead of looping unnecessarily', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'REVIEWER'
+        ? 'APPROVED\n- No remaining issues; restart recovery and tests pass.\n- Problems: none.'
+        : 'implemented durable fix',
+    );
+
+    const result = await createLoopEngine({ config: config(3) }).run();
+
+    expect(result).toMatchObject({
+      approved: true,
+      rounds: 1,
+      feedback: expect.stringContaining('No remaining issues'),
+    });
+    expect(mocks.runTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it('accepts clean issue-none summaries with trailing prose after APPROVED', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'REVIEWER'
+        ? 'APPROVED\nIssues: none. Everything looks solid after restart recovery verification.'
+        : 'implemented durable fix',
+    );
+
+    const result = await createLoopEngine({ config: config(2) }).run();
+
+    expect(result).toMatchObject({ approved: true, rounds: 1 });
+    expect(mocks.runTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it('accepts ANSI-wrapped APPROVED verdicts after sanitizing terminal control output', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'REVIEWER' ? '\u001b[32mAPPROVED\u001b[0m\n\u200BNo remaining issues.' : 'implemented durable fix',
+    );
+
+    const result = await createLoopEngine({ config: config(2) }).run();
+
+    expect(result).toMatchObject({ approved: true, rounds: 1 });
+    expect(result.feedback).toBe('APPROVED\nNo remaining issues.');
+  });
+
+  it('accepts historical failure notes that are explicitly fixed and verified', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'REVIEWER'
+        ? 'APPROVED\nPreviously failed on Windows after interruption, but now fixed and verified.'
+        : 'implemented durable fix',
+    );
+
+    const result = await createLoopEngine({ config: config(2) }).run();
+
+    expect(result).toMatchObject({ approved: true, rounds: 1 });
+    expect(mocks.runTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects APPROVED replies that hide failures behind a negated opening phrase', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    const reviewerReplies = [
+      'APPROVED\nNo remaining issues, but the dependency conflict still crashes startup.',
+      'APPROVED\nNo remaining issues; startup verified after dependency resolution.',
+    ];
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role, round }: { role: 'AUTHOR' | 'REVIEWER'; round: number }) =>
+      role === 'REVIEWER' ? reviewerReplies[round - 1] : 'draft',
+    );
+
+    const result = await createLoopEngine({ config: config(2) }).run();
+    const secondAuthorPrompt = mocks.runTurn.mock.calls.find(([arg]) => arg.role === 'AUTHOR' && arg.round === 2)?.[0].prompt;
+
+    expect(result).toMatchObject({ approved: true, rounds: 2 });
+    expect(secondAuthorPrompt).toContain('dependency conflict still crashes startup');
+    expect(secondAuthorPrompt).toContain('treated as NOT APPROVED because it mixed APPROVED with conflicting issue text');
+  });
+
   it('treats prose contradictions after APPROVED as not approved until the reviewer sends a clean verdict', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
@@ -155,6 +251,69 @@ describe('author-reviewer-loop engine', () => {
 
     expect(result).toMatchObject({ approved: true, rounds: 2 });
     expect(secondAuthorPrompt).toContain('However, restart recovery still fails on Windows.');
+  });
+
+  it('treats failure bullets after APPROVED as not approved until the reviewer sends a clean verdict', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    const reviewerReplies = [
+      'APPROVED\n- Tests still fail on Windows after restart.',
+      'APPROVED\nRestart recovery verified after a clean rerun.',
+    ];
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role, round }: { role: 'AUTHOR' | 'REVIEWER'; round: number }) =>
+      role === 'REVIEWER' ? reviewerReplies[round - 1] : '',
+    );
+
+    const result = await createLoopEngine({ config: config(2) }).run();
+    const secondAuthorPrompt = mocks.runTurn.mock.calls.find(([arg]) => arg.role === 'AUTHOR' && arg.round === 2)?.[0].prompt;
+
+    expect(result).toMatchObject({ approved: true, rounds: 2 });
+    expect(secondAuthorPrompt).toContain('- Tests still fail on Windows after restart.');
+  });
+
+  it('treats numbered failure items after APPROVED as not approved until the reviewer sends a clean verdict', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    const reviewerReplies = [
+      'APPROVED\n1. Windows restart recovery still fails after interruption.',
+      'APPROVED\nRestart recovery verified after a clean rerun.',
+    ];
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role, round }: { role: 'AUTHOR' | 'REVIEWER'; round: number }) =>
+      role === 'REVIEWER' ? reviewerReplies[round - 1] : '',
+    );
+
+    const result = await createLoopEngine({ config: config(2) }).run();
+    const secondAuthorPrompt = mocks.runTurn.mock.calls.find(([arg]) => arg.role === 'AUTHOR' && arg.round === 2)?.[0].prompt;
+
+    expect(result).toMatchObject({ approved: true, rounds: 2 });
+    expect(secondAuthorPrompt).toContain('1. Windows restart recovery still fails after interruption.');
+  });
+
+  it('treats follow-up failure sentences after APPROVED as not approved until the reviewer sends a clean verdict', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    const reviewerReplies = [
+      'APPROVED\nVerification failed on Windows after restart.',
+      'APPROVED\nRestart recovery verified after a clean rerun.',
+    ];
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role, round }: { role: 'AUTHOR' | 'REVIEWER'; round: number }) =>
+      role === 'REVIEWER' ? reviewerReplies[round - 1] : '',
+    );
+
+    const result = await createLoopEngine({ config: config(2) }).run();
+    const secondAuthorPrompt = mocks.runTurn.mock.calls.find(([arg]) => arg.role === 'AUTHOR' && arg.round === 2)?.[0].prompt;
+
+    expect(result).toMatchObject({ approved: true, rounds: 2 });
+    expect(secondAuthorPrompt).toContain('Verification failed on Windows after restart.');
   });
 
   it('captures wire traces in TUI mode even when trace logging is disabled', async () => {
@@ -182,7 +341,37 @@ describe('author-reviewer-loop engine', () => {
     }));
   });
 
-  it('fails before any author turn when reviewer startup or model setup fails', async () => {
+  it('starts the author turn before waiting for the reviewer role to finish launching', async () => {
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+    let resolveReviewer: ((state: typeof reviewerState) => void) | undefined;
+    const reviewerReady = new Promise<typeof reviewerState>((resolve) => {
+      resolveReviewer = resolve;
+    });
+    const authorTurnStarted = new Promise<void>((resolve) => {
+      mocks.runTurn.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) => {
+        if (role === 'AUTHOR') {
+          resolve();
+          return 'draft';
+        }
+        return 'APPROVED';
+      });
+    });
+    mocks.openRole.mockImplementation(({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? Promise.resolve(authorState) : reviewerReady,
+    );
+
+    const runPromise = createLoopEngine({ config: config(1) }).run();
+    await authorTurnStarted;
+
+    expect(mocks.runTurn.mock.calls[0]?.[0]).toMatchObject({ role: 'AUTHOR', state: authorState });
+    expect(mocks.runTurn.mock.calls.some(([arg]) => arg.role === 'REVIEWER')).toBe(false);
+
+    resolveReviewer?.(reviewerState);
+    await expect(runPromise).resolves.toMatchObject({ approved: true, rounds: 1 });
+  });
+
+  it('runs the author turn before surfacing a reviewer startup or model setup failure', async () => {
     const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
     const reviewerError = new Error('REVIEWER_MODEL="bad" is not available');
     reviewerError.name = 'ConfigurationError';
@@ -190,11 +379,13 @@ describe('author-reviewer-loop engine', () => {
       if (role === 'REVIEWER') throw reviewerError;
       return authorState;
     });
+    mocks.runTurn.mockResolvedValue('draft');
 
     await expect(createLoopEngine({ config: config(1) }).run()).rejects.toThrow('not available');
 
     expect(mocks.openRole).toHaveBeenCalledTimes(2);
-    expect(mocks.runTurn).not.toHaveBeenCalled();
+    expect(mocks.runTurn).toHaveBeenCalledTimes(1);
+    expect(mocks.runTurn.mock.calls[0]?.[0]).toMatchObject({ role: 'AUTHOR', state: authorState });
     expect(mocks.closeRole).toHaveBeenCalledWith(authorState);
   });
 

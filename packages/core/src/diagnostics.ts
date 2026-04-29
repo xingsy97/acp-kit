@@ -14,6 +14,13 @@ export interface AcpTransportDiagnostics {
   exitSummary?: string | null;
   exitCode?: number | null;
   signal?: string | null;
+  launchSource?: 'primary' | 'fallback' | 'unresolved';
+  resolvedCommand?: string;
+  resolvedArgs?: string[];
+  lookupDurationMs?: number;
+  usedNpxFallback?: boolean;
+  firstStdoutMs?: number | null;
+  firstStderrMs?: number | null;
 }
 
 export interface AcpStartupDiagnosticHint {
@@ -39,6 +46,13 @@ export interface AcpStartupDiagnostics {
     exitCode?: number | null;
     signal?: string | null;
   };
+  launchSource?: 'primary' | 'fallback' | 'unresolved';
+  resolvedCommand?: string;
+  resolvedArgs?: string[];
+  lookupDurationMs?: number;
+  usedNpxFallback?: boolean;
+  firstStdoutMs?: number | null;
+  firstStderrMs?: number | null;
   stderrTail?: string;
   stdoutTail?: string;
   originalMessage: string;
@@ -93,6 +107,13 @@ export function createAcpStartupDiagnostics(params: {
       exitCode: diagnostics.exitCode,
       signal: diagnostics.signal,
     },
+    launchSource: diagnostics.launchSource,
+    resolvedCommand: diagnostics.resolvedCommand,
+    resolvedArgs: diagnostics.resolvedArgs ? [...diagnostics.resolvedArgs] : undefined,
+    lookupDurationMs: diagnostics.lookupDurationMs,
+    usedNpxFallback: diagnostics.usedNpxFallback,
+    firstStdoutMs: diagnostics.firstStdoutMs,
+    firstStderrMs: diagnostics.firstStderrMs,
     stderrTail,
     stdoutTail,
     originalMessage,
@@ -125,6 +146,18 @@ export function formatStartupDiagnostics(diagnostics: AcpStartupDiagnostics): st
   if (diagnostics.platform) lines.push(`Platform: ${diagnostics.platform}`);
   if (diagnostics.nodeVersion) lines.push(`Node: ${diagnostics.nodeVersion}`);
   if (diagnostics.durationMs !== undefined) lines.push(`Duration: ${diagnostics.durationMs}ms`);
+  if (diagnostics.launchSource) {
+    const launch = diagnostics.launchSource === 'fallback'
+      ? diagnostics.usedNpxFallback ? 'fallback (via npx)' : 'fallback'
+      : diagnostics.launchSource;
+    lines.push(`Launch source: ${launch}`);
+  }
+  if (diagnostics.lookupDurationMs !== undefined) lines.push(`PATH lookup: ${diagnostics.lookupDurationMs}ms`);
+  if (diagnostics.resolvedCommand) {
+    lines.push(`Resolved command: ${[diagnostics.resolvedCommand, ...(diagnostics.resolvedArgs ?? [])].join(' ')}`);
+  }
+  if (diagnostics.firstStdoutMs !== undefined && diagnostics.firstStdoutMs !== null) lines.push(`First stdout: ${diagnostics.firstStdoutMs}ms`);
+  if (diagnostics.firstStderrMs !== undefined && diagnostics.firstStderrMs !== null) lines.push(`First stderr: ${diagnostics.firstStderrMs}ms`);
   if (diagnostics.process?.exitSummary) lines.push(`Process: ${diagnostics.process.exitSummary}`);
   if (diagnostics.path) lines.push(`PATH: ${diagnostics.path}`);
   lines.push('', diagnostics.originalMessage);
@@ -189,6 +222,13 @@ function buildStartupHints(params: {
       code: 'package-manager-or-network',
       message: 'Check npm/npx network access, proxy settings, and registry authentication.',
       command: `npm view ${params.agent.args[0] || params.agent.command} version`,
+    });
+  }
+  if (params.diagnostics.usedNpxFallback) {
+    hints.push({
+      code: 'npx-fallback',
+      message: `ACP Kit had to launch ${params.agent.displayName || params.agent.id} via an npx fallback. Install the dedicated CLI wrapper locally to avoid repeat npx cold starts.`,
+      command: params.agent.command,
     });
   }
   if (params.diagnostics.exitSummary && hints.length === 0) {

@@ -295,6 +295,28 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
     })).toBe('Turn failed before output reached this pane.');
   });
 
+  it('shows detailed startup phase text when a role has progressed past generic launching', () => {
+    expect(formatTuiEmptyState({
+      role: 'AUTHOR',
+      pane: null,
+      status: 'launching',
+      phase: Phase.Launching,
+      selectedRound: null,
+      plan: null,
+      roleStatus: 'spawning via npx...',
+    })).toBe('spawning via npx...');
+
+    expect(formatTuiEmptyState({
+      role: 'REVIEWER',
+      pane: null,
+      status: 'launching',
+      phase: Phase.Launching,
+      selectedRound: null,
+      plan: null,
+      roleStatus: 'handshaking...',
+    })).toBe('handshaking...');
+  });
+
   it('tells users when the loop has not started a first round yet', () => {
     expect(formatTuiEmptyState({
       role: 'AUTHOR',

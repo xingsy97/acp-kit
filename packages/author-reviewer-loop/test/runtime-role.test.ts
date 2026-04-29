@@ -2,6 +2,7 @@ import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  createAcpRuntime: vi.fn(),
   runtime: {
     newSession: vi.fn(),
     shutdown: vi.fn(),
@@ -23,7 +24,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@acp-kit/core', () => ({
   PermissionDecision: { AllowAlways: 'allow-always' },
-  createAcpRuntime: vi.fn(() => mocks.runtime),
+  createAcpRuntime: mocks.createAcpRuntime,
   createRuntimeInspector: vi.fn(() => ({
     onEntry: vi.fn((listener: (entry: unknown) => void) => {
       mocks.inspectorListeners.push(listener);
@@ -45,6 +46,7 @@ const { closeRole, openRole } = await import('../lib/runtime/role.mjs');
 
 describe('runtime role adapter', () => {
   beforeEach(() => {
+    mocks.createAcpRuntime.mockReset();
     mocks.runtime.newSession.mockReset();
     mocks.runtime.shutdown.mockReset();
     mocks.session.setModel.mockReset();
@@ -64,6 +66,7 @@ describe('runtime role adapter', () => {
       }
       return () => {};
     });
+    mocks.createAcpRuntime.mockReturnValue(mocks.runtime);
     mocks.runtime.newSession.mockResolvedValue(mocks.session);
     mocks.runtime.shutdown.mockResolvedValue(undefined);
     mocks.session.dispose.mockResolvedValue(undefined);
@@ -153,6 +156,34 @@ describe('runtime role adapter', () => {
 
     expect(onUsageUpdate.mock.calls[0]?.[0].usage).toMatchObject({ inputTokens: 5 });
     expect(onUsageUpdate.mock.calls[0]?.[0].usage.cost).toBeUndefined();
+
+    await state.close();
+  });
+
+  it('maps startup observer phases to concise role status updates', async () => {
+    const onRoleStatus = vi.fn();
+
+    const state = await openRole({
+      role: 'AUTHOR',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: false,
+      renderer: { onRoleStatus },
+      settings: {
+        agent: { id: 'author', displayName: 'Author', command: 'author' },
+        model: null,
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    });
+
+    const startupObserver = mocks.createAcpRuntime.mock.calls[0]?.[0]?.startupObserver;
+    startupObserver.mark({ phase: 'adapter process spawn begin', detail: {} });
+    startupObserver.mark({ phase: 'ACP initialize begin', detail: {} });
+    startupObserver.mark({ phase: 'newSession begin', detail: {} });
+
+    expect(onRoleStatus).toHaveBeenCalledWith({ role: 'AUTHOR', message: 'spawning...' });
+    expect(onRoleStatus).toHaveBeenCalledWith({ role: 'AUTHOR', message: 'handshaking...' });
+    expect(onRoleStatus).toHaveBeenCalledWith({ role: 'AUTHOR', message: 'new session...' });
 
     await state.close();
   });

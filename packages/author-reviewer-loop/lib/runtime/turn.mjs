@@ -5,15 +5,34 @@ import { collectTurnResult } from '@acp-kit/core';
  * a turn result; this adapter only adds round/role metadata for renderers.
  */
 export async function runTurn({ round, role, state, prompt, renderer }) {
+  state.startupProfile?.once?.({
+    phase: 'first turn request sent',
+    at: Date.now(),
+    detail: { round, promptChars: String(prompt ?? '').length },
+  });
   renderer.onTurnStart?.({ round, role, at: Date.now() });
   let failureEmitted = false;
   let terminalFailure = null;
+  let firstContentEventSeen = false;
 
   try {
     const result = await collectTurnResult(state.session, prompt, {
       onUpdate: (snapshot) => renderer.onTurnSnapshot?.({ round, role, snapshot }),
       onEvent: (event, snapshot) => {
         if (!event || typeof event !== 'object') return;
+        state.startupProfile?.once?.({
+          phase: 'first runtime event received',
+          at: Date.now(),
+          detail: { type: event.type },
+        });
+        if (!firstContentEventSeen && isContentBearingEvent(event.type)) {
+          firstContentEventSeen = true;
+          state.startupProfile?.once?.({
+            phase: 'first message/reasoning/tool event received',
+            at: Date.now(),
+            detail: { type: event.type },
+          });
+        }
         const tools = Array.isArray(snapshot?.tools) ? snapshot.tools : [];
         switch (event.type) {
           case 'message.delta':
@@ -129,6 +148,16 @@ export async function runTurn({ round, role, state, prompt, renderer }) {
   } finally {
     renderer.onTurnEnd?.({ round, role, at: Date.now() });
   }
+}
+
+function isContentBearingEvent(type) {
+  return type === 'message.delta'
+    || type === 'message.completed'
+    || type === 'reasoning.delta'
+    || type === 'reasoning.completed'
+    || type === 'tool.start'
+    || type === 'tool.update'
+    || type === 'tool.end';
 }
 
 function formatError(error) {

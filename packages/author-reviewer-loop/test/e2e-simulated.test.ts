@@ -134,6 +134,50 @@ describe('author-reviewer-loop simulated E2E', () => {
     expect(renderer.onResult).toHaveBeenCalledWith(expect.objectContaining({ approved: true, rounds: 2 }));
   });
 
+  it('treats a post-approval failure sentence as rejection and carries it into the next author round', async () => {
+    const renderer = {
+      onLaunching: vi.fn(),
+      onResult: vi.fn(),
+    };
+    const config = {
+      cwd: process.cwd(),
+      maxRounds: 2,
+      trace: false,
+      tui: false,
+      authorSettings: {
+        agent: { id: 'author', displayName: 'Author', command: 'author', args: [] },
+        model: null,
+        prompt: ({ round, feedback }: { round: number; feedback: string }) =>
+          `AUTHOR round=${round}; feedback=${feedback || '<none>'}`,
+      },
+      reviewerSettings: {
+        agent: { id: 'reviewer', displayName: 'Reviewer', command: 'reviewer', args: [] },
+        model: null,
+        prompt: ({ round, authorReply }: { round: number; authorReply: string }) =>
+          `REVIEWER round=${round}; author=${authorReply}`,
+      },
+    };
+    const authorState = { role: 'AUTHOR', session: { id: 'author-session' } };
+    const reviewerState = { role: 'REVIEWER', session: { id: 'reviewer-session' } };
+
+    mocks.openRole.mockImplementation(async ({ role }: { role: 'AUTHOR' | 'REVIEWER' }) =>
+      role === 'AUTHOR' ? authorState : reviewerState,
+    );
+    mocks.runTurn.mockImplementation(async ({ role, round }: { role: 'AUTHOR' | 'REVIEWER'; round: number }) => {
+      if (role === 'AUTHOR') return `implementation ${round}`;
+      return round === 1
+        ? 'APPROVED\nVerification failed on Windows after restart.'
+        : 'APPROVED\nRecovery verified after the retry.';
+    });
+
+    const result = await runAuthorReviewerLoop({ config, renderer });
+    const secondAuthorPrompt = mocks.runTurn.mock.calls.find(([arg]) => arg.role === 'AUTHOR' && arg.round === 2)?.[0].prompt;
+
+    expect(result).toMatchObject({ approved: true, rounds: 2 });
+    expect(secondAuthorPrompt).toContain('Verification failed on Windows after restart.');
+    expect(renderer.onResult).toHaveBeenCalledWith(expect.objectContaining({ approved: true, rounds: 2 }));
+  });
+
   it('does not emit a final renderer result while a post-approval continuation is still pending', async () => {
     const renderer = {
       onLaunching: vi.fn(),

@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join, parse, resolve } from 'node:path';
 import { PassThrough, Readable, Writable } from 'node:stream';
 
 import {
@@ -13,6 +15,7 @@ import type { AgentProfile } from '../agents.js';
 import type {
   AcpTransport,
   AcpTransportConnection,
+  AcpStartupObserver,
   AcpTransportSession,
 } from '../runtime.js';
 import { composeWireMiddleware, normalizeWireMiddleware } from '../wire-middleware.js';
@@ -86,11 +89,23 @@ export function nodeChildProcessTransport(
   const connectionFactory = options.connectionFactory || createSdkConnectionFactory();
 
   return {
-    async connect({ agent, host, client, cwd }) {
-      const launch = resolveAgentLaunch(agent, host);
-      const launchAgent = launch === agent
-        ? agent
-        : { ...agent, command: launch.command, args: launch.args };
+    async connect({ agent, host, client, cwd, startupObserver }) {
+      const launch = await resolveAgentLaunch(agent, host, cwd ?? process.cwd(), startupObserver);
+      const launchAgent = { ...agent, command: launch.command, args: launch.args };
+      const spawnStartedAt = Date.now();
+      startupObserver?.mark({
+        phase: 'adapter process spawn begin',
+        at: spawnStartedAt,
+        detail: {
+          launchSource: launch.source,
+          requestedCommand: agent.command,
+          resolvedCommand: launch.command,
+          lookupDurationMs: launch.lookupDurationMs,
+          usedNpxFallback: launch.usedNpxFallback,
+          usedPackageCache: launch.usedPackageCache,
+          fallbackPackage: launch.fallbackPackage,
+        },
+      });
       const child = spawnProcess(launchAgent.command, launchAgent.args, {
         cwd: cwd ?? process.cwd(),
         env: {
@@ -98,7 +113,15 @@ export function nodeChildProcessTransport(
           ...agent.env,
         },
       });
-      const monitor = monitorProcess(child, host);
+      startupObserver?.mark({
+        phase: 'adapter process spawn end',
+        at: Date.now(),
+        detail: {
+          spawnDurationMs: Date.now() - spawnStartedAt,
+          resolvedCommand: launch.command,
+        },
+      });
+      const monitor = monitorProcess(child, host, startupObserver, spawnStartedAt);
       const baseConnection = connectionFactory.create({
         client,
         process: child,
@@ -130,9 +153,19 @@ export function nodeChildProcessTransport(
         getDiagnostics() {
           return {
             stderr: monitor.getStderr(),
+            stdout: monitor.getStdout(),
             exitSummary: monitor.getExitSummary(),
             exitCode: monitor.getExitCode(),
             signal: monitor.getSignal(),
+            launchSource: launch.source,
+            resolvedCommand: launch.command,
+            resolvedArgs: [...launch.args],
+            lookupDurationMs: launch.lookupDurationMs,
+            usedNpxFallback: launch.usedNpxFallback,
+            usedPackageCache: launch.usedPackageCache,
+            fallbackPackage: launch.fallbackPackage,
+            firstStdoutMs: monitor.getFirstStdoutMs(),
+            firstStderrMs: monitor.getFirstStderrMs(),
           };
         },
       };
@@ -141,28 +174,322 @@ export function nodeChildProcessTransport(
   };
 }
 
-function resolveAgentLaunch(agent: AgentProfile, host: RuntimeHost): { command: string; args: string[] } | AgentProfile {
-  const primaryCommand = resolveCommandOnPath(agent.command);
-  if (primaryCommand) return { ...agent, command: primaryCommand };
-  for (const fallback of agent.fallbackCommands ?? []) {
-    const fallbackCommand = resolveCommandOnPath(fallback.command);
-    if (fallbackCommand) {
-      host.log?.({
-        level: 'warn',
-        message: 'ACP agent primary command was not found; using fallback command',
-        context: {
-          agentId: agent.id,
-          missingCommand: agent.command,
-          fallbackCommand: fallback.command,
-          fallbackArgs: fallback.args,
-        },
-      });
-      return { command: fallbackCommand, args: fallback.args };
-    }
-  }
-  return agent;
+interface AgentLaunch {
+  command: string;
+  args: string[];
+  source: 'primary' | 'fallback' | 'unresolved';
+  lookupDurationMs: number;
+  usedNpxFallback: boolean;
+  usedPackageCache?: boolean;
+  fallbackPackage?: string;
 }
 
+async function resolveAgentLaunch(
+  agent: AgentProfile,
+  host: RuntimeHost,
+  cwd: string,
+  startupObserver?: AcpStartupObserver,
+): Promise<AgentLaunch> {
+  const lookupStartedAt = Date.now();
+  const primaryCommand = resolveCommandOnPath(agent.command);
+  if (primaryCommand) {
+    return {
+      command: primaryCommand,
+      args: [...agent.args],
+      source: 'primary',
+      lookupDurationMs: Date.now() - lookupStartedAt,
+      usedNpxFallback: false,
+    };
+  }
+
+  for (const fallback of agent.fallbackCommands ?? []) {
+    const packageLaunch = await resolvePackageFallbackLaunch({
+      agent,
+      fallback,
+      cwd,
+      host,
+      startupObserver,
+      lookupStartedAt,
+    });
+    if (packageLaunch) {
+      logFallbackLaunch(host, agent, fallback);
+      return packageLaunch;
+    }
+
+    const fallbackCommand = resolveCommandOnPath(fallback.command);
+    if (fallbackCommand) {
+      logFallbackLaunch(host, agent, fallback);
+      return {
+        command: fallbackCommand,
+        args: [...fallback.args],
+        source: 'fallback',
+        lookupDurationMs: Date.now() - lookupStartedAt,
+        usedNpxFallback: fallback.command.toLowerCase() === 'npx' || /[\\/]npx(\.cmd)?$/i.test(fallbackCommand),
+      };
+    }
+  }
+  return {
+    command: agent.command,
+    args: [...agent.args],
+    source: 'unresolved',
+    lookupDurationMs: Date.now() - lookupStartedAt,
+    usedNpxFallback: false,
+  };
+}
+
+function logFallbackLaunch(
+  host: RuntimeHost,
+  agent: AgentProfile,
+  fallback: NonNullable<AgentProfile['fallbackCommands']>[number],
+): void {
+  host.log?.({
+    level: 'warn',
+    message: 'ACP agent primary command was not found; using fallback command',
+    context: {
+      agentId: agent.id,
+      missingCommand: agent.command,
+      fallbackCommand: fallback.command,
+      fallbackArgs: fallback.args,
+    },
+  });
+}
+
+async function resolvePackageFallbackLaunch(params: {
+  agent: AgentProfile;
+  fallback: NonNullable<AgentProfile['fallbackCommands']>[number];
+  cwd: string;
+  host: RuntimeHost;
+  startupObserver?: AcpStartupObserver;
+  lookupStartedAt: number;
+}): Promise<AgentLaunch | null> {
+  const parsed = parseNpxPackageFallback(params.agent, params.fallback);
+  if (!parsed) return null;
+
+  const localBin = resolvePackageBinFromProject(params.cwd, parsed.binName);
+  if (localBin) {
+    return packageLaunch(localBin, parsed.extraArgs, params.lookupStartedAt, false, parsed.packageSpec);
+  }
+
+  const globalBin = await resolvePackageBinFromNpmGlobalPrefix(parsed.binName);
+  if (globalBin) {
+    return packageLaunch(globalBin, parsed.extraArgs, params.lookupStartedAt, false, parsed.packageSpec);
+  }
+
+  const cacheDir = packageCacheDir(parsed.packageSpec);
+  const cachedBin = resolvePackageBinFromPrefix(cacheDir, parsed.binName);
+  if (cachedBin) {
+    return packageLaunch(cachedBin, parsed.extraArgs, params.lookupStartedAt, true, parsed.packageSpec);
+  }
+
+  const preparedBin = await prepareCachedPackageBin({
+    packageSpec: parsed.packageSpec,
+    binName: parsed.binName,
+    cacheDir,
+    host: params.host,
+    startupObserver: params.startupObserver,
+  });
+  if (preparedBin) {
+    return packageLaunch(preparedBin, parsed.extraArgs, params.lookupStartedAt, true, parsed.packageSpec);
+  }
+
+  return null;
+}
+
+function parseNpxPackageFallback(
+  agent: AgentProfile,
+  fallback: NonNullable<AgentProfile['fallbackCommands']>[number],
+): { packageSpec: string; binName: string; extraArgs: string[] } | null {
+  if (fallback.command.toLowerCase() !== 'npx') return null;
+  const packageIndex = fallback.args.findIndex((arg) => arg && !arg.startsWith('-'));
+  if (packageIndex < 0) return null;
+  const packageSpec = fallback.args[packageIndex];
+  if (!packageSpec || !packageSpec.includes('/')) return null;
+  return {
+    packageSpec,
+    binName: agent.command,
+    extraArgs: fallback.args.slice(packageIndex + 1),
+  };
+}
+
+function packageLaunch(
+  command: string,
+  args: string[],
+  lookupStartedAt: number,
+  usedPackageCache: boolean,
+  fallbackPackage: string,
+): AgentLaunch {
+  return {
+    command,
+    args,
+    source: 'fallback',
+    lookupDurationMs: Date.now() - lookupStartedAt,
+    usedNpxFallback: false,
+    usedPackageCache,
+    fallbackPackage,
+  };
+}
+
+function resolvePackageBinFromProject(cwd: string, binName: string): string | null {
+  let current = resolve(cwd);
+  while (true) {
+    const found = resolvePackageBinFromPrefix(current, binName);
+    if (found) return found;
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+async function resolvePackageBinFromNpmGlobalPrefix(binName: string): Promise<string | null> {
+  const npmCommand = resolveCommandOnPath('npm');
+  if (!npmCommand) return null;
+  const launch = resolveLaunch(npmCommand, ['prefix', '-g']);
+  const result = await runProcess(launch.command, launch.args, { timeoutMs: 1500 });
+  if (result.status !== 0) return null;
+  const prefix = result.stdout.trim().split(/\r?\n/).at(-1)?.trim();
+  if (!prefix) return null;
+  const binDir = process.platform === 'win32' ? prefix : join(prefix, 'bin');
+  return resolveExecutableCandidate(join(binDir, binName));
+}
+
+function packageCacheRoot(): string {
+  return process.env.ACP_KIT_AGENT_CACHE_DIR
+    || join(homedir(), '.acp-kit', 'agent-bin-cache');
+}
+
+function packageCacheDir(packageSpec: string): string {
+  const safeName = packageSpec.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'package';
+  return join(packageCacheRoot(), safeName);
+}
+
+async function prepareCachedPackageBin(params: {
+  packageSpec: string;
+  binName: string;
+  cacheDir: string;
+  host: RuntimeHost;
+  startupObserver?: AcpStartupObserver;
+}): Promise<string | null> {
+  const npmCommand = resolveCommandOnPath('npm');
+  if (!npmCommand) return null;
+
+  const startedAt = Date.now();
+  params.startupObserver?.mark({
+    phase: 'fallback package prepare begin',
+    at: startedAt,
+    detail: {
+      package: params.packageSpec,
+      cacheDir: params.cacheDir,
+    },
+  });
+
+  try {
+    mkdirSync(params.cacheDir, { recursive: true });
+  } catch (error) {
+    params.host.log?.({
+      level: 'warn',
+      message: 'Failed to create ACP fallback package cache directory.',
+      context: { error: error instanceof Error ? error.message : String(error), cacheDir: params.cacheDir },
+    });
+    return null;
+  }
+
+  const launch = resolveLaunch(npmCommand, [
+    'install',
+    '--prefix',
+    params.cacheDir,
+    '--no-audit',
+    '--no-fund',
+    params.packageSpec,
+  ]);
+  const result = await runProcess(launch.command, launch.args, {
+    timeoutMs: Number(process.env.ACP_KIT_AGENT_CACHE_INSTALL_TIMEOUT_MS || 120000),
+  });
+
+  params.startupObserver?.mark({
+    phase: 'fallback package prepare end',
+    at: Date.now(),
+    detail: {
+      package: params.packageSpec,
+      cacheDir: params.cacheDir,
+      durationMs: Date.now() - startedAt,
+      status: result.status,
+      timedOut: Boolean(result.error && (result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT'),
+    },
+  });
+
+  if (result.status !== 0) {
+    params.host.log?.({
+      level: 'warn',
+      message: 'Failed to prepare cached ACP fallback package; falling back to npx.',
+      context: {
+        package: params.packageSpec,
+        status: result.status,
+        stderr: result.stderr?.toString().slice(-2000),
+        error: result.error instanceof Error ? result.error.message : undefined,
+      },
+    });
+    return null;
+  }
+
+  return resolvePackageBinFromPrefix(params.cacheDir, params.binName);
+}
+
+function runProcess(command: string, args: string[], options: { timeoutMs: number }): Promise<{
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  error?: Error;
+}> {
+  return new Promise((resolveResult) => {
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      const error = new Error(`Process timed out after ${options.timeoutMs}ms.`) as NodeJS.ErrnoException;
+      error.code = 'ETIMEDOUT';
+      try { child.kill(); } catch { /* ignore */ }
+      resolveResult({ status: null, stdout, stderr, error });
+    }, options.timeoutMs);
+
+    child.stdout?.on('data', (chunk) => { stdout += chunk.toString(); });
+    child.stderr?.on('data', (chunk) => { stderr += chunk.toString(); });
+    child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveResult({ status: null, stdout, stderr, error });
+    });
+    child.on('close', (status) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveResult({ status, stdout, stderr });
+    });
+  });
+}
+
+function resolvePackageBinFromPrefix(prefix: string, binName: string): string | null {
+  return resolveExecutableCandidate(join(prefix, 'node_modules', '.bin', binName));
+}
+
+function resolveExecutableCandidate(basePath: string): string | null {
+  if (process.platform !== 'win32') {
+    return existsSync(basePath) ? basePath : null;
+  }
+  const parsed = parse(basePath);
+  if (parsed.ext && existsSync(basePath)) return basePath;
+  for (const ext of ['.cmd', '.ps1', '.exe', '.bat', '']) {
+    const candidate = `${basePath}${ext}`;
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
 /* ------------------------------------------------------------------------- */
 /* Default spawn helpers                                                      */
 /* ------------------------------------------------------------------------- */
@@ -358,22 +685,57 @@ function createFilteredReadable(source: Readable, filterLine: (line: string) => 
 
 interface ProcessMonitor {
   getStderr(): string;
+  getStdout(): string;
   getExitSummary(): string | null;
   getExitCode(): number | null | undefined;
   getSignal(): NodeJS.Signals | null | undefined;
+  getFirstStdoutMs(): number | null;
+  getFirstStderrMs(): number | null;
 }
 
-function monitorProcess(child: SpawnedProcess, host: RuntimeHost): ProcessMonitor {
+function monitorProcess(
+  child: SpawnedProcess,
+  host: RuntimeHost,
+  startupObserver?: AcpStartupObserver,
+  startedAt = Date.now(),
+): ProcessMonitor {
   let stderrBuffer = '';
+  let stdoutBuffer = '';
   let exitSummary: string | null = null;
   let exitCode: number | null | undefined;
   let exitSignal: NodeJS.Signals | null | undefined;
+  let firstStdoutMs: number | null = null;
+  let firstStderrMs: number | null = null;
+
+  child.stdout?.on('data', (chunk) => {
+    const text = chunk.toString();
+    stdoutBuffer += text;
+    if (stdoutBuffer.length > 32_768) {
+      stdoutBuffer = stdoutBuffer.slice(-32_768);
+    }
+    if (firstStdoutMs === null) {
+      firstStdoutMs = Date.now() - startedAt;
+      startupObserver?.once?.({
+        phase: 'first adapter stdout',
+        at: Date.now(),
+        detail: { firstStdoutMs },
+      });
+    }
+  });
 
   child.stderr?.on('data', (chunk) => {
     const text = chunk.toString();
     stderrBuffer += text;
     if (stderrBuffer.length > 32_768) {
       stderrBuffer = stderrBuffer.slice(-32_768);
+    }
+    if (firstStderrMs === null) {
+      firstStderrMs = Date.now() - startedAt;
+      startupObserver?.once?.({
+        phase: 'first adapter stderr',
+        at: Date.now(),
+        detail: { firstStderrMs },
+      });
     }
     host.log?.({
       level: 'debug',
@@ -418,6 +780,9 @@ function monitorProcess(child: SpawnedProcess, host: RuntimeHost): ProcessMonito
     getStderr() {
       return stderrBuffer.trim();
     },
+    getStdout() {
+      return stdoutBuffer.trim();
+    },
     getExitSummary() {
       return exitSummary;
     },
@@ -426,6 +791,12 @@ function monitorProcess(child: SpawnedProcess, host: RuntimeHost): ProcessMonito
     },
     getSignal() {
       return exitSignal;
+    },
+    getFirstStdoutMs() {
+      return firstStdoutMs;
+    },
+    getFirstStderrMs() {
+      return firstStderrMs;
     },
   };
 }

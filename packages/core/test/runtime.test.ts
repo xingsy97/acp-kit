@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { describe, expect, it, vi } from 'vitest';
@@ -107,6 +110,48 @@ describe('AcpRuntime', () => {
     ]);
     expect(snapshot.session.currentModeId).toBe('ask');
     expect(snapshot.session.currentModelId).toBe('gpt-5.4');
+  });
+
+  it('emits startup observer phases for connect, initialize, and newSession', async () => {
+    const startupObserver = {
+      mark: vi.fn(),
+      once: vi.fn(),
+    };
+    const connectionFactory: AcpConnectionFactory = {
+      create() {
+        return {
+          initialize: async () => ({ authMethods: [] }),
+          newSession: async () => ({ sessionId: 'session-startup' }),
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+        } as never;
+      },
+    };
+
+    const runtime = createAcpRuntime({
+      agent: {
+        id: 'test',
+        displayName: 'Test Agent',
+        command: 'test-agent',
+        args: [],
+      },
+      cwd: 'C:/repo',
+      host: {},
+      startupObserver,
+      spawnProcess: createFakeSpawn(),
+      connectionFactory,
+    });
+
+    await runtime.newSession();
+
+    expect(startupObserver.mark.mock.calls.map(([event]) => event.phase)).toEqual(expect.arrayContaining([
+      'ACP connect begin',
+      'ACP connect end',
+      'ACP initialize begin',
+      'ACP initialize end',
+      'newSession begin',
+      'newSession end',
+    ]));
   });
 
   it('retries session creation after ACP auth is required', async () => {
@@ -489,6 +534,49 @@ describe('AcpRuntime', () => {
     await runtime.shutdown();
   });
 
+  it('uses a project-local package bin before falling back to npx package startup', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-runtime-local-bin-'));
+    try {
+      const binDir = path.join(tempRoot, 'node_modules', '.bin');
+      fs.mkdirSync(binDir, { recursive: true });
+      const binPath = path.join(binDir, process.platform === 'win32' ? 'local-acp-agent.cmd' : 'local-acp-agent');
+      fs.writeFileSync(binPath, process.platform === 'win32' ? '@echo off\r\n' : '#!/usr/bin/env node\n', 'utf8');
+      if (process.platform !== 'win32') fs.chmodSync(binPath, 0o755);
+
+      const connectionFactory: AcpConnectionFactory = {
+        create() {
+          return {
+            initialize: async () => ({ authMethods: [] }),
+            newSession: async () => ({ sessionId: 'local-bin-session' }),
+            prompt: async () => ({ stopReason: 'end_turn' }),
+            cancel: async () => undefined,
+          } as never;
+        },
+      };
+      const spawn = vi.fn(createFakeSpawn());
+      const runtime = createAcpRuntime({
+        agent: {
+          id: 'local-bin',
+          displayName: 'Local Bin',
+          command: 'local-acp-agent',
+          args: [],
+          fallbackCommands: [{ command: 'npx', args: ['--yes', '@example/local-acp-agent@latest'] }],
+        },
+        cwd: tempRoot,
+        host: {},
+        spawnProcess: spawn,
+        connectionFactory,
+      });
+
+      await runtime.newSession();
+
+      expect(spawn.mock.calls[0]?.[0]).toBe(binPath);
+      expect(spawn.mock.calls[0]?.[1]).toEqual([]);
+      await runtime.shutdown();
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
   it('uses a fallback launch command when the primary command is not on PATH', async () => {
     const initialize = vi.fn().mockResolvedValue({ authMethods: [] });
     const newSession = vi.fn().mockResolvedValue({ sessionId: 'fallback-session' });

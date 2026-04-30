@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promises as fsp } from 'node:fs';
 import { PassThrough } from 'node:stream';
 
 import { describe, expect, it, vi } from 'vitest';
@@ -577,6 +579,103 @@ describe('AcpRuntime', () => {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
+
+  it('resolves npx fallback packages from the installed runtime tree before raw npx fallback', async () => {
+    const runtimeBinName = 'missing-codex-bin';
+    const runtimeDir = path.dirname(fileURLToPath(new URL('../src/transports/node.ts', import.meta.url)));
+    const binDir = path.resolve(runtimeDir, '..', '..', 'node_modules', '.bin');
+    const binPath = path.join(binDir, process.platform === 'win32' ? `${runtimeBinName}.cmd` : runtimeBinName);
+    await fsp.mkdir(binDir, { recursive: true });
+    await fsp.writeFile(binPath, process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\n', 'utf8');
+
+    const spawnProcess = vi.fn((command, args, options) => ({
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      kill: () => true,
+      on: () => undefined,
+    })) as SpawnProcess;
+
+    const connectionFactory: AcpConnectionFactory = {
+      create() {
+        return {
+          initialize: async () => ({ authMethods: [] }),
+          newSession: async () => ({ sessionId: 'runtime-fallback' }),
+          prompt: async () => ({ stopReason: 'end_turn' }),
+          cancel: async () => undefined,
+        } as never;
+      },
+    };
+
+    const runtime = createAcpRuntime({
+      agent: {
+        id: 'codex-like',
+        displayName: 'Codex-like',
+        command: runtimeBinName,
+        args: [],
+        fallbackCommands: [{ command: 'npx', args: ['@openai/codex', 'codex'] }],
+      },
+      cwd: 'C:/repo',
+      host: {},
+      spawnProcess,
+      connectionFactory,
+    });
+
+    const session = await runtime.newSession();
+    expect(session.sessionId).toBe('runtime-fallback');
+    expect(spawnProcess).toHaveBeenCalled();
+    expect(spawnProcess.mock.calls[0]?.[0]).toBe(binPath);
+    expect(spawnProcess.mock.calls[0]?.[1]).toEqual(['codex']);
+
+    await fsp.rm(binPath, { force: true });
+  });
+
+  it('prefers the raw npx fallback command over cache/package probing when no project-local bin exists', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-runtime-raw-npx-'));
+    const fakeBinDir = path.join(tempRoot, 'fake-bin');
+    const originalPath = process.env.PATH;
+    try {
+      fs.mkdirSync(fakeBinDir, { recursive: true });
+      const fakeNpx = path.join(fakeBinDir, process.platform === 'win32' ? 'npx.cmd' : 'npx');
+      fs.writeFileSync(fakeNpx, process.platform === 'win32' ? '@echo off\r\n' : '#!/usr/bin/env node\n', 'utf8');
+      if (process.platform !== 'win32') fs.chmodSync(fakeNpx, 0o755);
+      process.env.PATH = `${fakeBinDir}${path.delimiter}${originalPath || ''}`;
+
+      const connectionFactory: AcpConnectionFactory = {
+        create() {
+          return {
+            initialize: async () => ({ authMethods: [] }),
+            newSession: async () => ({ sessionId: 'raw-npx-session' }),
+            prompt: async () => ({ stopReason: 'end_turn' }),
+            cancel: async () => undefined,
+          } as never;
+        },
+      };
+      const spawn = vi.fn(createFakeSpawn());
+      const runtime = createAcpRuntime({
+        agent: {
+          id: 'raw-npx-fallback',
+          displayName: 'Raw npx fallback',
+          command: 'missing-acp-agent',
+          args: [],
+          fallbackCommands: [{ command: 'npx', args: ['--yes', '@example/never-installed-missing-acp-agent@latest'] }],
+        },
+        cwd: tempRoot,
+        host: {},
+        spawnProcess: spawn,
+        connectionFactory,
+      });
+
+      await runtime.newSession();
+
+      expect(spawn.mock.calls[0]?.[0]).toBe(fakeNpx);
+      expect(spawn.mock.calls[0]?.[1]).toEqual(['--yes', '@example/never-installed-missing-acp-agent@latest']);
+      await runtime.shutdown();
+    } finally {
+      process.env.PATH = originalPath;
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
   it('uses a fallback launch command when the primary command is not on PATH', async () => {
     const initialize = vi.fn().mockResolvedValue({ authMethods: [] });
     const newSession = vi.fn().mockResolvedValue({ sessionId: 'fallback-session' });
@@ -616,6 +715,50 @@ describe('AcpRuntime', () => {
     }));
 
     await runtime.shutdown();
+  });
+
+  it('treats unscoped npx package fallbacks as package candidates before raw npx startup', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-runtime-unscoped-bin-'));
+    try {
+      const binDir = path.join(tempRoot, 'node_modules', '.bin');
+      fs.mkdirSync(binDir, { recursive: true });
+      const binPath = path.join(binDir, process.platform === 'win32' ? 'opencode.cmd' : 'opencode');
+      fs.writeFileSync(binPath, process.platform === 'win32' ? '@echo off\r\n' : '#!/usr/bin/env node\n', 'utf8');
+      if (process.platform !== 'win32') fs.chmodSync(binPath, 0o755);
+
+      const connectionFactory: AcpConnectionFactory = {
+        create() {
+          return {
+            initialize: async () => ({ authMethods: [] }),
+            newSession: async () => ({ sessionId: 'unscoped-local-bin-session' }),
+            prompt: async () => ({ stopReason: 'end_turn' }),
+            cancel: async () => undefined,
+          } as never;
+        },
+      };
+      const spawn = vi.fn(createFakeSpawn());
+      const runtime = createAcpRuntime({
+        agent: {
+          id: 'unscoped-local-bin',
+          displayName: 'Unscoped Local Bin',
+          command: 'opencode',
+          args: [],
+          fallbackCommands: [{ command: 'npx', args: ['--yes', 'opencode-ai@latest', 'acp'] }],
+        },
+        cwd: tempRoot,
+        host: {},
+        spawnProcess: spawn,
+        connectionFactory,
+      });
+
+      await runtime.newSession();
+
+      expect(spawn.mock.calls[0]?.[0]).toBe(binPath);
+      expect(spawn.mock.calls[0]?.[1]).toEqual(['acp']);
+      await runtime.shutdown();
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it('routes session/update notifications to the matching session by sessionId', async () => {

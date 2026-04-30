@@ -27,9 +27,10 @@ export const modelChoices = Object.freeze({
     { id: 'default', label: 'default (agent default)', value: null },
   ],
   codex: [
-    { id: 'gpt-5.4', label: 'gpt-5.4', value: 'gpt-5.4' },
+    { id: 'gpt-5.5', label: 'gpt-5.5', value: 'gpt-5.5' },
     { id: 'gpt-5.4/medium', label: 'gpt-5.4/medium', value: 'gpt-5.4/medium' },
-    { id: 'gpt-5.4/xhigh', label: 'gpt-5.4/xhigh', value: 'gpt-5.4/xhigh' },
+    { id: 'gpt-5.4/high', label: 'gpt-5.4/high', value: 'gpt-5.4/high' },
+    { id: 'gpt-5.5/xhigh', label: 'gpt-5.5/xhigh', value: 'gpt-5.5/xhigh' },
   ],
   copilot: [
     { id: 'gpt-5.4', label: 'gpt-5.4', value: 'gpt-5.4' },
@@ -53,8 +54,9 @@ export const defaults = {
   authorAgent: 'copilot',
   authorModel: 'gpt-5.4',
   reviewerAgent: 'codex',
-  reviewerModel: 'gpt-5.4',
-  maxRounds: 10,
+  reviewerModel: 'gpt-5.5',
+  maxRounds: 20,
+  sessionTurns: 20,
 };
 
 export function defaultModelForAgent(agentId) {

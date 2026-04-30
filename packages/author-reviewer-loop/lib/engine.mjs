@@ -29,7 +29,15 @@ function sanitizeReviewerText(text) {
 }
 
 function isApprovedVerdictLine(line) {
-  return /^APPROVED\.?$/i.test(line.trim());
+  const normalized = line.replace(/\s+/g, ' ').trim();
+  if (!/^APPROVED\b/i.test(normalized)) return false;
+  const trailing = normalized
+    .replace(/^APPROVED\b/i, '')
+    .replace(/^[\s:;,.!_\-–—]+/, '')
+    .trim();
+  if (!trailing) return true;
+  if (/^(?:if|but|however|except|unless|pending|assuming|subject\s+to)\b/i.test(trailing)) return false;
+  return !isConflictingApprovalLine(trailing);
 }
 
 function isConflictingApprovalLine(line) {
@@ -164,10 +172,11 @@ export function createLoopEngine({ config }) {
     const { cwd, maxRounds, trace, tui, authorSettings, reviewerSettings } = config;
     const openRoleFn = config.openRole || openRole;
     const closeRoleFn = config.closeRole || closeRole;
+    const retiredRoles = new Set();
 
     let startup;
-    let author;
-    let reviewer;
+    let authorManager;
+    let reviewerManager;
     let result;
     let runError;
     try {
@@ -182,14 +191,36 @@ export function createLoopEngine({ config }) {
         renderer: innerRenderer,
         openRole: openRoleFn,
       });
-      author = await startup.getAuthor();
+      authorManager = createRoleSessionManager({
+        role: 'AUTHOR',
+        settings: authorSettings,
+        getInitialRole: () => startup.getAuthor(),
+        openRole: openRoleFn,
+        closeRole: closeRoleFn,
+        cwd,
+        trace,
+        captureTrace: Boolean(trace || tui),
+        renderer: innerRenderer,
+        maxTurns: authorSettings.sessionTurns,
+        retiredRoles,
+      });
+      reviewerManager = createRoleSessionManager({
+        role: 'REVIEWER',
+        settings: reviewerSettings,
+        getInitialRole: () => startup.getReviewer(),
+        openRole: openRoleFn,
+        closeRole: closeRoleFn,
+        cwd,
+        trace,
+        captureTrace: Boolean(trace || tui),
+        renderer: innerRenderer,
+        maxTurns: reviewerSettings.sessionTurns,
+        retiredRoles,
+      });
 
       result = await runRounds({
-        author,
-        getReviewer: async () => {
-          reviewer = await startup.getReviewer();
-          return reviewer;
-        },
+        authorManager,
+        reviewerManager,
         maxRounds,
         cwd,
         config,
@@ -198,13 +229,27 @@ export function createLoopEngine({ config }) {
         renderer: innerRenderer,
       });
     } catch (error) {
-      runError = await normalizeStartupError({ startup, author, error });
+      runError = await normalizeStartupError({ startup, author: authorManager?.getActive(), error });
       const message = formatErrorMessage(runError);
       dispatch({ type: 'error', error: message });
       emit({ type: 'error', error: runError });
     }
 
-    const closeError = await closeRoles(closeRoleFn, await collectStartedRoles({ startup, author, reviewer }));
+    const startedRoles = await collectStartedRoles({ startup, managers: [authorManager, reviewerManager] });
+    const stopLateRoleCleanup = runError
+      ? closeLateStartingRoles({
+        startup,
+        closeRoleFn,
+        ignoredStates: startedRoles,
+        retiredRoles,
+      })
+      : () => {};
+
+    const closeError = await closeRoles(
+      closeRoleFn,
+      startedRoles.filter((state) => !retiredRoles.has(state)),
+    );
+    if (!runError) stopLateRoleCleanup();
     if (runError && closeError) {
       throw new AggregateError(
         [runError, ...toErrorList(closeError)],
@@ -231,7 +276,8 @@ export function createLoopEngine({ config }) {
   };
 }
 
-async function runRounds({ author, getReviewer, maxRounds, cwd, config, authorSettings, reviewerSettings, renderer }) {
+async function runRounds({ authorManager, reviewerManager, maxRounds, cwd, config, authorSettings, reviewerSettings, renderer }) {
+  maxRounds = normalizeRoundLimit(maxRounds);
   let feedback = '';
   let approved = false;
   let lastRound = 0;
@@ -242,6 +288,7 @@ async function runRounds({ author, getReviewer, maxRounds, cwd, config, authorSe
 
   for (let round = 1; round <= roundLimit; round++) {
     lastRound = round;
+    const author = await authorManager.getForTurn();
     const authorReply = await runTurn({
       round,
       role: 'AUTHOR',
@@ -249,7 +296,7 @@ async function runRounds({ author, getReviewer, maxRounds, cwd, config, authorSe
       prompt: authorSettings.prompt({ round, feedback }),
       renderer,
     });
-    const reviewer = await getReviewer();
+    const reviewer = await reviewerManager.getForTurn();
     const reply = await runTurn({
       round,
       role: 'REVIEWER',
@@ -290,6 +337,23 @@ async function runRounds({ author, getReviewer, maxRounds, cwd, config, authorSe
   return result;
 }
 
+/**
+ * Normalize the base round budget for programmatic callers.
+ * Positive integers are preserved. Any zero, negative, fractional, or
+ * non-finite value falls back to at least one executable round.
+ */
+function normalizeRoundLimit(value) {
+  if (Number.isInteger(value) && value >= 1) return value;
+  if (Number.isFinite(value)) return Math.max(1, Math.trunc(value));
+  return 1;
+}
+
+/**
+ * Normalize post-approval continuation budgets.
+ * Only non-negative integers are accepted. Any fractional, negative, or
+ * non-finite value falls back to the already-normalized base round budget so
+ * reopened approval loops stay deterministic for programmatic callers.
+ */
 function normalizeApprovalContinuationLimit(value, fallback) {
   if (Number.isInteger(value) && value >= 0) return value;
   return fallback;
@@ -303,16 +367,23 @@ function startRoles({ authorSettings, reviewerSettings, cwd, trace, captureTrace
   let reviewerError;
   let authorSettled = false;
   let reviewerSettled = false;
+  const settledListeners = new Set();
+
+  function notifyRoleSettled(event) {
+    for (const listener of settledListeners) listener(event);
+  }
 
   const authorPromise = Promise.resolve()
     .then(() => openRoleFn({ role: 'AUTHOR', settings: authorSettings, cwd, trace, captureTrace, renderer }))
     .then((state) => {
       author = state;
       authorSettled = true;
+      notifyRoleSettled({ role: 'AUTHOR', state });
       return state;
     }, (error) => {
       authorError = toError(error);
       authorSettled = true;
+      notifyRoleSettled({ role: 'AUTHOR', error: authorError });
       throw error;
     });
 
@@ -321,6 +392,7 @@ function startRoles({ authorSettings, reviewerSettings, cwd, trace, captureTrace
     .then((state) => {
       reviewer = state;
       reviewerSettled = true;
+      notifyRoleSettled({ role: 'REVIEWER', state });
       startupProfile.mark({
         phase: 'reviewer role ready',
         detail: {
@@ -331,6 +403,7 @@ function startRoles({ authorSettings, reviewerSettings, cwd, trace, captureTrace
     }, (error) => {
       reviewerError = toError(error);
       reviewerSettled = true;
+      notifyRoleSettled({ role: 'REVIEWER', error: reviewerError });
       throw error;
     });
 
@@ -361,26 +434,99 @@ function startRoles({ authorSettings, reviewerSettings, cwd, trace, captureTrace
       }
       return [author, reviewer].filter(Boolean);
     },
-    async getStartupFailures() {
-      if (!authorSettled || !reviewerSettled) {
+    async getStartupFailures({ waitForPending = true } = {}) {
+      if (waitForPending && (!authorSettled || !reviewerSettled)) {
         await Promise.allSettled([authorPromise, reviewerPromise]);
       }
       return [authorError, reviewerError].filter(Boolean);
     },
+    onRoleSettled(listener) {
+      settledListeners.add(listener);
+      return () => settledListeners.delete(listener);
+    },
   };
+}
+
+function createRoleSessionManager({ role, settings, getInitialRole, openRole: openRoleFn, closeRole: closeRoleFn, cwd, trace, captureTrace, renderer, maxTurns, retiredRoles }) {
+  const turnLimit = normalizeSessionTurnLimit(maxTurns);
+  const startedRoles = new Set();
+  let active = null;
+  let initialConsumed = false;
+  let turnsOnActiveSession = 0;
+
+  async function openFreshRole() {
+    const state = await openRoleFn({ role, settings, cwd, trace, captureTrace, renderer });
+    startedRoles.add(state);
+    return state;
+  }
+
+  async function ensureActiveRole() {
+    if (active) return active;
+    active = initialConsumed ? await openFreshRole() : await getInitialRole();
+    initialConsumed = true;
+    startedRoles.add(active);
+    turnsOnActiveSession = 0;
+    return active;
+  }
+
+  async function refreshRole() {
+    const previous = active;
+    active = null;
+    renderer.onRoleStatus?.({ role, message: 'refreshing session after ' + turnLimit + ' turn(s)...' });
+    try {
+      await closeRoleFn(previous);
+      retiredRoles.add(previous);
+    } catch {
+      // Final cleanup will retry closing this state and report persistent failures.
+    }
+    active = await openFreshRole();
+    turnsOnActiveSession = 0;
+  }
+
+  return {
+    async getForTurn() {
+      await ensureActiveRole();
+      if (turnsOnActiveSession >= turnLimit) await refreshRole();
+      turnsOnActiveSession += 1;
+      return active;
+    },
+    getActive() {
+      return active;
+    },
+    getStartedRoles() {
+      return Array.from(startedRoles);
+    },
+  };
+}
+
+function normalizeSessionTurnLimit(value) {
+  if (Number.isInteger(value) && value >= 1) return value;
+  return 20;
 }
 
 async function normalizeStartupError({ startup, author, error }) {
   if (!startup || author) return error;
-  const failures = await startup.getStartupFailures();
+  const failures = await startup.getStartupFailures({ waitForPending: false });
   if (failures.length > 1) return new AggregateError(failures, 'Role startup failed.');
   return failures[0] ?? error;
 }
 
-async function collectStartedRoles({ startup, author, reviewer }) {
-  if (!startup) return [author, reviewer].filter(Boolean);
-  const settled = await startup.settleStartedRoles();
-  return Array.from(new Set([...settled, author, reviewer].filter(Boolean)));
+async function collectStartedRoles({ startup, managers = [] }) {
+  const managerRoles = managers.flatMap((manager) => manager?.getStartedRoles?.() ?? []);
+  if (!startup) return Array.from(new Set(managerRoles.filter(Boolean)));
+  return Array.from(new Set([...startup.getStartedRoles(), ...managerRoles].filter(Boolean)));
+}
+
+function closeLateStartingRoles({ startup, closeRoleFn, ignoredStates = [], retiredRoles = new Set() }) {
+  if (!startup?.onRoleSettled) return () => {};
+  const ignored = new Set(ignoredStates.filter(Boolean));
+  return startup.onRoleSettled(({ state }) => {
+    if (!state || ignored.has(state) || retiredRoles.has(state)) return;
+    ignored.add(state);
+    Promise.resolve()
+      .then(() => closeRoleFn(state))
+      .catch(() => undefined);
+  });
 }
 async function closeRoles(closeRoleFn, states) {
   const activeStates = states.filter(Boolean);

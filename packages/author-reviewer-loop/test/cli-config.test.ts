@@ -19,6 +19,8 @@ beforeEach(() => {
   delete process.env.AUTHOR_MODEL;
   delete process.env.REVIEWER_AGENT;
   delete process.env.REVIEWER_MODEL;
+  delete process.env.AUTHOR_SESSION_TURNS;
+  delete process.env.REVIEWER_SESSION_TURNS;
   delete process.env.ACP_REVIEW_CLI;
   delete process.env.ACP_REVIEW_TUI;
 });
@@ -168,7 +170,43 @@ describe('author-reviewer-loop CLI config', () => {
     expect(config.authorSettings.agentId).toBe('copilot');
     expect(config.authorSettings.model).toBe('gpt-5.4');
     expect(config.reviewerSettings.agentId).toBe('codex');
-    expect(config.reviewerSettings.model).toBe('gpt-5.4');
+    expect(config.reviewerSettings.model).toBe('gpt-5.5');
+  });
+
+  it('defaults to 20 rounds, 20-turn role sessions, and wrap enabled in TUI mode', () => {
+    const config = parseConfig([tempDir(), 'Build the thing', '--yes']);
+
+    expect(config.maxRounds).toBe(20);
+    expect(config.authorSettings.sessionTurns).toBe(20);
+    expect(config.reviewerSettings.sessionTurns).toBe(20);
+    expect(config.wrap).toBe(true);
+  });
+
+  it('reads independent role session turn limits from environment variables', () => {
+    process.env.AUTHOR_SESSION_TURNS = '5';
+    process.env.REVIEWER_SESSION_TURNS = '10';
+
+    const config = parseConfig([tempDir(), 'Build the thing', '--yes']);
+
+    expect(config.authorSettings.sessionTurns).toBe(5);
+    expect(config.reviewerSettings.sessionTurns).toBe(10);
+  });
+
+  it('rejects invalid role session turn limits instead of silently falling back', () => {
+    process.env.AUTHOR_SESSION_TURNS = '0';
+    expect(() => parseConfig([tempDir(), 'Build the thing', '--yes'])).toThrow('AUTHOR_SESSION_TURNS must be a positive integer.');
+
+    process.env.AUTHOR_SESSION_TURNS = '5';
+    process.env.REVIEWER_SESSION_TURNS = '2.5';
+    expect(() => parseConfig([tempDir(), 'Build the thing', '--yes'])).toThrow('REVIEWER_SESSION_TURNS must be a positive integer.');
+  });
+
+  it('lets explicit wrap environment flags override the default TUI wrap state', () => {
+    process.env.ACP_REVIEW_WRAP = '1';
+    expect(parseConfig([tempDir(), 'Build the thing', '--yes']).wrap).toBe(true);
+
+    process.env.ACP_REVIEW_WRAP = '0';
+    expect(parseConfig([tempDir(), 'Build the thing', '--yes']).wrap).toBe(false);
   });
 
   it('keeps non-predefined models as selectable custom model choices', () => {
@@ -182,11 +220,12 @@ describe('author-reviewer-loop CLI config', () => {
     expect(choices.map((choice) => choice.value)).toContain('gpt-5.4');
   });
 
-  it('uses the supported Codex GPT-5.4 model variants', () => {
+  it('uses the supported Codex model variants', () => {
     expect(modelChoicesForAgent('codex').map((choice) => choice.value)).toEqual([
-      'gpt-5.4',
+      'gpt-5.5',
       'gpt-5.4/medium',
-      'gpt-5.4/xhigh',
+      'gpt-5.4/high',
+      'gpt-5.5/xhigh',
     ]);
   });
 
@@ -232,6 +271,18 @@ describe('author-reviewer-loop CLI config', () => {
     expect(config.taskSource).toEqual({ kind: 'text' });
   });
 
+  it('resolves relative task files against the requested workspace instead of the launcher cwd', () => {
+    const cwd = tempDir();
+    const launcherCwd = tempDir();
+    const taskFile = path.join(cwd, 'task.txt');
+    fs.writeFileSync(taskFile, 'workspace task', 'utf8');
+
+    process.chdir(launcherCwd);
+    const config = parseConfig([cwd, 'task.txt', '--yes', '--cli']);
+
+    expect(config.task).toBe('workspace task');
+    expect(config.taskSource).toEqual({ kind: 'file', path: taskFile });
+  });
   it('formats the full task in the confirmation summary', () => {
     const task = ['first line', 'second line', 'third line'].join('\n');
     const config = parseConfig([tempDir(), task, '--yes', '--cli']);

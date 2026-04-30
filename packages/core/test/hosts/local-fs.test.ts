@@ -28,6 +28,20 @@ describe('createLocalFileSystemHost', () => {
     expect(res.content).toBe('hello');
   });
 
+  it('reads fresh on-disk content after a file changes instead of serving stale data', async () => {
+    const filePath = path.join(root, 'fresh.txt');
+    await writeFile(filePath, 'before');
+    const host = createLocalFileSystemHost({ root });
+
+    const first = await host.readTextFile({ sessionId: 's', path: 'fresh.txt' });
+    expect(first.content).toBe('before');
+
+    await writeFile(filePath, 'after');
+
+    const second = await host.readTextFile({ sessionId: 's', path: 'fresh.txt' });
+    expect(second.content).toBe('after');
+  });
+
   it('supports line/limit slicing on read', async () => {
     await writeFile(path.join(root, 'lines.txt'), 'a\nb\nc\nd');
     const host = createLocalFileSystemHost({ root });

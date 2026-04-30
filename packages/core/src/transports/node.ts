@@ -270,6 +270,23 @@ async function resolvePackageFallbackLaunch(params: {
     return packageLaunch(localBin, parsed.extraArgs, params.lookupStartedAt, false, parsed.packageSpec);
   }
 
+  const runtimeBin = resolvePackageBinFromRuntime(parsed.binName);
+  if (runtimeBin) {
+    return packageLaunch(runtimeBin, parsed.extraArgs, params.lookupStartedAt, false, parsed.packageSpec);
+  }
+
+  const rawFallbackCommand = resolveCommandOnPath(params.fallback.command);
+  if (rawFallbackCommand) {
+    return {
+      command: rawFallbackCommand,
+      args: [...params.fallback.args],
+      source: 'fallback',
+      lookupDurationMs: Date.now() - params.lookupStartedAt,
+      usedNpxFallback: true,
+      fallbackPackage: parsed.packageSpec,
+    };
+  }
+
   const globalBin = await resolvePackageBinFromNpmGlobalPrefix(parsed.binName);
   if (globalBin) {
     return packageLaunch(globalBin, parsed.extraArgs, params.lookupStartedAt, false, parsed.packageSpec);
@@ -303,7 +320,7 @@ function parseNpxPackageFallback(
   const packageIndex = fallback.args.findIndex((arg) => arg && !arg.startsWith('-'));
   if (packageIndex < 0) return null;
   const packageSpec = fallback.args[packageIndex];
-  if (!packageSpec || !packageSpec.includes('/')) return null;
+  if (!packageSpec) return null;
   return {
     packageSpec,
     binName: agent.command,
@@ -331,6 +348,17 @@ function packageLaunch(
 
 function resolvePackageBinFromProject(cwd: string, binName: string): string | null {
   let current = resolve(cwd);
+  while (true) {
+    const found = resolvePackageBinFromPrefix(current, binName);
+    if (found) return found;
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function resolvePackageBinFromRuntime(binName: string): string | null {
+  let current = resolve(import.meta.dirname ?? process.cwd());
   while (true) {
     const found = resolvePackageBinFromPrefix(current, binName);
     if (found) return found;

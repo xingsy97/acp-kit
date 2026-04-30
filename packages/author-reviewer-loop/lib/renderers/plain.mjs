@@ -140,8 +140,12 @@ export function createPlainRenderer() {
     const rows = [];
     let rest = text;
     while (rest.length > width) {
-      let cut = rest.lastIndexOf(' ', width);
-      if (cut <= 0) cut = width;
+      const cut = rest.lastIndexOf(' ', width);
+      if (cut <= 0) {
+        rows.push(rest.slice(0, width));
+        rest = rest.slice(width);
+        continue;
+      }
       rows.push(rest.slice(0, cut).trimEnd());
       rest = `  ${rest.slice(cut).trimStart()}`;
     }

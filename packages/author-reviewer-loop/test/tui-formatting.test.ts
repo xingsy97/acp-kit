@@ -5,6 +5,7 @@ import {
   formatTuiDashboardTitle,
   formatTuiEmptyState,
   formatTuiFinishSummary,
+  formatTuiPaneHeadlineFitted,
   formatTuiPaneHeadline,
   formatTuiPaneSummary,
   formatTuiPaneStatusLine,
@@ -19,6 +20,7 @@ import {
   renderTaskPreviewRows,
   renderFixedTaskPreviewRows,
   wrapTuiDisplayRows,
+  fitTuiDisplayText,
 } from '../lib/renderers/tui.mjs';
 
 describe('author-reviewer-loop TUI formatting helpers', () => {
@@ -101,6 +103,19 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
     })).toBe('AUTHOR · Round 2 · ▶ Running · Copilot (gpt-5.5)');
   });
 
+  it('keeps truncated model labels from showing a dangling open parenthesis', () => {
+    const fitted = fitTuiDisplayText(formatTuiPaneHeadline({
+      role: 'AUTHOR',
+      round: 1,
+      status: 'launching',
+      agent: 'GitHub Copilot',
+      model: 'gpt-5.4/high',
+    }), 57, { ellipsis: true });
+
+    expect(fitted).not.toMatch(/\([^)]*$/);
+    expect(fitted).toContain(')');
+    expect(fitted).toContain('...');
+  });
   it('sanitizes blank role labels and startup availability copy for professional presentation', () => {
     expect(formatTuiPaneHeadline({
       role: 'REVIEWER',
@@ -152,9 +167,9 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
     });
 
     expect(planSummary).toMatch(/^Plan 0\/1 → · working: Recover after contradictory reviewer guidance/);
-    expect(planSummary).toContain('…');
+    expect(planSummary).toContain('...');
     expect(emptyState).toMatch(/^Waiting for this turn to start\. Up next: Recover after contradictory reviewer guidance/);
-    expect(emptyState).toContain('…');
+    expect(emptyState).toContain('...');
   });
 
   it('keeps plan summaries stable for empty and all-null plan payloads', () => {
@@ -330,7 +345,7 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
 
   it('formats animated terminal tab titles for major TUI states', () => {
     expect(formatTuiTerminalTitle({ awaitingSetup: true, frame: 0 })).toBe('Spar ·   · setup');
-    expect(formatTuiTerminalTitle({ state: { phase: Phase.Launching }, frame: 1 })).toBe('Spar ◓ · launching');
+    expect(formatTuiTerminalTitle({ state: { phase: Phase.Launching }, frame: 1 })).toBe('Spar ◓ · Launching');
     expect(formatTuiTerminalTitle({
       state: {
         phase: Phase.Running,
@@ -342,7 +357,7 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
         }]]),
       },
       frame: 0,
-    })).toBe('Spar ◐ · R2 · REVIEWER running');
+    })).toBe('Spar ◐ · R2');
     expect(formatTuiTerminalTitle({ state: { phase: Phase.Done, result: { approved: true } } })).toBe('Spar · approved');
   });
 
@@ -396,34 +411,21 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
     expect(typeof row.text).toBe('string');
     expect(row.text.length).toBeGreaterThan(0);
   });
-
   it('renders the SPAR brand row with the title centered and gloves on both sides', () => {
     const row = formatSparBrandFrame({ frame: 0, width: 60, title: 'Spar', useEmoji: true });
-    // Two glove emojis flank the title.
     expect((row.text.match(/\u{1F94A}/gu) || []).length).toBe(2);
-    // Title appears in the row.
     expect(row.text).toContain('Spar');
-    // Title is centered: roughly equal whitespace on each side of "Spar".
     const firstGlove = row.text.indexOf('\u{1F94A}');
     const lastGlove = row.text.lastIndexOf('\u{1F94A}');
     expect(lastGlove).toBeGreaterThan(firstGlove);
     expect(row.impact).toBe(false);
   });
 
-  it('marks the impact frame on the brand row and replaces the inner spaces with sparks', () => {
+  it('marks the impact frame on the brand row and renders sparks', () => {
     const row = formatSparBrandFrame({ frame: 4, width: 60, title: 'Spar', useEmoji: true });
     expect(row.impact).toBe(true);
     expect(row.text).toContain('\u2736');
     expect(row.text).toContain('Spar');
-  });
-
-  it('pins the brand-row gloves at the edges when animated is false', () => {
-    const animated = formatSparBrandFrame({ frame: 0, width: 60, title: 'Spar', useEmoji: true, animated: true });
-    const still = formatSparBrandFrame({ frame: 7, width: 60, title: 'Spar', useEmoji: true, animated: false });
-    // Frame 0 is the max-gap frame so animated:true at frame 0 looks the
-    // same as animated:false at any frame: both pin gloves to the edges.
-    expect(still.text).toBe(animated.text);
-    expect(still.impact).toBe(false);
   });
 
   it('falls back to ASCII gloves on the brand row when emoji is disabled', () => {
@@ -431,5 +433,18 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
     expect(row.text).toContain('[X]');
     expect(row.text).not.toMatch(/\u{1F94A}/u);
     expect(row.text).toContain('Spar');
+  });
+
+  it('fits pane headlines without leaving a partial model parenthesis', () => {
+    const fitted = formatTuiPaneHeadlineFitted({
+      role: 'AUTHOR',
+      round: 1,
+      status: 'launching',
+      agent: 'GitHub Copilot',
+      model: 'gpt-5.4/high',
+      width: 43,
+    });
+    expect(fitted).not.toMatch(/\([^)]*$/);
+    expect(fitted).toContain(')');
   });
 });

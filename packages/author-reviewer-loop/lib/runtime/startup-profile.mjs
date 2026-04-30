@@ -11,7 +11,9 @@ export function createStartupProfiler({
   role,
   agent,
   onEvent,
-  log = (line) => process.stderr.write(`${line}\n`),
+  log = process.env.ACP_TUI_ACTIVE === '1'
+    ? () => {}
+    : (line) => process.stderr.write(`${line}\n`),
 } = {}) {
   const startedAt = Date.now();
   let lastAt = startedAt;

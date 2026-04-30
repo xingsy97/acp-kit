@@ -96,6 +96,107 @@ describe('author-reviewer-loop state reducer', () => {
     expect(pane?.reasoning.totalChars).toBe('Plan first then patch files'.length);
   });
 
+  it('does not inject spaces when consecutive deltas split a word mid-token', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'delta', flowId: 1, round: 1, role: 'AUTHOR', delta: 'Hello wor' });
+    state = reduce(state, { type: 'delta', flowId: 2, round: 1, role: 'AUTHOR', delta: 'ld' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 3, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'comp' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 4, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'lete' });
+
+    const pane = state.rounds.get(1)?.AUTHOR;
+    expect(pane?.flow).toEqual([
+      { id: 'flow-1', sourceId: 1, kind: 'text', text: 'Hello world' },
+      { id: 'flow-r1', sourceId: 'r1', kind: 'reasoning', text: 'complete' },
+    ]);
+    expect(pane?.reasoning.blocks[0]).toMatchObject({ content: 'complete', charCount: 'complete'.length });
+  });
+
+  it('does not inject spaces when longer words are split across streaming chunks', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'delta', flowId: 1, round: 1, role: 'AUTHOR', delta: 'implementa' });
+    state = reduce(state, { type: 'delta', flowId: 2, round: 1, role: 'AUTHOR', delta: 'tion details' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 3, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'distribu' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 4, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'tion plan' });
+
+    const pane = state.rounds.get(1)?.AUTHOR;
+    expect(pane?.flow).toEqual([
+      { id: 'flow-1', sourceId: 1, kind: 'text', text: 'implementation details' },
+      { id: 'flow-r1', sourceId: 'r1', kind: 'reasoning', text: 'distribution plan' },
+    ]);
+    expect(pane?.reasoning.blocks[0]).toMatchObject({
+      content: 'distribution plan',
+      charCount: 'distribution plan'.length,
+    });
+  });
+
+
+  it('does not inject spaces when chunks split common prefixes from the rest of a word', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'delta', flowId: 1, round: 1, role: 'AUTHOR', delta: 'un' });
+    state = reduce(state, { type: 'delta', flowId: 2, round: 1, role: 'AUTHOR', delta: 'reasonable output' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 3, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'inter' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 4, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'face changes' });
+
+    const pane = state.rounds.get(1)?.AUTHOR;
+    expect(pane?.flow).toEqual([
+      { id: 'flow-1', sourceId: 1, kind: 'text', text: 'unreasonable output' },
+      { id: 'flow-r1', sourceId: 'r1', kind: 'reasoning', text: 'interface changes' },
+    ]);
+    expect(pane?.reasoning.blocks[0]).toMatchObject({
+      content: 'interface changes',
+      charCount: 'interface changes'.length,
+    });
+  });
+
+  it('does not inject spaces when chunks split longer prefixes from the rest of a word', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'delta', flowId: 1, round: 1, role: 'AUTHOR', delta: 'pre' });
+    state = reduce(state, { type: 'delta', flowId: 2, round: 1, role: 'AUTHOR', delta: 'determined output' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 3, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'anti' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 4, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'virus checks' });
+
+    const pane = state.rounds.get(1)?.AUTHOR;
+    expect(pane?.flow).toEqual([
+      { id: 'flow-1', sourceId: 1, kind: 'text', text: 'predetermined output' },
+      { id: 'flow-r1', sourceId: 'r1', kind: 'reasoning', text: 'antivirus checks' },
+    ]);
+    expect(pane?.reasoning.blocks[0]).toMatchObject({
+      content: 'antivirus checks',
+      charCount: 'antivirus checks'.length,
+    });
+  });
+  it('does not inject spaces into common continuous words split across short chunks', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'delta', flowId: 1, round: 1, role: 'AUTHOR', delta: 'sub' });
+    state = reduce(state, { type: 'delta', flowId: 2, round: 1, role: 'AUTHOR', delta: 'process' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 3, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 're' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 4, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'viewer' });
+
+    const pane = state.rounds.get(1)?.AUTHOR;
+    expect(pane?.flow).toEqual([
+      { id: 'flow-1', sourceId: 1, kind: 'text', text: 'subprocess' },
+      { id: 'flow-r1', sourceId: 'r1', kind: 'reasoning', text: 'reviewer' },
+    ]);
+  });
+
+  it('keeps separate whole-word stream chunks spaced apart', () => {
+    let state = initialState();
+    state = reduce(state, { type: 'delta', flowId: 1, round: 1, role: 'AUTHOR', delta: 'patch' });
+    state = reduce(state, { type: 'delta', flowId: 2, round: 1, role: 'AUTHOR', delta: 'files' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 3, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'latest' });
+    state = reduce(state, { type: 'reasoningDelta', flowId: 4, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'tool' });
+
+    const pane = state.rounds.get(1)?.AUTHOR;
+    expect(pane?.flow).toEqual([
+      { id: 'flow-1', sourceId: 1, kind: 'text', text: 'patch files' },
+      { id: 'flow-r1', sourceId: 'r1', kind: 'reasoning', text: 'latest tool' },
+    ]);
+    expect(pane?.reasoning.blocks[0]).toMatchObject({
+      content: 'latest tool',
+      charCount: 'latest tool'.length,
+    });
+  });
+
   it('deduplicates overlapping reasoning chunks', () => {
     let state = initialState();
     state = reduce(state, { type: 'reasoningDelta', flowId: 1, reasoningId: 'r1', round: 1, role: 'AUTHOR', delta: 'read package' });
@@ -209,7 +310,8 @@ describe('author-reviewer-loop state reducer', () => {
     expect(round?.AUTHOR.status).toBe(PaneStatus.Running);
     expect(round?.REVIEWER.startedAt).toBeNull();
     expect(round?.REVIEWER.status).toBe(PaneStatus.Pending);
-    expect(state.statuses).toMatchObject({ AUTHOR: 'running', REVIEWER: PaneStatus.Pending });
+    expect(state.statuses).toMatchObject({ AUTHOR: PaneStatus.Running, REVIEWER: PaneStatus.Pending });
+    expect(state.statuses.AUTHOR).toBe(PaneStatus.Running);
   });
 
   it('keeps merged tool details when a later snapshot arrives', () => {

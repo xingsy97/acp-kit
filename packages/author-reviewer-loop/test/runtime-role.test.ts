@@ -1,8 +1,12 @@
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
+import { PassThrough } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   createAcpRuntime: vi.fn(),
+  nodeChildProcessTransport: vi.fn((options: unknown) => ({ kind: 'transport', options })),
   runtime: {
     newSession: vi.fn(),
     shutdown: vi.fn(),
@@ -40,13 +44,25 @@ vi.mock('@acp-kit/core/node', () => ({
     mocks.terminalResolveCwd = options.resolveCwd;
     return mocks.terminalHost;
   }),
+  nodeChildProcessTransport: mocks.nodeChildProcessTransport,
 }));
 
 const { closeRole, openRole } = await import('../lib/runtime/role.mjs');
+const { createAcpRuntime: mockedCreateAcpRuntime } = await import('@acp-kit/core');
+
+function createFallbackSpawn() {
+  return vi.fn((command: string, args: string[]) => ({
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill: () => true,
+  }));
+}
 
 describe('runtime role adapter', () => {
   beforeEach(() => {
     mocks.createAcpRuntime.mockReset();
+    mocks.nodeChildProcessTransport.mockClear();
     mocks.runtime.newSession.mockReset();
     mocks.runtime.shutdown.mockReset();
     mocks.session.setModel.mockReset();
@@ -70,6 +86,80 @@ describe('runtime role adapter', () => {
     mocks.runtime.newSession.mockResolvedValue(mocks.session);
     mocks.runtime.shutdown.mockResolvedValue(undefined);
     mocks.session.dispose.mockResolvedValue(undefined);
+  });
+
+
+  it('smoke-tests the runtime fallback path from this package for globally installed startup resolution', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'spar-runtime-fallback-'));
+    const fakeBinDir = path.join(tempRoot, 'fake-bin');
+    const originalPath = process.env.PATH;
+    try {
+      fs.mkdirSync(fakeBinDir, { recursive: true });
+      const fakeNpx = path.join(fakeBinDir, process.platform === 'win32' ? 'npx.cmd' : 'npx');
+      fs.writeFileSync(fakeNpx, process.platform === 'win32' ? '@echo off\r\n' : '#!/usr/bin/env node\n', 'utf8');
+      if (process.platform !== 'win32') fs.chmodSync(fakeNpx, 0o755);
+      process.env.PATH = `${fakeBinDir}${path.delimiter}${originalPath || ''}`;
+
+      const spawnProcess = createFallbackSpawn();
+      const { createAcpRuntime } = await vi.importActual<typeof import('@acp-kit/core')>('@acp-kit/core');
+      const runtime = createAcpRuntime({
+        agent: {
+          id: 'spar-runtime-fallback',
+          displayName: 'Spar Runtime Fallback',
+          command: 'missing-acp-agent',
+          args: [],
+          fallbackCommands: [{ command: 'npx', args: ['--yes', '@example/never-installed-missing-acp-agent@latest'] }],
+        },
+        cwd: tempRoot,
+        host: {},
+        spawnProcess,
+        connectionFactory: {
+          create() {
+            return {
+              initialize: async () => ({ authMethods: [] }),
+              newSession: async () => ({ sessionId: 'spar-runtime-fallback-session' }),
+              prompt: async () => ({ stopReason: 'end_turn' }),
+              cancel: async () => undefined,
+              dispose: async () => undefined,
+            } as never;
+          },
+        },
+      });
+
+      const session = await runtime.newSession();
+      expect(session.sessionId).toBe('spar-runtime-fallback-session');
+      expect(spawnProcess).toHaveBeenCalled();
+      expect(spawnProcess.mock.calls[0]?.[0]).toBe(fakeNpx);
+      expect(spawnProcess.mock.calls[0]?.[1]).toEqual(['--yes', '@example/never-installed-missing-acp-agent@latest']);
+      await runtime.shutdown();
+    } finally {
+      process.env.PATH = originalPath;
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }, 15000);
+  it('uses login-shell transport on non-Windows hosts so global installs resolve ACP like npx', async () => {
+    const state = await openRole({
+      role: 'AUTHOR',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: false,
+      renderer: {},
+      settings: {
+        agent: { displayName: 'Author', command: 'author' },
+        model: null,
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    });
+
+    expect(mocks.nodeChildProcessTransport).toHaveBeenCalledWith({
+      useLoginShell: process.platform !== 'win32',
+    });
+    expect(mocks.createAcpRuntime.mock.calls[0]?.[0]?.transport).toEqual({
+      kind: 'transport',
+      options: { useLoginShell: process.platform !== 'win32' },
+    });
+
+    await state.close();
   });
 
   it('disposes a created session when model setup fails', async () => {
@@ -188,6 +278,35 @@ describe('runtime role adapter', () => {
     await state.close();
   });
 
+  it('deduplicates repeated startup phases that map to the same role status message', async () => {
+    const onRoleStatus = vi.fn();
+
+    const state = await openRole({
+      role: 'AUTHOR',
+      cwd: process.cwd(),
+      trace: false,
+      captureTrace: false,
+      renderer: { onRoleStatus },
+      settings: {
+        agent: { id: 'author', displayName: 'Author', command: 'author' },
+        model: null,
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    });
+
+    onRoleStatus.mockClear();
+    const startupObserver = mocks.createAcpRuntime.mock.calls[0]?.[0]?.startupObserver;
+    startupObserver.mark({ phase: 'ACP connect begin', detail: {} });
+    startupObserver.mark({ phase: 'ACP initialize begin', detail: {} });
+    startupObserver.mark({ phase: 'ACP initialize begin', detail: {} });
+
+    expect(onRoleStatus.mock.calls).toEqual([
+      [{ role: 'AUTHOR', message: 'handshaking...' }],
+    ]);
+
+    await state.close();
+  });
+
   it('rejects terminal cwd paths outside the workspace root', async () => {
     const state = await openRole({
       role: 'AUTHOR',
@@ -211,6 +330,26 @@ describe('runtime role adapter', () => {
       expect(() => mocks.terminalResolveCwd?.(otherDrive)).toThrow('escapes workspace root');
     }
 
+    await state.close();
+  });
+
+  it('opens ACP sessions with an absolute workspace cwd', async () => {
+    const cwd = process.cwd();
+
+    const state = await openRole({
+      role: 'AUTHOR',
+      cwd,
+      trace: false,
+      captureTrace: false,
+      renderer: {},
+      settings: {
+        agent: { displayName: 'Author', command: 'author' },
+        model: null,
+        modelEnvName: 'AUTHOR_MODEL',
+      },
+    });
+
+    expect(mocks.runtime.newSession).toHaveBeenCalledWith({ cwd: path.resolve(cwd) });
     await state.close();
   });
 

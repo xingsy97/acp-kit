@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.14] - 2026-04-30
+
+### Changed
+
+- AUTHOR and REVIEWER sessions are now refreshed independently after `AUTHOR_SESSION_TURNS` / `REVIEWER_SESSION_TURNS` turns, defaulting to 20 turns per role instead of restarting the reviewer every round.
+- Codex model presets now default to `gpt-5.5` and list `gpt-5.5`, `gpt-5.4/medium`, `gpt-5.4/high`, and `gpt-5.5/xhigh`.
+- Spar now defaults to 20 review rounds instead of 10, keeps wrap enabled by default in TUI runs, and updates terminal-title, pane-title, and launch boxing-glove animations without full-screen redraw churn.
+
+### Fixed
+
+- Fixed relative task-file resolution, reviewer prompt scope, approval continuation UI behavior, startup status duplication, long plain-renderer line wrapping, thinking/text delta stitching, TUI model-title truncation, startup-profile TUI noise, and several launch/wait/run status regressions.
+
 ## [0.6.13] - 2026-04-30
 
 ### Added

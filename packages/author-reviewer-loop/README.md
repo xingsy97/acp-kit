@@ -12,7 +12,7 @@ A split-context ACP Kit demo that hosts two ACP agents over the same workspace:
 - **AUTHOR** modifies files for the requested task.
 - **REVIEWER** inspects the working tree in a separate context and replies `APPROVED` or a numbered list of issues.
 
-The two agents share the same workspace, but not the same conversation history. The CLI loops until the reviewer approves the result or `MAX_ROUNDS` is reached. The deliverable is the working tree on disk, not pasted code.
+The two agents share the same workspace, but not the same conversation history. Each role reuses its ACP session across turns until its configured session turn limit is reached. The CLI loops until the reviewer approves the result or `MAX_ROUNDS` is reached. The deliverable is the working tree on disk, not pasted code.
 
 ## Run With One Command
 
@@ -45,7 +45,7 @@ Plain CLI defaults:
 | Role | Agent | Model |
 | --- | --- | --- |
 | AUTHOR | GitHub Copilot | `gpt-5.4` |
-| REVIEWER | Codex | `gpt-5.4` |
+| REVIEWER | Codex | `gpt-5.5` |
 
 TUI mode opens a startup screen before the first run unless `--yes` / `ACP_REVIEW_YES=1` is set. The screen combines confirmation and setup: use `Tab` to switch AUTHOR/REVIEWER, `↑` / `↓` to pick an agent, `Space` to assign it to the active role, `m` to change that role's model, `e` to edit the task, `s` to toggle saving defaults, and `Enter` to start.
 
@@ -63,7 +63,7 @@ TUI model choices are predefined per agent:
 
 | Agent id | Model choices |
 | --- | --- |
-| `codex` | `gpt-5.4`, `gpt-5.5` |
+| `codex` | `gpt-5.5`, `gpt-5.4/medium`, `gpt-5.4/high`, `gpt-5.5/xhigh` |
 | `claude` | `opus`, `default (agent default)` |
 | `copilot` | `gpt-5.4`, `gpt-5.5`, `claude-sonnet-4.6`, `claude-opus-4.7`, `claude-opus-4.7-1m` |
 | `gemini`, `qwen`, `opencode` | `default (agent default)` |
@@ -169,8 +169,10 @@ Environment variables:
 | `AUTHOR_AGENT` | TUI: saved/choose; CLI: `copilot` | Agent that writes/modifies files. |
 | `AUTHOR_MODEL` | TUI: saved/choose; CLI: `gpt-5.4` | Model id passed via ACP `session/set_model`; set empty to skip. |
 | `REVIEWER_AGENT` | TUI: saved/choose; CLI: `codex` | Agent that reviews the working tree. |
-| `REVIEWER_MODEL` | TUI: saved/choose; CLI: `gpt-5.4` | Model id passed via ACP `session/set_model`; set empty to skip. |
-| `MAX_ROUNDS` | `10` | Maximum author/reviewer iterations. |
+| `REVIEWER_MODEL` | TUI: saved/choose; CLI: `gpt-5.5` | Model id passed via ACP `session/set_model`; set empty to skip. |
+| `MAX_ROUNDS` | `20` | Maximum author/reviewer iterations. |
+| `AUTHOR_SESSION_TURNS` | `20` | Maximum AUTHOR turns to run in one ACP session before opening a fresh AUTHOR session. |
+| `REVIEWER_SESSION_TURNS` | `20` | Maximum REVIEWER turns to run in one ACP session before opening a fresh REVIEWER session. |
 | `ACP_REVIEW_YES` | unset | Set to `1` to skip the confirmation prompt. |
 | `ACP_REVIEW_CLI` | unset | Set to `1` to use the plain line-based renderer (same as `--cli`). |
 | `ACP_REVIEW_TUI` | unset | Compatibility flag for the default Ink TUI renderer (same as `--tui`). |
@@ -181,6 +183,7 @@ Environment variables:
 
 - Two `createAcpRuntime(...)` instances, one per agent process.
 - Two sessions pointed at the same `cwd`, with separate author/reviewer contexts.
+- Independent per-role session refresh limits via `AUTHOR_SESSION_TURNS` and `REVIEWER_SESSION_TURNS` (default `20` each).
 - Per-session model selection via ACP `session/set_model`.
 - Startup model validation against each agent's advertised model list when available.
 - Handler-map dispatch over normalized `RuntimeSessionEvent`s.

@@ -26,6 +26,19 @@ export function envPositiveInt(name, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+export function envStrictPositiveInt(name, fallback) {
+  if (!(name in process.env)) return fallback;
+  const raw = process.env[name]?.trim() ?? '';
+  if (!/^\d+$/.test(raw)) {
+    throw createConfigurationError(name + ' must be a positive integer.');
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw createConfigurationError(name + ' must be a positive integer.');
+  }
+  return parsed;
+}
+
 function createConfigurationError(message) {
   const error = new Error(message);
   error.name = 'ConfigurationError';

@@ -5,8 +5,10 @@ export function formatRunSummary({ cwd, task, taskSource, authorSettings, review
   task:           ${task}
   author:         ${formatAgent(authorSettings)}
   author model:   ${authorSettings.model || '(agent default)'}
+  author session: ${authorSettings.sessionTurns} turn(s)
   reviewer:       ${formatAgent(reviewerSettings)}
   reviewer model: ${reviewerSettings.model || '(agent default)'}
+  reviewer session: ${reviewerSettings.sessionTurns} turn(s)
   max rounds:     ${maxRounds}
   trace:          ${trace ? 'enabled' : 'disabled'}
   renderer:       ${tui ? 'tui (ink)' : 'plain'}

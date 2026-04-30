@@ -11,8 +11,11 @@ import { writePreferences } from '../config/preferences.mjs';
 import { createStartupProfiler } from '../runtime/startup-profile.mjs';
 
 const DEFAULT_EDITOR_TIMEOUT_MS = 30 * 60 * 1000;
-const ENGINE_RENDER_FRAME_MS = 160;
-const ENGINE_ANIMATION_FRAME_MS = 1000;
+const ENGINE_RENDER_FRAME_MS = 250;
+const TUI_TITLE_FRAME_MS = 350;
+const TUI_CHROME_FRAME_MS = 220;
+const TUI_ANIMATION_SLOT_WIDTH = 9;
+const ASCII_ELLIPSIS = '...';
 const TUI_STATIC_STATUS_MARK = '•';
 const TUI_SPINNER_FRAMES = ['-', '\\', '|', '/'];
 const TUI_TITLE_SPINNER_FRAMES = ['◐', '◓', '◑', '◒'];
@@ -26,7 +29,6 @@ const FINISH_ANIMATION_FRAMES = 24;
 // for fluid motion. The banner is a slim 3-row strip above the
 // author/reviewer split (NOT a full-screen splash) so users always see
 // the panes and know which agents are starting.
-const SPAR_SPLASH_FRAME_MS = 120;
 // Per-frame inner gap (in columns) between the two gloves. The cycle
 // approaches → clashes → recoils → approaches again, looping
 // indefinitely so users keep seeing motion while launching takes time.
@@ -163,7 +165,9 @@ function fitText(text, width, { ellipsis = false } = {}) {
   const safeWidth = Math.max(0, width);
   const value = String(text ?? '');
   if (safeWidth === 0) return { text: '', width: 0 };
-  const target = ellipsis ? Math.max(0, safeWidth - 1) : safeWidth;
+  const ellipsisText = ellipsis ? fitAsciiEllipsis(safeWidth) : '';
+  const ellipsisWidth = displayWidth(ellipsisText);
+  const target = ellipsis ? Math.max(0, safeWidth - ellipsisWidth) : safeWidth;
   let used = 0;
   let result = '';
   for (const char of value) {
@@ -173,12 +177,27 @@ function fitText(text, width, { ellipsis = false } = {}) {
     used += charWidth;
   }
   if (ellipsis && used < displayWidth(value)) {
-    result += '…';
-    used += 1;
+    result = closeDanglingParen(result, target);
+    used = displayWidth(result);
+    result += ellipsisText;
+    used += ellipsisWidth;
   }
   return { text: result, width: used };
 }
 
+function fitAsciiEllipsis(width) {
+  return ASCII_ELLIPSIS.slice(0, Math.max(0, Math.min(ASCII_ELLIPSIS.length, width)));
+}
+
+function closeDanglingParen(text, maxWidth) {
+  let result = String(text ?? '').trimEnd();
+  if (result.lastIndexOf('(') <= result.lastIndexOf(')')) return result;
+  while (result && displayWidth(result) + 1 > maxWidth) result = result.slice(0, -1).trimEnd();
+  return result.lastIndexOf('(') > result.lastIndexOf(')') ? `${result})` : result;
+}
+export function fitTuiDisplayText(text, width, options = {}) {
+  return fitText(text, width, options).text;
+}
 function wrapDisplayLine(line, cols) {
   line = sanitizeDisplayText(line);
   if (cols <= 0) return [''];
@@ -231,7 +250,7 @@ function statusGlyph(status) {
   if (status === PaneStatus.Running) return '▶';
   if (status === PaneStatus.Completed) return '✓';
   if (status === PaneStatus.Failed) return '✖';
-  if (status === PaneStatus.Pending) return '…';
+  if (status === PaneStatus.Pending) return '...';
   if (status === 'launching') return '◌';
   return '•';
 }
@@ -245,7 +264,7 @@ export function renderTaskPreviewRows(task, cols, { prefix = 'task:     ', maxRo
   const safeCols = Math.max(1, cols);
   const rows = wrapDisplayLine(`${prefix}${taskSummary(task)}`, safeCols);
   if (rows.length <= maxRows) return { rows, truncated: false };
-  const hint = ' … [v view full task, e edit]';
+  const hint = ' ... [v view full task, e edit]';
   const visible = rows.slice(0, maxRows);
   const lastIndex = visible.length - 1;
   const fittedHint = fitText(hint, safeCols, { ellipsis: true }).text;
@@ -292,6 +311,35 @@ export function formatTuiPaneHeadline({ role, round, status, agent, model }) {
   return parts.join(' · ');
 }
 
+export function formatTuiPaneHeadlineFitted({ role, round, status, agent, model, width }) {
+  const safeWidth = Math.max(1, width);
+  const prefix = [
+    role,
+    `Round ${round ?? '-'}`,
+    `${statusGlyph(status)} ${statusLabel(status)}`,
+  ].join(' · ');
+  const modelLabel = `(${cleanDisplayLabel(model, 'default')})`;
+  const agentLabel = cleanDisplayLabel(agent, '(choose)');
+  const full = `${prefix} · ${agentLabel} ${modelLabel}`;
+  if (displayWidth(full) <= safeWidth) return full;
+
+  const modelWidth = Math.min(displayWidth(modelLabel), Math.max(2, Math.floor(safeWidth * 0.38)));
+  const fittedModel = fitModelLabel(modelLabel, modelWidth);
+  const agentWidth = Math.max(0, safeWidth - displayWidth(prefix) - displayWidth(' · ') - displayWidth(' ') - displayWidth(fittedModel));
+  if (agentWidth >= 4) {
+    return `${prefix} · ${fitText(agentLabel, agentWidth, { ellipsis: true }).text} ${fittedModel}`;
+  }
+  return fitText(`${prefix} · ${fittedModel}`, safeWidth, { ellipsis: true }).text;
+}
+
+function fitModelLabel(modelLabel, width) {
+  const safeWidth = Math.max(0, width);
+  if (displayWidth(modelLabel) <= safeWidth) return modelLabel;
+  if (safeWidth < 2) return fitText(modelLabel, safeWidth, { ellipsis: true }).text;
+  const inner = modelLabel.slice(1, -1);
+  const innerWidth = Math.max(0, safeWidth - 2);
+  return `(${fitText(inner, innerWidth, { ellipsis: true }).text})`;
+}
 export function formatTuiPlanSummary(entries) {
   const normalized = Array.isArray(entries) ? entries : [];
   if (normalized.length === 0) return 'Plan --';
@@ -399,7 +447,8 @@ export function formatSparBrandFrame({ frame = 0, width = 60, title = 'Spar', us
   const SPARK = '\u2736';
   const glove = useEmoji ? SPAR_SPLASH_GLOVE_EMOJI : SPAR_SPLASH_GLOVE_FALLBACK;
   const gloveWidth = useEmoji ? 2 : SPAR_SPLASH_GLOVE_FALLBACK.length;
-  const titleW = displayWidth(title);
+  const safeTitle = String(title ?? 'Spar');
+  const titleW = displayWidth(safeTitle);
   const minWidth = titleW + gloveWidth * 2 + 4;
   const safeWidth = Math.max(minWidth, Math.floor(width) || minWidth);
 
@@ -408,11 +457,8 @@ export function formatSparBrandFrame({ frame = 0, width = 60, title = 'Spar', us
   const gapBase = animated ? SPAR_SPLASH_GAPS[gapIndex] : SPAR_SPLASH_GAPS[0];
   const impact = animated && gapIndex === SPAR_SPLASH_IMPACT_INDEX;
 
-  // Each side has at most this much room between glove and title.
   const halfRoom = Math.floor((safeWidth - titleW) / 2) - gloveWidth;
   const dist = impact ? 1 : Math.min(gapBase, Math.max(0, halfRoom));
-
-  // Filler between glove and title — spaces normally, sparkles on impact.
   const leftFiller = impact ? `${SPARK} ` : ' '.repeat(Math.max(0, dist));
   const rightFiller = impact ? ` ${SPARK}` : ' '.repeat(Math.max(0, dist));
   const middleW = gloveWidth + displayWidth(leftFiller) + titleW + displayWidth(rightFiller) + gloveWidth;
@@ -420,7 +466,7 @@ export function formatSparBrandFrame({ frame = 0, width = 60, title = 'Spar', us
   const leftEdge = Math.floor(totalEdge / 2);
   const rightEdge = totalEdge - leftEdge;
 
-  const text = `${' '.repeat(leftEdge)}${glove}${leftFiller}${title}${rightFiller}${glove}${' '.repeat(rightEdge)}`;
+  const text = `${' '.repeat(leftEdge)}${glove}${leftFiller}${safeTitle}${rightFiller}${glove}${' '.repeat(rightEdge)}`;
   return { text, impact };
 }
 
@@ -503,8 +549,7 @@ export function formatTuiUsageLabel(usage) {
   return parts.join(' · ') || 'tokens --';
 }
 export function formatTuiTerminalTitle({ state, frame = 0, awaitingSetup = false, awaitingConfirm = false, editingTask = false, screen = 'flow', cancelled = false } = {}) {
-  const spinner = TUI_SPINNER_FRAMES[frame % TUI_SPINNER_FRAMES.length];
-  const titleSpinner = TUI_TITLE_SPINNER_FRAMES[frame % TUI_TITLE_SPINNER_FRAMES.length];
+  const spinner = TUI_TITLE_SPINNER_FRAMES[frame % TUI_TITLE_SPINNER_FRAMES.length];
   const waiting = TUI_WAIT_FRAMES[frame % TUI_WAIT_FRAMES.length];
   if (cancelled) return 'Spar · cancelled';
   if (editingTask) return `Spar ${spinner} · editing task`;
@@ -512,25 +557,12 @@ export function formatTuiTerminalTitle({ state, frame = 0, awaitingSetup = false
   if (awaitingConfirm) return `Spar ${waiting} · confirm`;
   if (state?.phase === Phase.Error) return 'Spar · error';
   if (state?.phase === Phase.Done) return state.result?.approved ? 'Spar · approved' : 'Spar · not approved';
-  if (state?.phase === Phase.Launching) return `Spar ${titleSpinner} · launching`;
+  if (state?.phase === Phase.Launching) return `Spar ${spinner} · Launching`;
 
   const latestRound = state?.latest ?? state?.order?.[state.order.length - 1] ?? null;
-  const round = latestRound != null ? state?.rounds?.get?.(latestRound) : null;
-  const runningRole = round?.AUTHOR?.status === PaneStatus.Running
-    ? 'AUTHOR'
-    : round?.REVIEWER?.status === PaneStatus.Running
-      ? 'REVIEWER'
-      : null;
-  const waitingRole = round?.AUTHOR?.status === PaneStatus.Pending
-    ? 'AUTHOR'
-    : round?.REVIEWER?.status === PaneStatus.Pending
-      ? 'REVIEWER'
-      : null;
   const roundText = latestRound != null ? `R${latestRound}` : 'R-';
-  if (runningRole) return `Spar ${titleSpinner} · ${roundText} · ${runningRole} running`;
-  if (waitingRole) return `Spar ${waiting} · ${roundText} · ${waitingRole} waiting`;
-  if (screen && screen !== 'flow') return `Spar · ${screen}`;
-  return `Spar ${titleSpinner} · running`;
+  if (screen && screen !== 'flow') return `Spar ${spinner} · ${screen}`;
+  return `Spar ${spinner} · ${roundText}`;
 }
 
 export function formatTuiAnimationLabel(status, frame = 0) {
@@ -579,6 +611,7 @@ export async function runTui({ config }) {
     useEffect,
     useState,
     useReducer,
+    useMemo,
   } = React;
 
   let approvalResolver = null;
@@ -1330,9 +1363,12 @@ export async function runTui({ config }) {
       case 'jumpLatest':
         if (a.order.length === 0) return s;
         return { ...s, selected: a.order[a.order.length - 1], follow: true, scrollAuthor: 0, scrollReviewer: 0 };
-      case 'autoFollow':
+      case 'autoFollow': {
         if (!s.follow || a.order.length === 0) return s;
-        return { ...s, selected: a.order[a.order.length - 1] };
+        const latest = a.order[a.order.length - 1];
+        if (s.selected === latest) return s;
+        return { ...s, selected: latest };
+      }
       case 'scroll': {
         const key = s.screen === 'trace'
           ? 'scrollTrace'
@@ -1412,6 +1448,185 @@ export async function runTui({ config }) {
   let runFailure = null;
   let runResult = null;
 
+  function phaseColor(phase, result) {
+    if (phase === Phase.Done) return result?.approved ? 'green' : 'yellow';
+    if (phase === Phase.Error) return 'red';
+    if (phase === Phase.Running) return 'green';
+    if (phase === Phase.Launching) return 'yellow';
+    return 'cyan';
+  }
+
+  function shouldRenderEngineAction(nextState, action, viewState) {
+    if (!action) return true;
+    if (action.type === 'result' || action.type === 'error') return true;
+    if (action.type === 'turnSnapshot') return false;
+    if (action.type === 'traceEntry') return viewState.screen === 'trace';
+    if (viewState.awaitingSetup || viewState.awaitingConfirm || viewState.editingTask || viewState.cancelled) return false;
+    if (viewState.screen === 'trace') return false;
+    if (viewState.screen === 'task' || viewState.screen === 'taskConfirm' || viewState.screen === 'error' || viewState.screen === 'finishing') return false;
+
+    const latestRound = nextState?.order?.[nextState.order.length - 1] ?? null;
+    const visibleRound = viewState.follow ? latestRound : (viewState.selected ?? latestRound);
+    const actionRound = Number.isFinite(action.round) ? action.round : null;
+
+    if (viewState.screen === 'tool') {
+      const selected = viewState.selectedTool;
+      if (!selected) return false;
+      if (actionRound !== selected.round || action.role !== selected.role) return false;
+      if (action.type === 'toolStart' || action.type === 'toolUpdate' || action.type === 'toolEnd') {
+        return !action.toolCallId || action.toolCallId === selected.toolCallId;
+      }
+      return action.type === 'usageUpdate' || action.type === 'turnCompleted' || action.type === 'turnFailed' || action.type === 'turnEnd';
+    }
+
+    if (viewState.screen !== 'flow') return false;
+    if (actionRound != null && visibleRound != null && actionRound !== visibleRound) return false;
+    return true;
+  }
+
+  function writeAt(row, col, text) {
+    if (!process.stdout.isTTY || !altScreenActive) return;
+    const safeRow = Math.max(1, Math.floor(row));
+    const safeCol = Math.max(1, Math.floor(col));
+    process.stdout.write(`\x1b[${safeRow};${safeCol}H${text}`);
+  }
+
+  function findAnimationSlotStart(fullText, animationText) {
+    if (!animationText) return -1;
+    const index = fullText.indexOf(animationText.trimStart());
+    if (index < 0) return -1;
+    return index + Math.max(0, animationText.length - animationText.trimStart().length);
+  }
+
+  function patchChromeAnimations({ state, view, size }) {
+    if (view.screen !== 'flow' || state.phase === Phase.Done || state.phase === Phase.Error) return;
+    const frame = patchChromeAnimations.frame = ((patchChromeAnimations.frame ?? 0) + 1) | 0;
+    const totalRows = Math.max(0, size.rows);
+    const headerHeight = Math.min(6, totalRows);
+    let remaining = totalRows - headerHeight;
+    const navHeight = Math.min(3, remaining);
+    remaining -= navHeight;
+    const footerHeight = Math.min(state.phase === Phase.Error ? 4 : 0, remaining);
+    remaining -= footerHeight;
+    const paneOuter = remaining;
+    const paneOuterCols = Math.max(4, Math.floor((Math.max(1, size.cols) - 1) / 2));
+    const selectedRound = view.selected ?? state.order[state.order.length - 1] ?? null;
+    const round = selectedRound != null ? state.rounds.get(selectedRound) : null;
+
+    patchHeaderBrandRow({ state, selectedRound, width: Math.max(1, size.cols - 4), frame });
+
+
+    if (paneOuter <= 0) return;
+    patchPaneAnimationSlot({ role: 'AUTHOR', pane: round?.AUTHOR, col: 1, row: headerHeight + 1, width: paneOuterCols, frame, state });
+    patchPaneAnimationSlot({ role: 'REVIEWER', pane: round?.REVIEWER, col: paneOuterCols + 2, row: headerHeight + 1, width: paneOuterCols, frame, state });
+  }
+
+
+  function patchHeaderBrandRow({ state, selectedRound, width, frame }) {
+    if (state.phase !== Phase.Launching) return;
+    const brandTitle = formatTuiDashboardTitle({
+      phase: state.phase,
+      result: state.result,
+      selectedRound,
+      totalRounds: state.order.length,
+      maxRounds: state.result?.maxRounds ?? config.maxRounds,
+    });
+    const brandRow = formatSparBrandFrame({
+      frame,
+      width,
+      title: brandTitle,
+      useEmoji: !process.env.ACP_SPLASH_NO_EMOJI,
+      animated: true,
+    });
+    writeAt(2, 3, padCell(brandRow.text, width));
+  }
+
+  function patchPaneAnimationSlot({ role, pane, col, row, width, frame, state }) {
+    const status = paneHasActivityForChrome(pane) ? pane.status : roleStatusToPaneStatusForChrome(state.statuses?.[role]);
+    const animation = formatTuiAnimationLabel(status, frame);
+    if (!animation) return;
+    const settings = role === 'AUTHOR' ? config.authorSettings : config.reviewerSettings;
+    const label = `${formatTuiPaneHeadlineFitted({
+      role,
+      round: state.order[state.order.length - 1] ?? null,
+      status,
+      agent: agentName(settings),
+      model: settings.model || 'default',
+      width: Math.max(1, width - 4 - TUI_ANIMATION_SLOT_WIDTH),
+    })}${padCell(animation, TUI_ANIMATION_SLOT_WIDTH)}`;
+    const safeWidth = Math.max(4, width);
+    const labelWidth = Math.max(0, safeWidth - 4);
+    const fitted = fitText(label, labelWidth, { ellipsis: true });
+    const labelText = ` ${fitted.text} `;
+    const slot = padCell(animation, TUI_ANIMATION_SLOT_WIDTH);
+    const slotStart = findAnimationSlotStart(labelText, slot);
+    if (slotStart < 0) return;
+    const totalFill = Math.max(0, safeWidth - displayWidth(labelText) - 2);
+    const leftFill = Math.floor(totalFill / 2);
+    writeAt(row, col + 1 + leftFill + slotStart, slot);
+  }
+
+  function paneHasActivityForChrome(pane) {
+    return Boolean(pane?.startedAt || pane?.finishedAt || pane?.flow?.length || pane?.lines?.length || pane?.current || pane?.tools?.length);
+  }
+  function roleStatusToPaneStatusForChrome(status) {
+    if (status === 'ready') return PaneStatus.Completed;
+    if (
+      String(status).startsWith('launching')
+      || String(status).startsWith('session ready')
+      || String(status).startsWith('spawning')
+      || String(status).startsWith('handshaking')
+      || String(status).startsWith('new session')
+    ) {
+      return 'launching';
+    }
+    return PaneStatus.Pending;
+  }
+  function DashboardHeader({ phase, result, selectedRound, totalRounds, maxRounds, cwd, task, headerCols, height, frame }) {
+    const safeHeaderCols = Math.max(1, headerCols);
+    const taskPreview = fixedTaskPreviewRows(task, safeHeaderCols);
+    const brandTitle = formatTuiDashboardTitle({
+      phase,
+      result,
+      selectedRound,
+      totalRounds,
+      maxRounds,
+    });
+    const brandRow = formatSparBrandFrame({
+      frame,
+      width: Math.max(20, safeHeaderCols),
+      title: brandTitle,
+      useEmoji: !process.env.ACP_SPLASH_NO_EMOJI,
+      animated: phase === Phase.Launching,
+    });
+    const color = phaseColor(phase, result);
+
+    return h(
+      Box,
+      {
+        flexDirection: 'column',
+        borderStyle: 'round',
+        borderColor: color,
+        paddingX: 1,
+        height,
+        overflow: 'hidden',
+      },
+      line(
+        h(
+          Text,
+          {
+            bold: true,
+            color: brandRow.impact ? 'yellow' : color,
+            wrap: 'truncate-end',
+          },
+          brandRow.text,
+        ),
+        'title',
+      ),
+      line(h(Text, { color: 'yellow', wrap: 'truncate-end' }, `workspace: ${cwd}`), 'cwd'),
+      ...taskPreview.rows.map((row, i) => line(h(Text, { color: i === 0 ? 'white' : 'cyan', wrap: 'truncate-end' }, row || ' '), `task-${i}`)),
+    );
+  }
   function App() {
     const app = useApp();
     const { stdout } = useStdout();
@@ -1423,13 +1638,6 @@ export async function runTui({ config }) {
         rows: stdout?.rows || 24,
         cols: stdout?.columns || 80,
       });
-      const [animationFrame, setAnimationFrame] = useState(0);
-      // Splash animation runs on its own faster timer so the boxing-
-      // gloves frames feel fluid (~120 ms) without forcing the rest of
-      // the dashboard to redraw at that rate. The interval below auto-
-      // stops once the engine leaves Phase.Launching, so the splash is
-      // strictly bounded to the cold-start window.
-      const [splashFrame, setSplashFrame] = useState(0);
     useEffect(() => {
       const onResize = () => setSize({ rows: stdout.rows, cols: stdout.columns });
       stdout?.on?.('resize', onResize);
@@ -1446,7 +1654,8 @@ export async function runTui({ config }) {
         pending = false;
         setTick((t) => (t + 1) | 0);
       };
-      const schedule = (action) => {
+      const schedule = (nextState, action) => {
+        if (!shouldRenderEngineAction(nextState, action, view)) return;
         pending = true;
         if (action?.type === 'result' || action?.type === 'error') {
           if (timeout) {
@@ -1458,12 +1667,23 @@ export async function runTui({ config }) {
         }
         if (!timeout) timeout = setTimeout(flush, ENGINE_RENDER_FRAME_MS);
       };
-      const off = ensureEngine().subscribe((_state, action) => schedule(action));
+      const off = ensureEngine().subscribe((nextState, action) => schedule(nextState, action));
       return () => {
         off();
         if (timeout) clearTimeout(timeout);
       };
-    }, [view.awaitingSetup]);
+    }, [
+      view.awaitingSetup,
+      view.awaitingConfirm,
+      view.editingTask,
+      view.cancelled,
+      view.screen,
+      view.follow,
+      view.selected,
+      view.selectedTool?.round,
+      view.selectedTool?.role,
+      view.selectedTool?.toolCallId,
+    ]);
 
     useEffect(() => {
       if (view.screen !== 'finishing') return undefined;
@@ -1478,17 +1698,26 @@ export async function runTui({ config }) {
     // Auto-follow: whenever a new round arrives keep the view pinned.
     const state = engine?.getState() ?? createEmptyEngineState();
     useEffect(() => {
-      setTerminalTitle(formatTuiTerminalTitle({
-        state,
-        frame: animationFrame,
-        awaitingSetup: view.awaitingSetup,
-        awaitingConfirm: view.awaitingConfirm,
-        editingTask: view.editingTask,
-        screen: view.screen,
-        cancelled: view.cancelled,
-      }));
-    }, [animationFrame, state.phase, state.latest, state.result?.approved, view.awaitingSetup, view.awaitingConfirm, view.editingTask, view.screen, view.cancelled]);
-
+      let frame = 0;
+      const write = () => {
+        const latestState = engine?.getState() ?? state;
+        setTerminalTitle(formatTuiTerminalTitle({
+          state: latestState,
+          frame,
+          awaitingSetup: view.awaitingSetup,
+          awaitingConfirm: view.awaitingConfirm,
+          editingTask: view.editingTask,
+          screen: view.screen,
+          cancelled: view.cancelled,
+        }));
+        patchChromeAnimations({ state: latestState, view, size });
+        frame = (frame + 1) | 0;
+      };
+      write();
+      if (view.screen === 'finishing' || view.cancelled || state.phase === Phase.Done || state.phase === Phase.Error) return undefined;
+      const interval = setInterval(write, Math.min(TUI_TITLE_FRAME_MS, TUI_CHROME_FRAME_MS));
+      return () => clearInterval(interval);
+    }, [state.phase, state.latest, state.result?.approved, view.awaitingSetup, view.awaitingConfirm, view.editingTask, view.screen, view.cancelled, view.selected, view.focus, size.rows, size.cols]);
     useEffect(() => {
       dispatchView({ type: 'autoFollow', order: state.order });
     }, [state.order.length]);
@@ -1498,34 +1727,6 @@ export async function runTui({ config }) {
       approvalBellRung = true;
       if (process.stdout.isTTY) process.stdout.write('\x07');
     }, [state.phase, state.result?.approved]);
-
-    useEffect(() => {
-      if (view.screen === 'finishing') return undefined;
-      if (view.cancelled || state.phase === Phase.Done || state.phase === Phase.Error) return undefined;
-      const interval = setInterval(() => setAnimationFrame((frame) => (frame + 1) | 0), ENGINE_ANIMATION_FRAME_MS);
-      return () => clearInterval(interval);
-    }, [view.screen, view.cancelled, state.phase]);
-
-    // Drive the SPAR launch banner animation only while the engine is
-    // still cold-starting (Phase.Launching). The frame counter
-    // increments forever; `formatSparSplashFrame` takes the modulo of
-    // SPAR_SPLASH_GAPS so the gloves loop approach → clash → recoil
-    // continuously, signaling ongoing work to the user. Once the
-    // engine flips to Phase.Running this interval is torn down and the
-    // banner unmounts on the next render.
-    useEffect(() => {
-      if (state.phase !== Phase.Launching) {
-        if (splashFrame !== 0) setSplashFrame(0);
-        return undefined;
-      }
-      if (view.awaitingSetup || view.awaitingConfirm || view.cancelled) return undefined;
-      const interval = setInterval(
-        () => setSplashFrame((frame) => (frame + 1) | 0),
-        SPAR_SPLASH_FRAME_MS,
-      );
-      return () => clearInterval(interval);
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [state.phase, view.awaitingSetup, view.awaitingConfirm, view.cancelled]);
 
     // Kick off the run exactly once, but only after the user confirms (or
     // immediately if --yes / ACP_REVIEW_YES skipped the prompt).
@@ -1759,58 +1960,20 @@ export async function runTui({ config }) {
     const total = state.order.length;
     const idx = selectedRound == null ? -1 : state.order.indexOf(selectedRound);
 
-    function phaseColor(phase, result) {
-      if (phase === Phase.Done) return result?.approved ? 'green' : 'yellow';
-      if (phase === Phase.Error) return 'red';
-      if (phase === Phase.Running) return 'green';
-      if (phase === Phase.Launching) return 'yellow';
-      return 'cyan';
-    }
-
     // ---- header --------------------------------------------------------
     const taskPreview = fixedTaskPreviewRows(config.task, headerCols);
-    const brandTitle = formatTuiDashboardTitle({
+    const header = h(DashboardHeader, {
       phase: state.phase,
       result: state.result,
       selectedRound,
       totalRounds: total,
       maxRounds: state.result?.maxRounds ?? config.maxRounds,
+      cwd: config.cwd,
+      task: config.task,
+      headerCols,
+      height: headerHeight,
+      frame: 0,
     });
-    // Row 1 of the header: animated boxing gloves close in on the brand
-    // name during launch; gloves stay pinned at the edges otherwise.
-    const useBrandEmoji = !process.env.ACP_SPLASH_NO_EMOJI;
-    const brandRow = formatSparBrandFrame({
-      frame: splashFrame,
-      width: Math.max(20, headerCols),
-      title: brandTitle,
-      useEmoji: useBrandEmoji,
-      animated: state.phase === Phase.Launching,
-    });
-    const header = h(
-      Box,
-      {
-        flexDirection: 'column',
-        borderStyle: 'round',
-        borderColor: phaseColor(state.phase, state.result),
-        paddingX: 1,
-        height: headerHeight,
-        overflow: 'hidden',
-      },
-      line(
-        h(
-          Text,
-          {
-            bold: true,
-            color: brandRow.impact ? 'yellow' : phaseColor(state.phase, state.result),
-            wrap: 'truncate-end',
-          },
-          brandRow.text,
-        ),
-        'title',
-      ),
-      line(h(Text, { color: 'yellow', wrap: 'truncate-end' }, `workspace: ${config.cwd}`), 'cwd'),
-      ...taskPreview.rows.map((row, i) => line(h(Text, { color: i === 0 ? 'white' : 'cyan', wrap: 'truncate-end' }, row || ' '), `task-${i}`)),
-    );
 
     function toolsForSelection() {
       const pane = view.focus === 'AUTHOR' ? round?.AUTHOR : round?.REVIEWER;
@@ -1993,6 +2156,14 @@ export async function runTui({ config }) {
       // text entirely (overflow:hidden on the pane keeps us inside bounds).
       const textBudget = Math.max(0, paneInner - footerRows);
       const scroll = role === 'AUTHOR' ? view.scrollAuthor : view.scrollReviewer;
+      const selectedToolIdHere = view.selectedTool?.round === selectedRound
+        && view.selectedTool?.role === role
+        ? view.selectedTool.toolCallId
+        : null;
+      const expandedFlowRows = useMemo(
+        () => visibleFlowRows(pane, paneCols, selectedToolIdHere),
+        [pane?.flow, pane?.lines, pane?.current, pane?.status, paneCols, selectedToolIdHere, view.wrap],
+      );
 
       let visible;
       let visibleStart = 0;
@@ -2013,29 +2184,25 @@ export async function runTui({ config }) {
         }];
         while (visible.length < textBudget) visible.push({ kind: 'text', text: '' });
       } else {
-        const selectedToolIdHere = view.selectedTool?.round === selectedRound
-          && view.selectedTool?.role === role
-          ? view.selectedTool.toolCallId
-          : null;
-        const expanded = visibleFlowRows(pane, paneCols, selectedToolIdHere);
         // Scroll: 0 means pin to bottom (last `textBudget` lines visible).
-        const end = Math.max(textBudget, expanded.length - scroll);
+        const end = Math.max(textBudget, expandedFlowRows.length - scroll);
         const start = Math.max(0, end - textBudget);
         visibleStart = start;
-        visible = expanded.slice(start, end);
+        visible = expandedFlowRows.slice(start, end);
       }
       while (visible.length < textBudget) visible.push({ kind: 'text', text: '' });
 
       const settings = role === 'AUTHOR' ? config.authorSettings : config.reviewerSettings;
       const agent = agentName(settings);
       const model = settings.model || 'default';
-      const progress = animationLabel(status, animationFrame);
-      const headerLabel = `${formatTuiPaneHeadline({
+      const progress = animationLabel(status, 0);
+      const headerLabel = `${formatTuiPaneHeadlineFitted({
         role,
         round: selectedRound,
         status,
         agent,
         model,
+        width: Math.max(1, paneOuterCols - 4 - TUI_ANIMATION_SLOT_WIDTH),
       })}${progress}`;
       const usageLabel = formatUsage(pane?.usage);
       const timingLabel = formatDuration(paneElapsedMs(pane));
@@ -2527,7 +2694,7 @@ export async function runTui({ config }) {
             paddingY: 1,
             overflow: 'hidden',
           },
-          h(Text, { color: 'cyan', bold: true }, `${TUI_SPINNER_FRAMES[animationFrame % TUI_SPINNER_FRAMES.length]} Opening task editor`),
+          h(Text, { color: 'cyan', bold: true }, `${TUI_SPINNER_FRAMES[0]} Opening task editor`),
           h(Text, { dimColor: true }, 'The TUI is paused while your editor is active.'),
           h(Text, { dimColor: true }, 'Save and close the editor to return here.'),
         ),
@@ -2578,7 +2745,7 @@ export async function runTui({ config }) {
             height: size.rows,
             overflow: 'hidden',
           },
-          h(Text, { bold: true, color: 'cyan' }, `${TUI_SPINNER_FRAMES[animationFrame % TUI_SPINNER_FRAMES.length]} ${modeTitle}`),
+          h(Text, { bold: true, color: 'cyan' }, modeTitle),
           h(Text, { dimColor: true }, 'Configure the two agents before launching the review loop.'),
           h(Text, null, ''),
           h(Text, { color: 'yellow', wrap: 'truncate-end' }, `Workspace   ${config.cwd}`),

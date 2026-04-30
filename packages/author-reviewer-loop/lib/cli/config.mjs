@@ -4,7 +4,7 @@ import process from 'node:process';
 import { Command } from 'commander';
 import { agents, defaults } from '../config/agents.mjs';
 import { readPreferences, normalizePreferences, preferencesFilePath as defaultPreferencesFilePath } from '../config/preferences.mjs';
-import { env, envFlag, envPositiveInt } from './env.mjs';
+import { env, envFlag, envPositiveInt, envStrictPositiveInt } from './env.mjs';
 
 export function parseRunConfig({ argv, preferences, preferencesPath } = {}) {
   let parsedArgs;
@@ -24,6 +24,8 @@ Environment:
   REVIEWER_AGENT=copilot|claude|codex|gemini|qwen|opencode TUI: no built-in default; CLI default: ${defaults.reviewerAgent}
   REVIEWER_MODEL=<model-id>                                TUI: chosen per agent; CLI default: ${defaults.reviewerModel}
   MAX_ROUNDS=<n>                                            default: ${defaults.maxRounds}
+  AUTHOR_SESSION_TURNS=<n>                                  default: ${defaults.sessionTurns}
+  REVIEWER_SESSION_TURNS=<n>                                default: ${defaults.sessionTurns}
   Saved config: ${defaultPreferencesFilePath()}
   ACP_REVIEW_YES=1                                          skip confirmation prompt
   ACP_REVIEW_CLI=1                                          use the plain line-based renderer
@@ -39,7 +41,7 @@ Environment:
   else program.parse();
 
   const cwd = path.resolve(parsedArgs.cwdArg);
-  const { task, taskSource } = resolveTask(parsedArgs.taskParts);
+  const { task, taskSource } = resolveTask(parsedArgs.taskParts, cwd);
   const opts = program.opts();
   const tui = resolveRendererMode(opts);
   const resolvedPreferencesPath = preferencesPath ?? defaultPreferencesFilePath();
@@ -81,6 +83,7 @@ Environment:
       model: authorResolved.model,
       modelSource: authorResolved.modelSource,
       modelEnvName: 'AUTHOR_MODEL',
+      sessionTurns: envStrictPositiveInt('AUTHOR_SESSION_TURNS', defaults.sessionTurns),
       prompt: ({ round, feedback }) => createAuthorPrompt({
         cwd,
         task: config.task,
@@ -95,6 +98,7 @@ Environment:
       model: reviewerResolved.model,
       modelSource: reviewerResolved.modelSource,
       modelEnvName: 'REVIEWER_MODEL',
+      sessionTurns: envStrictPositiveInt('REVIEWER_SESSION_TURNS', defaults.sessionTurns),
       prompt: ({ round, feedback, authorReply }) => createReviewerPrompt({
         cwd,
         task: config.task,
@@ -104,6 +108,11 @@ Environment:
       }),
     },
   };
+  const wrapEnvConfigured = ('SPAR_WRAP_ENABLED' in process.env) || ('ACP_REVIEW_WRAP' in process.env);
+  const wrapEnvEnabled = envFlag('SPAR_WRAP_ENABLED') || envFlag('ACP_REVIEW_WRAP');
+  config.wrap = tui
+    ? (wrapEnvConfigured ? wrapEnvEnabled : true)
+    : wrapEnvEnabled;
   return config;
 }
 
@@ -249,11 +258,13 @@ function resolveRendererMode(opts) {
   return true;
 }
 
-function resolveTask(taskParts) {
+function resolveTask(taskParts, cwd) {
   const raw = taskParts.join(' ').trim();
   if (!raw) return { task: raw, taskSource: { kind: 'text' } };
 
-  const candidate = path.resolve(raw);
+  const candidate = path.isAbsolute(raw)
+    ? path.resolve(raw)
+    : path.resolve(cwd, raw);
   if (isReadableFile(candidate)) {
     return {
       task: fs.readFileSync(candidate, 'utf8'),

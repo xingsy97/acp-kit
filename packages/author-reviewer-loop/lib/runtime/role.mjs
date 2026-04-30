@@ -4,18 +4,24 @@ import {
   createAcpRuntime,
   createRuntimeInspector,
 } from '@acp-kit/core';
-import { createLocalFileSystemHost, createLocalTerminalHost } from '@acp-kit/core/node';
+import { createLocalFileSystemHost, createLocalTerminalHost, nodeChildProcessTransport } from '@acp-kit/core/node';
 import { formatEnvAssignment } from '../config/shell.mjs';
 import { createStartupProfiler, roleStatusMessageForPhase } from './startup-profile.mjs';
 
 export async function openRole({ role, settings, cwd, trace, captureTrace, renderer }) {
+  let lastRoleStatusMessage = null;
+  const emitRoleStatus = (message) => {
+    if (!message || message === lastRoleStatusMessage) return;
+    lastRoleStatusMessage = message;
+    renderer.onRoleStatus?.({ role, message });
+  };
   const startupProfile = createStartupProfiler({
     scope: 'role-startup',
     role,
     agent: settings.agent,
     onEvent: (event) => {
       const message = roleStatusMessageForPhase(event);
-      if (message) renderer.onRoleStatus?.({ role, message });
+      emitRoleStatus(message);
     },
   });
   startupProfile.mark({
@@ -32,11 +38,14 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
   const terminalHost = createLocalTerminalHost({
     resolveCwd: (requestedCwd) => resolveTerminalCwd(cwd, requestedCwd),
   });
-  renderer.onRoleStatus?.({ role, message: 'launching...' });
+  emitRoleStatus('launching...');
 
   const runtime = createAcpRuntime({
     agent: settings.agent,
     inspector,
+    transport: nodeChildProcessTransport({
+      useLoginShell: process.platform !== 'win32',
+    }),
     host: {
       ...fsHost,
       ...terminalHost,
@@ -51,7 +60,7 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
   let unsubscribeUsage = () => {};
   let unsubscribePlan = () => {};
   try {
-    session = await runtime.newSession({ cwd });
+    session = await runtime.newSession({ cwd: resolve(cwd) });
     if (renderer.onUsageUpdate) {
       unsubscribeUsage = session.on('session.usage.updated', (event) => {
         if (process.env.ACP_REVIEW_DEBUG_USAGE) {
@@ -68,16 +77,16 @@ export async function openRole({ role, settings, cwd, trace, captureTrace, rende
       });
     }
     if (settings.model) {
-      renderer.onRoleStatus?.({ role, message: `session ready, setting model ${settings.model}...` });
+      emitRoleStatus(`session ready, setting model ${settings.model}...`);
       await setRequiredModel({ role, session, settings });
     } else {
-      renderer.onRoleStatus?.({ role, message: 'session ready, leaving default model unchanged...' });
+      emitRoleStatus('session ready, leaving default model unchanged...');
     }
     startupProfile.mark({
       phase: 'role ready',
       detail: { model: settings.model ?? null },
     });
-    renderer.onRoleStatus?.({ role, message: 'ready' });
+    emitRoleStatus('ready');
     return {
       role,
       inspector,

@@ -8,6 +8,20 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.6.14] - 2026-04-30
+
+### Changed
+
+- `@acp-kit/author-reviewer-loop` / `@acp-kit/spar` now refreshes AUTHOR and REVIEWER ACP sessions independently after `AUTHOR_SESSION_TURNS` / `REVIEWER_SESSION_TURNS` turns, defaulting to 20 turns per role.
+- `@acp-kit/author-reviewer-loop` / `@acp-kit/spar` defaults to 20 review rounds, keeps TUI wrapping enabled by default, and updates Codex presets to `gpt-5.5`, `gpt-5.4/medium`, `gpt-5.4/high`, and `gpt-5.5/xhigh` with `gpt-5.5` as the default Codex reviewer model.
+- `@acp-kit/author-reviewer-loop` / `@acp-kit/spar` TUI animation updates now avoid full-screen redraw churn while preserving terminal-title animation, pane progress animation, and the launching boxing-glove header animation.
+
+### Fixed
+
+- `@acp-kit/core` resolves scoped and unscoped package fallback bins from the project/runtime install tree before falling back to raw `npx`, improving globally installed Spar startup behavior.
+- `@acp-kit/core` local filesystem reads now return fresh on-disk content after edits instead of serving stale file text.
+- `@acp-kit/author-reviewer-loop` / `@acp-kit/spar` fixes relative task-file resolution, reviewer prompt scope, approval continuation UI behavior, startup status duplication, long plain-renderer line wrapping, thinking/text delta stitching, TUI model-title truncation, startup-profile TUI noise, and several launch/wait/run status regressions.
+
 ## [0.6.13] - 2026-04-30
 
 ### Added

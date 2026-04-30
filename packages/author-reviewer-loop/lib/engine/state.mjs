@@ -230,12 +230,33 @@ function appendStreamText(previous, next) {
   if (!previous) return next;
   if (next === previous || next.startsWith(previous)) return next;
   const overlap = suffixPrefixOverlap(previous, next);
-  if (overlap > 0) return previous + next.slice(overlap);
+  if (overlap > 1) return previous + next.slice(overlap);
   if (/\s$/.test(previous) || /^\s/.test(next)) return previous + next;
-  if (/[A-Za-z0-9)]$/.test(previous) && /^[A-Za-z0-9(`]/.test(next)) return `${previous} ${next}`;
+  if (/[0-9]$/.test(previous) && /^[0-9]/.test(next)) {
+    return previous + next;
+  }
+  if (/[A-Za-z]$/.test(previous) && /^[A-Za-z]/.test(next)) {
+    return looksLikeSplitWord(previous, next) ? previous + next : `${previous} ${next}`;
+  }
+  if (/[A-Za-z0-9)]$/.test(previous) && /^[(`]/.test(next)) {
+    return previous + next;
+  }
   return previous + next;
 }
 
+function looksLikeSplitWord(previous, next) {
+  const previousTail = previous.match(/([A-Za-z]+)$/)?.[1] ?? '';
+  const nextHead = next.match(/^([A-Za-z]+)/)?.[1] ?? '';
+  if (!previousTail || !nextHead) return false;
+  const previousTailLower = previousTail.toLowerCase();
+  if (previousTail.length <= 3) return true;
+  if (nextHead.length <= 3) return true;
+  if (previousTail.length <= 4 && nextHead.length <= 4) return true;
+  if (/^(?:un|re|dis|pre|sub|mis|de|over|under|out|co|non|semi|bi|tri|anti|auto|counter|hyper|infra|inter|macro|micro|multi|pseudo|super|tele|thermo|trans|ultra)$/i.test(previousTailLower)) {
+    return true;
+  }
+  return /^(?:tion|sion|ation|ition|ption|ction|ctions|tions|sions|mation|cation|fication|gation|lation|ration|mentation|umentation|ment|ments|ness|less|able|ible|ally|fully|ously|ingly|edly|ities|ality|istic|ology|graphy|scope|ware|ship|hood|ward|wards|ized|ising|izing|ed|er|ers|est|ly|al|ial|ual|ive|ives|ize|ise|ous|ant|ent)$/i.test(nextHead);
+}
 function suffixPrefixOverlap(left, right) {
   const max = Math.min(left.length, right.length);
   for (let length = max; length > 0; length -= 1) {
@@ -465,7 +486,7 @@ export function reduce(state, action) {
         ...state,
         phase: Phase.Running,
         result: null,
-        statuses: { ...state.statuses, [action.role]: 'running', [otherRole]: PaneStatus.Pending },
+        statuses: { ...state.statuses, [action.role]: PaneStatus.Running, [otherRole]: PaneStatus.Pending },
       };
       const next = ensureRound(base, action.round);
       return patchPane(next, action.round, action.role, (p) => ({

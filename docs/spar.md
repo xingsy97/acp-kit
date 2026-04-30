@@ -13,7 +13,7 @@ them sparring until one approves the other's work:
   `APPROVED` or a numbered list of issues.
 
 The two agents share the same workspace, but **not** the same conversation
-history. Spar loops until the reviewer approves the result or `MAX_ROUNDS`
+history. Each role reuses its ACP session across turns until its configured session turn limit is reached. Spar loops until the reviewer approves the result or `MAX_ROUNDS`
 is reached. The deliverable is the working tree on disk, not pasted code.
 
 Spar is built on top of [`@acp-kit/core`](./getting-started.md) and ships as
@@ -82,10 +82,12 @@ Plain CLI defaults:
 | Role     | Agent          | Model     |
 | -------- | -------------- | --------- |
 | AUTHOR   | GitHub Copilot | `gpt-5.4` |
-| REVIEWER | Codex          | `gpt-5.4` |
+| REVIEWER | Codex          | `gpt-5.5` |
 
 Supported built-in agent ids: `copilot`, `claude`, `codex`, `gemini`, `qwen`,
 `opencode`.
+
+Codex model presets are `gpt-5.5`, `gpt-5.4/medium`, `gpt-5.4/high`, and `gpt-5.5/xhigh`; `gpt-5.5` is the default Codex reviewer model.
 
 Override per role with environment variables:
 
@@ -100,6 +102,15 @@ model. When an agent reports an available model list, the CLI validates the
 configured model before Round 1 starts and prints the available list with a
 shell-appropriate environment variable example if the configured model is not
 available.
+
+Runtime controls:
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `MAX_ROUNDS` | `20` | Maximum author/reviewer iterations. |
+| `AUTHOR_SESSION_TURNS` | `20` | Maximum AUTHOR turns to run in one ACP session before opening a fresh AUTHOR session. |
+| `REVIEWER_SESSION_TURNS` | `20` | Maximum REVIEWER turns to run in one ACP session before opening a fresh REVIEWER session. |
+| `SPAR_WRAP_ENABLED` / `ACP_REVIEW_WRAP` | TUI on, CLI off | Explicitly enable or disable soft wrapping. |
 
 ## Renderers
 
@@ -134,9 +145,7 @@ The Ink-based fullscreen TUI is the default renderer. Pass `--cli` (or set
   flood the pane.
 - Press `[` / `]` to select a concrete tool call, then `Enter` or `d` to
   inspect its full input and output. `Esc` or `q` returns to the flow view.
-- Engine-driven re-renders are batched to ~50 ms frames during streaming to
-  avoid lower-half flicker; `result` and `error` actions still flush
-  immediately.
+- Engine-driven re-renders are batched during streaming to avoid lower-half flicker; terminal-title and pane-title animations are updated separately from full React renders.
 - TUI mode captures ACP wire messages for the trace view automatically.
   `ACP_REVIEW_TRACE=1` is only needed when you also want startup-failure
   traces printed to stderr.
@@ -163,7 +172,7 @@ Each round consists of two turns:
    because earlier rounds looked different.
 
 The loop stops when REVIEWER replies `APPROVED` on its own line, when
-`MAX_ROUNDS` is reached, or when the user cancels. Pressing `f` after
+`MAX_ROUNDS` is reached, or when the user cancels. AUTHOR and REVIEWER sessions refresh independently after `AUTHOR_SESSION_TURNS` / `REVIEWER_SESSION_TURNS` turns. Pressing `f` after
 approval forces another round in the TUI.
 
 ## Diagnostics

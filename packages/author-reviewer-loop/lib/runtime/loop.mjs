@@ -28,6 +28,8 @@ export async function runAuthorReviewerLoop({ config, renderer }) {
         case 'turnCompleted':   return renderer.onTurnCompleted?.(event);
         case 'turnFailed':      return renderer.onTurnFailed?.(event);
         case 'turnEnd':         return renderer.onTurnEnd?.(event);
+        case 'approvalPending': return renderer.onApprovalPending?.(event.result);
+        case 'approvalContinued': return renderer.onApprovalContinued?.(event);
         case 'result':          return renderer.onResult?.(event.result);
         default:                return undefined;
       }

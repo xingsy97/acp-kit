@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  CACHE_FILE,
   compareVersions,
   shouldPromptUpdate,
   fetchLatestVersion,
@@ -70,6 +71,7 @@ const memoryFs = () => {
         }
         return files.get(p);
       },
+      mkdir: async () => {},
       writeFile: async (p, data) => { files.set(p, data); },
     },
   };
@@ -150,19 +152,29 @@ describe('runUpdateCheck', () => {
   it('skips network calls when a fresh cache entry exists', async () => {
     const deps = baseDeps();
     deps._files.set(
-      `${process.env.HOME ?? process.env.USERPROFILE ?? ''}/.acp-kit-spar-update.json`,
+      CACHE_FILE,
       JSON.stringify({ checkedAt: deps.now - 1000, latest: '0.6.12' }),
     );
-    // We can't easily inject the cache path in this test, so instead seed
-    // it under a path the helper actually reads. Easier: exercise the
-    // fresh-fetch path here and confirm cache *invalidation* in the next
-    // test. Rewrite this expectation:
-    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, json: () => ({ version: '0.6.12' }) });
+    const fetchImpl = vi.fn();
     const promptImpl = vi.fn().mockResolvedValue(false);
     const installImpl = vi.fn();
     const result = await runUpdateCheck({ ...deps, fetchImpl, promptImpl, installImpl });
-    expect(['declined', 'no-update']).toContain(result);
-    // Cache file was written (best-effort, not asserted on path).
-    expect(deps._files.size).toBeGreaterThanOrEqual(0);
+    expect(result).toBe('declined');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('stores the update-check cache under the ACP Kit Spar directory', async () => {
+    const deps = baseDeps();
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, json: () => ({ version: '0.6.12' }) });
+    const promptImpl = vi.fn().mockResolvedValue(false);
+
+    await runUpdateCheck({ ...deps, fetchImpl, promptImpl });
+
+    expect(CACHE_FILE).toContain(`${pathSep()}.acp-kit${pathSep()}spar${pathSep()}update-check.json`);
+    expect(deps._files.has(CACHE_FILE)).toBe(true);
   });
 });
+
+function pathSep() {
+  return process.platform === 'win32' ? '\\' : '/';
+}

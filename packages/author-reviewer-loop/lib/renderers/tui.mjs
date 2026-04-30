@@ -329,7 +329,11 @@ export function formatTuiPaneHeadlineFitted({ role, round, status, agent, model,
   if (agentWidth >= 4) {
     return `${prefix} · ${fitText(agentLabel, agentWidth, { ellipsis: true }).text} ${fittedModel}`;
   }
-  return fitText(`${prefix} · ${fittedModel}`, safeWidth, { ellipsis: true }).text;
+  const modelOnlyWidth = Math.max(0, safeWidth - displayWidth(prefix) - displayWidth(' · '));
+  if (modelOnlyWidth >= 2) {
+    return `${prefix} · ${fitModelLabel(modelLabel, modelOnlyWidth)}`;
+  }
+  return fitText(prefix, safeWidth, { ellipsis: true }).text;
 }
 
 function fitModelLabel(modelLabel, width) {
@@ -427,6 +431,73 @@ export function formatTuiFinishSummary({ rounds, maxRounds }) {
 export function formatTuiReasoningLabel(index) {
   const safeIndex = Number.isInteger(index) && index > 0 ? index : 1;
   return ` thinking #${safeIndex} `;
+}
+
+export function formatTuiPrimaryFooterKeys({ phase, taskTruncated = false } = {}) {
+  const keys = [
+    { key: '\u2190/\u2192', label: 'round' },
+    { key: '\u2191/\u2193', label: 'scroll' },
+    { key: 'Tab', label: 'focus' },
+    { key: '?', label: 'help' },
+    { key: 'q', label: 'quit' },
+  ];
+  if (phase === Phase.Error) keys.splice(keys.length - 1, 0, { key: 'x', label: 'error' });
+  return keys;
+}
+
+export function formatTuiHelpKeybindings() {
+  return [
+    ['\u2190 / \u2192', 'Move between rounds'],
+    ['\u2191 / \u2193', 'Scroll focused pane up/down by 1 line'],
+    ['PgUp/PgDn', 'Scroll focused pane by 10 lines'],
+    ['j / k', 'Same as down/up arrows'],
+    ['Tab', 'Switch focused pane (AUTHOR \u2194 REVIEWER)'],
+    ['g', 'Jump to latest round, re-enable follow'],
+    ['G', 'Reset scroll to bottom in focused pane'],
+    ['[ / ]', 'Select previous/next tool call in focused pane'],
+    ['Enter / d', 'Open selected tool call details'],
+    ['Esc / q', 'Return from tool detail view'],
+    ['v', 'View full task text'],
+    ['e', 'Edit task text'],
+    ['t', 'Toggle ACP trace view'],
+    ['w', 'Toggle soft wrap'],
+    ['?', 'Toggle this help'],
+    ['f', 'Force another round after reviewer approval'],
+    ['q', 'Quit (only after the run completes)'],
+  ];
+}
+
+export function formatTuiSetupFooterKeys({ mode = 'summary', taskTruncated = false } = {}) {
+  if (mode === 'customModel') return ['type', 'Enter', 'Esc', 'q'];
+  if (mode === 'model') return ['\u2191/\u2193', 'Enter', 'Esc/b', 'q'];
+  return ['Tab', '\u2191/\u2193', 'Space', 'Enter', '?', 'q'];
+}
+
+export function formatTuiConfirmSummaryRows(config = {}) {
+  const taskLines = Array.isArray(config.taskLines) ? config.taskLines : [config.task ?? ''];
+  return [
+    ['cwd:      ', config.cwd ?? ''],
+    ['task src: ', config.taskSource?.kind === 'file' ? config.taskSource.path : '(inline text)'],
+    ['task:     ', taskLines[0] ?? ''],
+    ...taskLines.slice(1).map((row) => ['          ', row]),
+    ['author:   ', config.author ?? ''],
+    ['          model: ', config.authorModel || '(agent default)'],
+    ['reviewer: ', config.reviewer ?? ''],
+    ['          model: ', config.reviewerModel || '(agent default)'],
+    ['rounds:   ', `max ${config.maxRounds ?? ''}`],
+  ];
+}
+
+export function shouldPatchTuiChrome({ state, view } = {}) {
+  return !(
+    view?.screen !== 'flow'
+    || view?.awaitingSetup
+    || view?.awaitingConfirm
+    || view?.editingTask
+    || view?.cancelled
+    || state?.phase === Phase.Done
+    || state?.phase === Phase.Error
+  );
 }
 
 /**
@@ -550,11 +621,10 @@ export function formatTuiUsageLabel(usage) {
 }
 export function formatTuiTerminalTitle({ state, frame = 0, awaitingSetup = false, awaitingConfirm = false, editingTask = false, screen = 'flow', cancelled = false } = {}) {
   const spinner = TUI_TITLE_SPINNER_FRAMES[frame % TUI_TITLE_SPINNER_FRAMES.length];
-  const waiting = TUI_WAIT_FRAMES[frame % TUI_WAIT_FRAMES.length];
   if (cancelled) return 'Spar · cancelled';
-  if (editingTask) return `Spar ${spinner} · editing task`;
-  if (awaitingSetup) return `Spar ${waiting} · setup`;
-  if (awaitingConfirm) return `Spar ${waiting} · confirm`;
+  if (editingTask) return 'Spar · editing task';
+  if (awaitingSetup) return 'Spar · setup';
+  if (awaitingConfirm) return 'Spar · confirm';
   if (state?.phase === Phase.Error) return 'Spar · error';
   if (state?.phase === Phase.Done) return state.result?.approved ? 'Spar · approved' : 'Spar · not approved';
   if (state?.phase === Phase.Launching) return `Spar ${spinner} · Launching`;
@@ -570,6 +640,21 @@ export function formatTuiAnimationLabel(status, frame = 0) {
   if (status === PaneStatus.Running) return ` ${TUI_PROGRESS_FRAMES[frame % TUI_PROGRESS_FRAMES.length]}`;
   if (status === PaneStatus.Pending) return ` ${TUI_WAIT_FRAMES[frame % TUI_WAIT_FRAMES.length]}`;
   return '';
+}
+
+export function formatTuiTaskEditorWaitingTitle() {
+  return 'Opening task editor';
+}
+
+export function isTuiApprovalActionPending({ state, hasPendingApproval } = {}) {
+  return Boolean(hasPendingApproval);
+}
+
+export function formatTuiForceContinueDecision(task) {
+  return {
+    continue: true,
+    feedback: `The reviewer approved, but the user requested another round. Re-check the current task and make any further improvements needed:\n${task}`,
+  };
 }
 
 /**
@@ -632,10 +717,7 @@ export async function runTui({ config }) {
   }
 
   function forceContinueAfterApproval() {
-    resolveApproval({
-      continue: true,
-      feedback: `The reviewer approved, but the user requested another round. Re-check the current task and make any further improvements needed:\n${config.task}`,
-    });
+    resolveApproval(formatTuiForceContinueDecision(config.task));
   }
 
   let engine = null;
@@ -716,6 +798,14 @@ export async function runTui({ config }) {
 
   function shortcutLine(...parts) {
     return h(Text, { wrap: 'truncate-end' }, ...parts);
+  }
+
+  function shortcutItems(items) {
+    return items.flatMap((item, index) => [
+      index === 0 ? null : muted('  '),
+      shortcutLabel(item.key),
+      muted(` ${item.label}`),
+    ]).filter(Boolean);
   }
 
   function normalizeDisplayText(text) {
@@ -1261,6 +1351,11 @@ export async function runTui({ config }) {
     return fitted.text + ' '.repeat(Math.max(0, width - fitted.width));
   }
 
+  function padCellWithoutEllipsis(value, width) {
+    const fitted = fitText(sanitizeDisplayText(value), width, { ellipsis: false });
+    return fitted.text + ' '.repeat(Math.max(0, width - fitted.width));
+  }
+
   function applySetupSelections(setup) {
     commitSetupSelections(config, setup);
   }
@@ -1499,7 +1594,7 @@ export async function runTui({ config }) {
   }
 
   function patchChromeAnimations({ state, view, size }) {
-    if (view.screen !== 'flow' || state.phase === Phase.Done || state.phase === Phase.Error) return;
+    if (!shouldPatchTuiChrome({ state, view })) return;
     const frame = patchChromeAnimations.frame = ((patchChromeAnimations.frame ?? 0) + 1) | 0;
     const totalRows = Math.max(0, size.rows);
     const headerHeight = Math.min(6, totalRows);
@@ -1538,7 +1633,7 @@ export async function runTui({ config }) {
       useEmoji: !process.env.ACP_SPLASH_NO_EMOJI,
       animated: true,
     });
-    writeAt(2, 3, padCell(brandRow.text, width));
+    writeAt(2, 3, padCellWithoutEllipsis(brandRow.text, width));
   }
 
   function patchPaneAnimationSlot({ role, pane, col, row, width, frame, state }) {
@@ -1617,7 +1712,7 @@ export async function runTui({ config }) {
           {
             bold: true,
             color: brandRow.impact ? 'yellow' : color,
-            wrap: 'truncate-end',
+            wrap: 'truncate-clip',
           },
           brandRow.text,
         ),
@@ -1752,7 +1847,7 @@ export async function runTui({ config }) {
     }, [view.cancelled]);
 
     useInput((input, key) => {
-      const approvalPending = Boolean(hasPendingApproval() && state.phase === Phase.Done && state.result?.approved);
+      const approvalPending = isTuiApprovalActionPending({ state, hasPendingApproval: hasPendingApproval() });
       const taskIsLong = taskPreviewRows(config.task, Math.max(1, size.cols - 4)).truncated;
       const openTaskEditor = () => {
         const fromConfirm = view.awaitingConfirm;
@@ -1776,6 +1871,11 @@ export async function runTui({ config }) {
       };
 
       if (view.editingTask) return;
+
+      if (input === '?') {
+        dispatchView({ type: 'toggleHelp' });
+        return;
+      }
 
       if (view.screen === 'task') {
         if (key.escape || input === 'q') dispatchView({ type: 'closeTask' });
@@ -1911,7 +2011,6 @@ export async function runTui({ config }) {
       else if (input === 'e' || input === 'E') openTaskEditor();
       else if ((input === 'v' || input === 'V') && taskPreview.truncated) dispatchView({ type: 'openTask' });
       else if (input === 'w')   dispatchView({ type: 'toggleWrap' });
-      else if (input === '?')   dispatchView({ type: 'toggleHelp' });
       else if (input === 'q' && runDone) {
         dispatchView({ type: 'startFinish' });
       }
@@ -2565,6 +2664,45 @@ export async function runTui({ config }) {
     }
 
     if (view.screen === 'finishing') return h(FinishView);
+
+    function keyBindingLine(keys, description) {
+      const padding = ' '.repeat(Math.max(1, 12 - keys.length));
+      return shortcutLine(
+        muted('  '),
+        shortcutLabel(keys),
+        muted(`${padding}${description}`),
+      );
+    }
+
+    if (view.showHelp) {
+      return h(
+        Box,
+        {
+          flexDirection: 'column',
+          width: size.cols,
+          height: size.rows,
+          overflow: 'hidden',
+        },
+        h(
+          Box,
+          {
+            flexDirection: 'column',
+            borderStyle: 'double',
+            paddingX: 2,
+            paddingY: 1,
+            width: size.cols,
+            height: size.rows,
+            overflow: 'hidden',
+          },
+          h(Text, { bold: true, color: 'cyan' }, 'Keybindings'),
+          h(Text, null, ''),
+          ...formatTuiHelpKeybindings().map(([keys, description]) => keyBindingLine(keys, description)),
+          h(Text, null, ''),
+          shortcutLine(muted('Press '), shortcutLabel('?'), muted(' again to dismiss.')),
+        ),
+      );
+    }
+
     const mainView = view.screen === 'trace'
       ? h(TraceView)
       : view.screen === 'tool' ? h(ToolView)
@@ -2576,29 +2714,32 @@ export async function runTui({ config }) {
     const navText = total === 0
       ? 'Waiting for first round...'
       : `Round ${selectedRound} (${idx + 1}/${total})`;
-    const focusHint = `focus:${view.focus.toLowerCase()}`;
-    const wrapHint = view.wrap ? 'wrap:on' : 'wrap:off';
-    const followHint = view.follow ? 'follow:on' : 'follow:off';
-    const screenHint = view.screen === 'trace'
-      ? 'trace:on'
-      : view.screen === 'tool' ? 'tool:detail'
-        : view.screen === 'task' ? 'task:view'
-        : view.screen === 'error' ? 'error:detail'
-          : 'trace:off';
+    const primaryFooterKeys = formatTuiPrimaryFooterKeys({
+      phase: state.phase,
+      taskTruncated: taskPreview.truncated,
+    });
+    const approvalActionPending = isTuiApprovalActionPending({ state, hasPendingApproval: hasPendingApproval() });
     const resultHint = state.phase === Phase.Done && state.result
       ? state.result.approved
-        ? shortcutLine(
-          h(Text, { color: 'green', bold: true }, 'APPROVED'),
-          muted(' - '),
-          shortcutLabel('f'),
-          muted(' force continue, '),
-          shortcutLabel('e'),
-          muted(' edit/resume, '),
-          shortcutLabel('Enter'),
-          muted(' accept, '),
-          shortcutLabel('q'),
-          muted(' accept+quit'),
-        )
+        ? approvalActionPending
+          ? shortcutLine(
+            h(Text, { color: 'green', bold: true }, 'APPROVED'),
+            muted(' - '),
+            shortcutLabel('f'),
+            muted(' force continue, '),
+            shortcutLabel('e'),
+            muted(' edit/resume, '),
+            shortcutLabel('Enter'),
+            muted(' accept, '),
+            shortcutLabel('q'),
+            muted(' accept+quit'),
+          )
+          : shortcutLine(
+            h(Text, { color: 'green', bold: true }, 'APPROVED'),
+            muted(' - '),
+            shortcutLabel('q'),
+            muted(' quit'),
+          )
         : shortcutLine(
           muted(`Not approved after ${state.result.rounds}/${state.result.maxRounds}; `),
           shortcutLabel('q'),
@@ -2618,40 +2759,7 @@ export async function runTui({ config }) {
         { wrap: 'truncate-end' },
         resultHint || muted(navText),
         muted('   '),
-        shortcutLabel('\u2190/\u2192'),
-        muted(' round  '),
-        shortcutLabel('\u2191/\u2193'),
-        muted(' scroll  '),
-        shortcutLabel('Tab'),
-        muted(' focus  '),
-        shortcutLabel('[/]/'),
-        muted(' tool  '),
-        shortcutLabel('Enter'),
-        muted(' detail  '),
-        shortcutLabel('e'),
-        muted(' edit  '),
-        taskPreview.truncated ? shortcutLabel('v') : null,
-        taskPreview.truncated ? muted(' task  ') : null,
-        shortcutLabel('t'),
-        muted(' trace  '),
-        state.phase === Phase.Error ? shortcutLabel('x') : null,
-        state.phase === Phase.Error ? muted(' error  ') : null,
-        shortcutLabel('w'),
-        muted(' wrap  '),
-        shortcutLabel('g'),
-        muted(' latest  '),
-        shortcutLabel('?'),
-        muted(' help  '),
-        shortcutLabel('q'),
-        muted(' quit'),
-        '   ',
-        h(Text, { color: view.follow ? 'green' : 'yellow' }, followHint),
-        ' ',
-        h(Text, { color: 'cyan' }, focusHint),
-        ' ',
-        h(Text, { color: view.screen === 'trace' || view.screen === 'error' ? 'yellow' : 'gray' }, screenHint),
-        ' ',
-        h(Text, { color: view.wrap ? 'green' : 'gray' }, wrapHint),
+        ...shortcutItems(primaryFooterKeys),
       ),
     );
 
@@ -2694,7 +2802,7 @@ export async function runTui({ config }) {
             paddingY: 1,
             overflow: 'hidden',
           },
-          h(Text, { color: 'cyan', bold: true }, `${TUI_SPINNER_FRAMES[0]} Opening task editor`),
+          h(Text, { color: 'cyan', bold: true }, formatTuiTaskEditorWaitingTitle()),
           h(Text, { dimColor: true }, 'The TUI is paused while your editor is active.'),
           h(Text, { dimColor: true }, 'Save and close the editor to return here.'),
         ),
@@ -2833,10 +2941,19 @@ export async function runTui({ config }) {
             ? h(Text, { color: 'red', wrap: 'wrap' }, view.setup.error)
             : h(Text, { dimColor: true, wrap: 'truncate-end' }, 'CLI means the everyday agent command is on PATH. Startup shows whether this run starts directly, uses npx fallback, or is unavailable.'),
           view.setup.mode === 'summary'
-            ? h(Text, null, shortcutLabel('Tab'), ' role   ', shortcutLabel('\u2191/\u2193'), ' agent   ', shortcutLabel('Space'), ' assign   ', shortcutLabel('m'), ' model   ', shortcutLabel('e'), ' edit   ', taskPreview.truncated ? shortcutLabel('v') : null, taskPreview.truncated ? ' view   ' : null, shortcutLabel('s'), ' save   ', shortcutLabel('Enter'), ' start   ', shortcutLabel('q', 'red'), ' cancel')
+            ? h(Text, null, ...formatTuiSetupFooterKeys({ mode: 'summary', taskTruncated: taskPreview.truncated }).flatMap((key, index) => [
+              index === 0 ? null : '   ',
+              shortcutLabel(key, key === 'q' ? 'red' : 'cyan'),
+            ]).filter(Boolean))
             : view.setup.mode === 'customModel'
-              ? h(Text, null, shortcutLabel('type'), ' model   ', shortcutLabel('Enter'), ' apply   ', shortcutLabel('Esc'), ' back   ', shortcutLabel('q', 'red'), ' cancel if empty')
-              : h(Text, null, shortcutLabel('\u2191/\u2193'), ' select   ', shortcutLabel('Enter'), ' choose   ', shortcutLabel('c'), ' custom   ', shortcutLabel('Esc/b'), ' back   ', shortcutLabel('q', 'red'), ' cancel'),
+              ? h(Text, null, ...formatTuiSetupFooterKeys({ mode: 'customModel' }).flatMap((key, index) => [
+                index === 0 ? null : '   ',
+                shortcutLabel(key, key === 'q' ? 'red' : 'cyan'),
+              ]).filter(Boolean))
+              : h(Text, null, ...formatTuiSetupFooterKeys({ mode: 'model' }).flatMap((key, index) => [
+                index === 0 ? null : '   ',
+                shortcutLabel(key, key === 'q' ? 'red' : 'cyan'),
+              ]).filter(Boolean)),
         ),
       );
     }
@@ -2894,18 +3011,16 @@ export async function runTui({ config }) {
     if (view.awaitingConfirm) {
       const confirmCols = Math.max(20, size.cols - 10);
       const taskLines = wrapLine(config.task || '(empty)', confirmCols);
-      const lines = [
-        ['cwd:      ', config.cwd],
-        ['task src: ', config.taskSource?.kind === 'file' ? config.taskSource.path : '(inline text)'],
-        ['task:     ', taskLines[0] ?? ''],
-        ...taskLines.slice(1).map((row) => ['          ', row]),
-        ['author:   ', agentSummary(config.authorSettings)],
-        ['          model: ', config.authorSettings.model || '(agent default)'],
-        ['reviewer: ', agentSummary(config.reviewerSettings)],
-        ['          model: ', config.reviewerSettings.model || '(agent default)'],
-        ['rounds:   ', `max ${config.maxRounds}`],
-        ['trace:    ', config.trace ? 'enabled' : 'disabled'],
-      ];
+      const lines = formatTuiConfirmSummaryRows({
+        cwd: config.cwd,
+        taskSource: config.taskSource,
+        taskLines,
+        author: agentSummary(config.authorSettings),
+        authorModel: config.authorSettings.model,
+        reviewer: agentSummary(config.reviewerSettings),
+        reviewerModel: config.reviewerSettings.model,
+        maxRounds: config.maxRounds,
+      });
       return h(
         Box,
         {
@@ -2985,65 +3100,6 @@ export async function runTui({ config }) {
           h(Text, { color: 'red', bold: true }, 'Cancelled.'),
           shortcutLine(muted('Press '), shortcutLabel('q'), muted(' to quit.')),
         ),
-      );
-    }
-
-    // ---- help overlay --------------------------------------------------
-    if (view.showHelp) {
-      return h(
-        Box,
-        {
-          flexDirection: 'column',
-          width: size.cols,
-          height: size.rows,
-          overflow: 'hidden',
-        },
-        h(
-          Box,
-          {
-            flexDirection: 'column',
-            borderStyle: 'double',
-            paddingX: 2,
-            paddingY: 1,
-            width: size.cols,
-            height: size.rows,
-            overflow: 'hidden',
-          },
-          h(Text, { bold: true, color: 'cyan' }, 'Keybindings'),
-          h(Text, null, ''),
-          keyBindingLine('\u2190 / \u2192', 'Move between rounds'),
-          keyBindingLine('\u2191 / \u2193', 'Scroll focused pane up/down by 1 line'),
-          keyBindingLine('PgUp/PgDn', 'Scroll focused pane by 10 lines'),
-          keyBindingLine('j / k', 'Same as down/up arrows'),
-          keyBindingLine('Tab', 'Switch focused pane (AUTHOR \u2194 REVIEWER)'),
-          keyBindingLine('g', 'Jump to latest round, re-enable follow'),
-          keyBindingLine('G', 'Reset scroll to bottom in focused pane'),
-          keyBindingLine('[ / ]', 'Select previous/next tool call in focused pane'),
-          keyBindingLine('Enter / d', 'Open selected tool call details'),
-          keyBindingLine('Esc / q', 'Return from tool detail view'),
-          keyBindingLine('v', 'View full task text'),
-          keyBindingLine('e', 'Edit task text'),
-          keyBindingLine('t', 'Toggle ACP trace view'),
-          keyBindingLine('w', 'Toggle soft wrap'),
-          keyBindingLine('?', 'Toggle this help'),
-          keyBindingLine('f', 'Force another round after reviewer approval'),
-          keyBindingLine('q', 'Quit (only after the run completes)'),
-          h(Text, null, ''),
-          shortcutLine(muted('Press '), shortcutLabel('?'), muted(' again to dismiss.')),
-        ),
-      );
-    }
-
-    if (view.screen === 'finishing') {
-      return h(FinishView);
-    }
-
-    function keyBindingLine(keys, description) {
-      const padding = ' '.repeat(Math.max(1, 12 - keys.length));
-      return shortcutLine(
-        muted('  '),
-        shortcutLabel(keys),
-        muted(`${padding}${description}`),
       );
     }
 

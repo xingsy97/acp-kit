@@ -40,6 +40,43 @@ describe('author-reviewer-loop state reducer', () => {
     expect(tools.map((tool) => tool.chars)).toEqual([0, 42]);
   });
 
+  it('marks reviewer approval as pending and actionable before the final result is emitted', () => {
+    const result = {
+      approved: true,
+      rounds: 1,
+      maxRounds: 2,
+      feedback: 'APPROVED\nNo remaining issues.',
+      cwd: process.cwd(),
+    };
+    const state = reduce(initialState(), { type: 'approvalPending', result });
+
+    expect(state.phase).toBe('done');
+    expect(state.result).toBe(result);
+    expect(state.approvalPending).toBe(true);
+    expect(state.finishedAt).toEqual(expect.any(Number));
+
+    const finalState = reduce(state, { type: 'result', result });
+    expect(finalState.approvalPending).toBe(false);
+  });
+
+  it('clears pending approval immediately when the user force-continues', () => {
+    const result = {
+      approved: true,
+      rounds: 1,
+      maxRounds: 2,
+      feedback: 'APPROVED\nNo remaining issues.',
+      cwd: process.cwd(),
+    };
+    const pending = reduce(initialState(), { type: 'approvalPending', result });
+    const continued = reduce(pending, { type: 'approvalContinued', round: 1, feedback: 'force another round' });
+
+    expect(continued.phase).toBe('running');
+    expect(continued.result).toBeNull();
+    expect(continued.approvalPending).toBe(false);
+    expect(continued.finishedAt).toBeNull();
+    expect(continued.statuses).toMatchObject({ AUTHOR: PaneStatus.Pending, REVIEWER: PaneStatus.Pending });
+  });
+
   it('keeps tool events without ids separate instead of merging them together', () => {
     let state = initialState();
     state = reduce(state, {

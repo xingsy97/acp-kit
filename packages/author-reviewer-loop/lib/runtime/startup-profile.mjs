@@ -1,8 +1,28 @@
 import process from 'node:process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+export const STARTUP_PROFILE_FILE_NAME = 'startup-profile.log';
+
+export function startupProfileFilePath({ home = os.homedir() } = {}) {
+  return path.join(home, '.acp-kit', 'spar', STARTUP_PROFILE_FILE_NAME);
+}
 
 export function startupProfilingEnabled(env = process.env) {
   const value = String(env?.ACP_STARTUP_PROFILE ?? '').trim().toLowerCase();
-  return value === '1' || value === 'true' || value === 'yes' || value === 'on';
+  return !(value === '0' || value === 'false' || value === 'no' || value === 'off');
+}
+
+export function createStartupProfileFileLogger({ filePath = startupProfileFilePath() } = {}) {
+  return (line) => {
+    try {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.appendFileSync(filePath, `${line}\n`, 'utf8');
+    } catch {
+      // Startup profiling must never make startup fail.
+    }
+  };
 }
 
 export function createStartupProfiler({
@@ -11,9 +31,7 @@ export function createStartupProfiler({
   role,
   agent,
   onEvent,
-  log = process.env.ACP_TUI_ACTIVE === '1'
-    ? () => {}
-    : (line) => process.stderr.write(`${line}\n`),
+  log = createStartupProfileFileLogger(),
 } = {}) {
   const startedAt = Date.now();
   let lastAt = startedAt;

@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.15] - 2026-04-30
+
+### Changed
+
+- Spar user files now live under `~/.acp-kit/spar`, including preferences, startup profiling, and update-check cache data, so ACP Kit uses one top-level home directory.
+- Startup profiling is enabled by default and writes to `~/.acp-kit/spar/startup-profile.log`; set `ACP_STARTUP_PROFILE=0` to disable it.
+- The always-visible TUI footer now stays focused on primary controls while advanced controls remain available through help.
+
+### Fixed
+
+- Fixed TUI regressions around setup/confirmation animation, trace state leaking into confirmation, boxing-glove truncation dots, model-title closing parentheses, and approval force-continue handling.
+
 ## [0.6.14] - 2026-04-30
 
 ### Changed

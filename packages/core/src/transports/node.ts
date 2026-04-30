@@ -275,6 +275,12 @@ async function resolvePackageFallbackLaunch(params: {
     return packageLaunch(runtimeBin, parsed.extraArgs, params.lookupStartedAt, false, parsed.packageSpec);
   }
 
+  const cacheDir = packageCacheDir(parsed.packageSpec);
+  const cachedBin = resolvePackageBinFromPrefix(cacheDir, parsed.binName);
+  if (cachedBin) {
+    return packageLaunch(cachedBin, parsed.extraArgs, params.lookupStartedAt, true, parsed.packageSpec);
+  }
+
   const rawFallbackCommand = resolveCommandOnPath(params.fallback.command);
   if (rawFallbackCommand) {
     return {
@@ -290,12 +296,6 @@ async function resolvePackageFallbackLaunch(params: {
   const globalBin = await resolvePackageBinFromNpmGlobalPrefix(parsed.binName);
   if (globalBin) {
     return packageLaunch(globalBin, parsed.extraArgs, params.lookupStartedAt, false, parsed.packageSpec);
-  }
-
-  const cacheDir = packageCacheDir(parsed.packageSpec);
-  const cachedBin = resolvePackageBinFromPrefix(cacheDir, parsed.binName);
-  if (cachedBin) {
-    return packageLaunch(cachedBin, parsed.extraArgs, params.lookupStartedAt, true, parsed.packageSpec);
   }
 
   const preparedBin = await prepareCachedPackageBin({

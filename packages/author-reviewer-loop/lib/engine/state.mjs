@@ -73,6 +73,7 @@ export function initialState() {
     // the ACP spec ("the agent must send a complete list of all entries").
     plans: { AUTHOR: null, REVIEWER: null },
     result: null,
+    approvalPending: false,
     error: null,
     startedAt: null,
     finishedAt: null,
@@ -486,6 +487,7 @@ export function reduce(state, action) {
         ...state,
         phase: Phase.Running,
         result: null,
+        approvalPending: false,
         statuses: { ...state.statuses, [action.role]: PaneStatus.Running, [otherRole]: PaneStatus.Pending },
       };
       const next = ensureRound(base, action.round);
@@ -566,10 +568,21 @@ export function reduce(state, action) {
         turnUsage,
       }));
     }
+    case 'approvalPending':
+      return { ...state, phase: Phase.Done, result: action.result, approvalPending: true, finishedAt: Date.now() };
+    case 'approvalContinued':
+      return {
+        ...state,
+        phase: Phase.Running,
+        result: null,
+        approvalPending: false,
+        finishedAt: null,
+        statuses: { ...state.statuses, AUTHOR: PaneStatus.Pending, REVIEWER: PaneStatus.Pending },
+      };
     case 'result':
-      return { ...state, phase: Phase.Done, result: action.result, finishedAt: Date.now() };
+      return { ...state, phase: Phase.Done, result: action.result, approvalPending: false, finishedAt: Date.now() };
     case 'error':
-      return { ...state, phase: Phase.Error, error: action.error, finishedAt: Date.now() };
+      return { ...state, phase: Phase.Error, approvalPending: false, error: action.error, finishedAt: Date.now() };
     default:
       return state;
   }

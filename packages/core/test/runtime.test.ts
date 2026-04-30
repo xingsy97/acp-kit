@@ -630,16 +630,76 @@ describe('AcpRuntime', () => {
     await fsp.rm(binPath, { force: true });
   });
 
-  it('prefers the raw npx fallback command over cache/package probing when no project-local bin exists', async () => {
+  it('uses an already-prepared fallback package cache before raw npx startup', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-runtime-raw-npx-'));
     const fakeBinDir = path.join(tempRoot, 'fake-bin');
+    const cacheRoot = path.join(tempRoot, 'agent-cache');
     const originalPath = process.env.PATH;
+    const originalCacheDir = process.env.ACP_KIT_AGENT_CACHE_DIR;
+    try {
+      fs.mkdirSync(fakeBinDir, { recursive: true });
+      const fakeNpx = path.join(fakeBinDir, process.platform === 'win32' ? 'npx.cmd' : 'npx');
+      fs.writeFileSync(fakeNpx, process.platform === 'win32' ? '@echo off\r\n' : '#!/usr/bin/env node\n', 'utf8');
+      if (process.platform !== 'win32') fs.chmodSync(fakeNpx, 0o755);
+      const cacheBinDir = path.join(cacheRoot, 'github_copilot-language-server_latest', 'node_modules', '.bin');
+      fs.mkdirSync(cacheBinDir, { recursive: true });
+      const cachedCopilot = path.join(cacheBinDir, process.platform === 'win32' ? 'acp-kit-copilot-language-server.cmd' : 'acp-kit-copilot-language-server');
+      fs.writeFileSync(cachedCopilot, process.platform === 'win32' ? '@echo off\r\n' : '#!/usr/bin/env node\n', 'utf8');
+      if (process.platform !== 'win32') fs.chmodSync(cachedCopilot, 0o755);
+      process.env.PATH = `${fakeBinDir}${path.delimiter}${originalPath || ''}`;
+      process.env.ACP_KIT_AGENT_CACHE_DIR = cacheRoot;
+
+      const connectionFactory: AcpConnectionFactory = {
+        create() {
+          return {
+            initialize: async () => ({ authMethods: [] }),
+            newSession: async () => ({ sessionId: 'raw-npx-session' }),
+            prompt: async () => ({ stopReason: 'end_turn' }),
+            cancel: async () => undefined,
+          } as never;
+        },
+      };
+      const spawn = vi.fn(createFakeSpawn());
+      const runtime = createAcpRuntime({
+        agent: {
+          id: 'github-copilot',
+          displayName: 'GitHub Copilot',
+          command: 'acp-kit-copilot-language-server',
+          args: [],
+          fallbackCommands: [{ command: 'npx', args: ['--yes', '@github/copilot-language-server@latest', '--acp'] }],
+        },
+        cwd: tempRoot,
+        host: {},
+        spawnProcess: spawn,
+        connectionFactory,
+      });
+
+      await runtime.newSession();
+
+      expect(spawn.mock.calls[0]?.[0]).toBe(cachedCopilot);
+      expect(spawn.mock.calls[0]?.[1]).toEqual(['--acp']);
+      await runtime.shutdown();
+    } finally {
+      process.env.PATH = originalPath;
+      if (originalCacheDir === undefined) delete process.env.ACP_KIT_AGENT_CACHE_DIR;
+      else process.env.ACP_KIT_AGENT_CACHE_DIR = originalCacheDir;
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to raw npx only after stable package locations miss', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-runtime-raw-npx-'));
+    const fakeBinDir = path.join(tempRoot, 'fake-bin');
+    const cacheRoot = path.join(tempRoot, 'empty-agent-cache');
+    const originalPath = process.env.PATH;
+    const originalCacheDir = process.env.ACP_KIT_AGENT_CACHE_DIR;
     try {
       fs.mkdirSync(fakeBinDir, { recursive: true });
       const fakeNpx = path.join(fakeBinDir, process.platform === 'win32' ? 'npx.cmd' : 'npx');
       fs.writeFileSync(fakeNpx, process.platform === 'win32' ? '@echo off\r\n' : '#!/usr/bin/env node\n', 'utf8');
       if (process.platform !== 'win32') fs.chmodSync(fakeNpx, 0o755);
       process.env.PATH = `${fakeBinDir}${path.delimiter}${originalPath || ''}`;
+      process.env.ACP_KIT_AGENT_CACHE_DIR = cacheRoot;
 
       const connectionFactory: AcpConnectionFactory = {
         create() {
@@ -673,6 +733,8 @@ describe('AcpRuntime', () => {
       await runtime.shutdown();
     } finally {
       process.env.PATH = originalPath;
+      if (originalCacheDir === undefined) delete process.env.ACP_KIT_AGENT_CACHE_DIR;
+      else process.env.ACP_KIT_AGENT_CACHE_DIR = originalCacheDir;
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });

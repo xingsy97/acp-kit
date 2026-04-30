@@ -13,10 +13,18 @@ import {
   formatTuiPlanSummary,
   formatTuiReasoningLabel,
   formatTuiTerminalTitle,
+  formatTuiTaskEditorWaitingTitle,
   formatTuiUsageLabel,
+  formatTuiForceContinueDecision,
+  formatTuiPrimaryFooterKeys,
+  formatTuiHelpKeybindings,
+  formatTuiSetupFooterKeys,
+  formatTuiConfirmSummaryRows,
   formatSparSplashFrame,
   formatSparBrandFrame,
   formatTuiAnimationLabel,
+  isTuiApprovalActionPending,
+  shouldPatchTuiChrome,
   renderTaskPreviewRows,
   renderFixedTaskPreviewRows,
   wrapTuiDisplayRows,
@@ -24,6 +32,62 @@ import {
 } from '../lib/renderers/tui.mjs';
 
 describe('author-reviewer-loop TUI formatting helpers', () => {
+  it('keeps the always-visible footer focused on primary controls only', () => {
+    const footer = formatTuiPrimaryFooterKeys({ phase: Phase.Running, taskTruncated: true });
+    const labels = footer.map((item) => item.label);
+    const keys = footer.map((item) => item.key);
+
+    expect(labels).toEqual(['round', 'scroll', 'focus', 'help', 'quit']);
+    expect(keys).not.toEqual(expect.arrayContaining(['t', 'w', 'g', 'e', 'v', 'Enter', '[/]/', '[ / ]']));
+    expect(labels).not.toEqual(expect.arrayContaining(['trace', 'wrap', 'latest', 'edit', 'task', 'tool', 'detail']));
+  });
+
+  it('keeps advanced TUI controls discoverable in help instead of the primary footer', () => {
+    const help = formatTuiHelpKeybindings();
+    const helpKeys = help.map(([key]) => key);
+
+    expect(helpKeys).toEqual(expect.arrayContaining(['t', 'w', 'g', 'G', 'e', 'v', '[ / ]', 'Enter / d', 'f', '?']));
+  });
+
+  it('keeps setup footer minimal and leaves advanced setup actions out of the primary line', () => {
+    expect(formatTuiSetupFooterKeys({ mode: 'summary', taskTruncated: true })).toEqual([
+      'Tab',
+      '\u2191/\u2193',
+      'Space',
+      'Enter',
+      '?',
+      'q',
+    ]);
+  });
+
+  it('omits advanced diagnostic state from the launch confirmation summary', () => {
+    const rows = formatTuiConfirmSummaryRows({
+      cwd: 'G:/workspace',
+      taskSource: { kind: 'text' },
+      taskLines: ['fix bugs'],
+      author: 'Copilot',
+      authorModel: 'gpt-5.4',
+      reviewer: 'Codex',
+      reviewerModel: 'gpt-5.5',
+      maxRounds: 20,
+      trace: true,
+    });
+
+    expect(rows.map(([label]) => label)).not.toContain('trace:    ');
+  });
+
+  it('does not patch animated chrome over setup, confirm, editor, cancelled, or terminal screens', () => {
+    const launching = { phase: Phase.Launching };
+
+    expect(shouldPatchTuiChrome({ state: launching, view: { screen: 'flow' } })).toBe(true);
+    expect(shouldPatchTuiChrome({ state: launching, view: { screen: 'flow', awaitingSetup: true } })).toBe(false);
+    expect(shouldPatchTuiChrome({ state: launching, view: { screen: 'flow', awaitingConfirm: true } })).toBe(false);
+    expect(shouldPatchTuiChrome({ state: launching, view: { screen: 'flow', editingTask: true } })).toBe(false);
+    expect(shouldPatchTuiChrome({ state: launching, view: { screen: 'flow', cancelled: true } })).toBe(false);
+    expect(shouldPatchTuiChrome({ state: launching, view: { screen: 'trace' } })).toBe(false);
+    expect(shouldPatchTuiChrome({ state: { phase: Phase.Done }, view: { screen: 'flow' } })).toBe(false);
+  });
+
   it('summarizes run status in the dashboard header across lifecycle states', () => {
     expect(formatTuiDashboardTitle({
       phase: Phase.Launching,
@@ -116,6 +180,21 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
     expect(fitted).toContain(')');
     expect(fitted).toContain('...');
   });
+
+  it('keeps the closing parenthesis after a truncated model label', () => {
+    const fitted = formatTuiPaneHeadlineFitted({
+      role: 'REVIEWER',
+      round: 12,
+      status: PaneStatus.Running,
+      agent: 'Codex',
+      model: 'gpt-5.5/xhigh',
+      width: 40,
+    });
+
+    expect(fitted).toMatch(/\([^)]*\.\.\.\)/);
+    expect(fitted).not.toMatch(/\([^)]*\.\.\.$/);
+  });
+
   it('sanitizes blank role labels and startup availability copy for professional presentation', () => {
     expect(formatTuiPaneHeadline({
       role: 'REVIEWER',
@@ -344,7 +423,9 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
   });
 
   it('formats animated terminal tab titles for major TUI states', () => {
-    expect(formatTuiTerminalTitle({ awaitingSetup: true, frame: 0 })).toBe('Spar ·   · setup');
+    expect(formatTuiTerminalTitle({ awaitingSetup: true, frame: 0 })).toBe('Spar · setup');
+    expect(formatTuiTerminalTitle({ awaitingConfirm: true, frame: 1 })).toBe('Spar · confirm');
+    expect(formatTuiTerminalTitle({ editingTask: true, frame: 2 })).toBe('Spar · editing task');
     expect(formatTuiTerminalTitle({ state: { phase: Phase.Launching }, frame: 1 })).toBe('Spar ◓ · Launching');
     expect(formatTuiTerminalTitle({
       state: {
@@ -368,6 +449,38 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
     expect(formatTuiAnimationLabel(PaneStatus.Completed, 0)).toBe('');
     expect(formatTuiAnimationLabel(PaneStatus.Failed, 0)).toBe('');
     expect(formatTuiAnimationLabel('unknown', 0)).toBe('');
+  });
+
+  it('keeps task-editor waiting copy static without spinner chrome', () => {
+    const title = formatTuiTaskEditorWaitingTitle();
+
+    expect(title).toBe('Opening task editor');
+    expect(title).not.toMatch(/^[-\\|/]\s/);
+  });
+
+  it('keeps approval actions live as soon as the approval resolver exists', () => {
+    expect(isTuiApprovalActionPending({
+      state: { phase: Phase.Done, result: { approved: true }, approvalPending: true },
+      hasPendingApproval: true,
+    })).toBe(true);
+
+    expect(isTuiApprovalActionPending({
+      state: { phase: Phase.Running, result: null, approvalPending: false },
+      hasPendingApproval: true,
+    })).toBe(true);
+
+    expect(isTuiApprovalActionPending({
+      state: { phase: Phase.Done, result: { approved: true }, approvalPending: false },
+      hasPendingApproval: false,
+    })).toBe(false);
+  });
+
+  it('maps the force-continue key to a continuation approval decision', () => {
+    const decision = formatTuiForceContinueDecision('fix the flaky tests');
+
+    expect(decision).toMatchObject({ continue: true });
+    expect(decision.feedback).toContain('user requested another round');
+    expect(decision.feedback).toContain('fix the flaky tests');
   });
 
   it('formats reasoning sections with stable numbered labels instead of raw ids', () => {
@@ -419,6 +532,20 @@ describe('author-reviewer-loop TUI formatting helpers', () => {
     const lastGlove = row.text.lastIndexOf('\u{1F94A}');
     expect(lastGlove).toBeGreaterThan(firstGlove);
     expect(row.impact).toBe(false);
+  });
+
+  it('keeps the animated brand row free of truncation dots near the right glove', () => {
+    const title = formatTuiDashboardTitle({
+      phase: Phase.Launching,
+      result: null,
+      selectedRound: null,
+      totalRounds: 0,
+      maxRounds: 4,
+    });
+    const row = formatSparBrandFrame({ frame: 0, width: 42, title, useEmoji: true, animated: true });
+
+    expect(row.text).not.toContain('...');
+    expect(row.text).not.toMatch(/\u{1F94A}\.+/u);
   });
 
   it('marks the impact frame on the brand row and renders sparks', () => {

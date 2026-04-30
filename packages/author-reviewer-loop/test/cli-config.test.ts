@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseRunConfig } from '../lib/cli/config.mjs';
 import { modelChoicesForAgent } from '../lib/config/agents.mjs';
-import { readPreferences, writePreferences } from '../lib/config/preferences.mjs';
+import { preferencesFilePath, readPreferences, writePreferences } from '../lib/config/preferences.mjs';
 import { formatRunSummary } from '../lib/cli/summary.mjs';
 import { commitSetupSelections, parseEditorCommand } from '../lib/renderers/tui.mjs';
 
@@ -120,6 +120,11 @@ describe('author-reviewer-loop CLI config', () => {
     expect(config.reviewerSettings.model).toBe('gpt-5.5');
   });
 
+  it('stores the default preferences file under the ACP Kit Spar directory', () => {
+    expect(preferencesFilePath()).toBe(path.join(os.homedir(), '.acp-kit', 'spar', 'preferences.json'));
+    expect(preferencesFilePath({ home: '/tmp/spar-home' })).toBe(path.join('/tmp/spar-home', '.acp-kit', 'spar', 'preferences.json'));
+  });
+
   it('reports invalid saved config using the actual preferences file path', () => {
     const preferencesPath = path.join(tempDir(), '.acp-author-reviewer-loop.json');
     fs.writeFileSync(preferencesPath, JSON.stringify({
@@ -144,6 +149,16 @@ describe('author-reviewer-loop CLI config', () => {
       author: { agent: 'claude', model: 'opus' },
       reviewer: { agent: 'codex', model: null },
     });
+  });
+
+  it('writes default preferences into the ACP Kit Spar directory', () => {
+    const home = tempDir();
+    const filePath = preferencesFilePath({ home });
+
+    writePreferences({ author: { agent: 'codex', model: 'gpt-5.5' } }, { filePath });
+
+    expect(fs.existsSync(filePath)).toBe(true);
+    expect(readPreferences({ filePath })).toMatchObject({ author: { agent: 'codex', model: 'gpt-5.5' } });
   });
 
   it('replaces an existing preferences file when saving updates', () => {

@@ -13,8 +13,8 @@
 //  - **Bypassable**: skipped when SPAR_NO_UPDATE_CHECK=1, when the spawned
 //    process is not running from a global npm install (best-effort
 //    detection via the package path), or when the user passes --no-update.
-//  - **Cached**: a successful check is cached for 6 hours under the user's
-//    home dir, so launching spar twice in a row only hits the registry
+//  - **Cached**: a successful check is cached for 6 hours under the ACP Kit
+//    Spar dir, so launching spar twice in a row only hits the registry
 //    once.
 //
 // The check is exported as pure functions plus a single `runUpdateCheck`
@@ -31,7 +31,7 @@ export const PACKAGE_NAME = '@acp-kit/spar';
 export const REGISTRY_URL = `https://registry.npmjs.org/${encodeURIComponent('@acp-kit')}/spar/latest`;
 export const FETCH_TIMEOUT_MS = 1500;
 export const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
-export const CACHE_FILE = path.join(os.homedir(), '.acp-kit-spar-update.json');
+export const CACHE_FILE = path.join(os.homedir(), '.acp-kit', 'spar', 'update-check.json');
 
 /**
  * Compare two SemVer-ish version strings. Returns 1 when `a > b`, -1 when
@@ -88,6 +88,7 @@ async function readCache(now, fs = fsp) {
 
 async function writeCache(latest, now, fs = fsp) {
   try {
+    await fs.mkdir?.(path.dirname(CACHE_FILE), { recursive: true });
     await fs.writeFile(CACHE_FILE, JSON.stringify({ checkedAt: now, latest }), 'utf8');
   } catch {
     /* swallow: cache writes are best-effort */

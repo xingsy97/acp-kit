@@ -23,6 +23,8 @@ describe('author-reviewer-loop legacy runtime adapter', () => {
       onToolUpdate: vi.fn(),
       onTraceEntry: vi.fn(),
       onUsageUpdate: vi.fn(),
+      onApprovalPending: vi.fn(),
+      onApprovalContinued: vi.fn(),
     };
     const result = { approved: true };
     mocks.engine.onEvent.mockImplementation((listener: (event: unknown) => void) => {
@@ -63,6 +65,15 @@ describe('author-reviewer-loop legacy runtime adapter', () => {
         type: 'usageUpdate',
         role: 'AUTHOR',
         usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+      });
+      listener({
+        type: 'approvalPending',
+        result: { approved: true, rounds: 1 },
+      });
+      listener({
+        type: 'approvalContinued',
+        round: 1,
+        feedback: 'force another round',
       });
     });
     mocks.engine.run.mockResolvedValue(result);
@@ -107,6 +118,12 @@ describe('author-reviewer-loop legacy runtime adapter', () => {
       type: 'usageUpdate',
       role: 'AUTHOR',
       usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+    });
+    expect(renderer.onApprovalPending).toHaveBeenCalledWith({ approved: true, rounds: 1 });
+    expect(renderer.onApprovalContinued).toHaveBeenCalledWith({
+      type: 'approvalContinued',
+      round: 1,
+      feedback: 'force another round',
     });
   });
 });

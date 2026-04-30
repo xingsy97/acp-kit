@@ -3,10 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
-export const CONFIG_FILE_NAME = '.acp-author-reviewer-loop.json';
+export const CONFIG_ROOT_DIR_NAME = '.acp-kit';
+export const CONFIG_DIR_NAME = 'spar';
+export const CONFIG_FILE_NAME = 'preferences.json';
 
-export function preferencesFilePath() {
-  return path.join(os.homedir(), CONFIG_FILE_NAME);
+export function preferencesFilePath({ home = os.homedir() } = {}) {
+  return path.join(home, CONFIG_ROOT_DIR_NAME, CONFIG_DIR_NAME, CONFIG_FILE_NAME);
 }
 
 export function readPreferences({ filePath = preferencesFilePath() } = {}) {

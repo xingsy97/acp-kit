@@ -8,6 +8,18 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.6.15] - 2026-04-30
+
+### Changed
+
+- `@acp-kit/core` and `@acp-kit/spar` now share release version `0.6.15`, with Spar depending on the matching core line.
+- `@acp-kit/author-reviewer-loop` / `@acp-kit/spar` user files now live under `~/.acp-kit/spar`, including preferences, startup profiling, and update-check cache data, so ACP Kit uses one top-level home directory.
+- `@acp-kit/author-reviewer-loop` / `@acp-kit/spar` startup profiling is enabled by default and writes to `~/.acp-kit/spar/startup-profile.log`; set `ACP_STARTUP_PROFILE=0` to disable it.
+- `@acp-kit/author-reviewer-loop` / `@acp-kit/spar` keeps the always-visible TUI footer focused on primary controls while advanced controls remain available through help.
+
+### Fixed
+
+- `@acp-kit/author-reviewer-loop` / `@acp-kit/spar` fixes TUI regressions around setup/confirmation animation, trace state leaking into confirmation, boxing-glove truncation dots, model-title closing parentheses, and approval force-continue handling.
 ## [0.6.14] - 2026-04-30
 
 ### Changed

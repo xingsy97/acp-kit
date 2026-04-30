@@ -18,12 +18,14 @@ const AMBIGUOUS_APPROVAL_FEEDBACK = [
   'Put APPROVED on the first non-empty line and keep follow-up notes free of rejection language or issue lists.',
 ].join('\n');
 
-const APPROVAL_NEGATIVE_SIGNAL = /\b(?:fail(?:s|ed|ing)?|broken|missing|issue|problem|todo|remaining|regress(?:ion|ed|ing)?|blocked|incomplete|unverified|cannot|can't|won't|does(?:\s+not|n't)\s+work|timed?\s*out|timeout|error(?:s)?|crash(?:ed|es|ing)?)\b/;
-const APPROVAL_STATUS_SUBJECT = /^(?:verification|validation|review|checks?|tests?|test suite|build|startup|restart(?: recovery)?|recovery|resume|interruption|windows|linux|macos|path handling|persistence|state|flow|loop|output|session|tooling?)\b/;
+const ANSI_ESCAPE_SEQUENCE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\)|[@-Z\\-_])/g;
+const APPROVAL_NEGATIVE_SIGNAL = /\b(?:fail(?:s|ed|ing)?|broken|missing|issue|problem|todo|remaining|regress(?:ion|ed|ing)?|blocked|incomplete|unverified|cannot|can't|won't|does(?:\s+not|n't)\s+work|timed?\s*out|timeout|error(?:s)?|crash(?:ed|es|ing)?|hang(?:s|ing)?|stuck|loop(?:s|ing)?)\b/;
+const APPROVAL_STATUS_SUBJECT = /^(?:the\s+)?(?:verification|validation|review|checks?|tests?|test suite|build|startup|restart(?: recovery)?|recovery|resume|interruption|windows|linux|macos|path handling|persistence|state|flow|loop|output|session|tooling?|high latency|latency)\b/;
+const APPROVAL_RECOVERY_SIGNAL = /\b(?:fixed|resolved|verified|passed|passing|working|ready|green|clean|stable|succeeds?|successful)\b/;
 
 function sanitizeReviewerText(text) {
   return String(text ?? '')
-    .replace(/\u001b\[[0-9;]*m/g, '')
+    .replace(ANSI_ESCAPE_SEQUENCE, '')
     .replace(/[\u200B-\u200D\uFEFF]/g, '')
     .replace(/\r/g, '');
 }
@@ -53,7 +55,15 @@ function isConflictingApprovalLine(line) {
   if (/\b(?:still|remains?|remaining)\b.*\b(?:fail(?:s|ed|ing)?|broken|missing|issue|problem|todo|regress(?:ion|ed|ing)?|blocked|incomplete|unverified)\b/.test(prefixStripped)) return true;
   if (APPROVAL_STATUS_SUBJECT.test(prefixStripped) && APPROVAL_NEGATIVE_SIGNAL.test(prefixStripped)) return true;
   if (prefixStripped !== normalized && APPROVAL_NEGATIVE_SIGNAL.test(prefixStripped)) return true;
+  if (hasUnresolvedCurrentFailure(prefixStripped)) return true;
   return false;
+}
+
+function hasUnresolvedCurrentFailure(line) {
+  if (!APPROVAL_NEGATIVE_SIGNAL.test(line)) return false;
+  if (APPROVAL_RECOVERY_SIGNAL.test(line)) return false;
+  return /\b(?:is|are|was|were|keeps?|causes?|leaves?|shows?|hits?|reproduces?|returns?|throws?|reports?)\b.*\b(?:fail(?:s|ed|ing)?|broken|missing|issue|problem|todo|remaining|regress(?:ion|ed|ing)?|blocked|incomplete|unverified|cannot|can't|won't|does(?:\s+not|n't)\s+work|timed?\s*out|timeout|error(?:s)?|crash(?:ed|es|ing)?|hang(?:s|ing)?|stuck|loop(?:s|ing)?)\b/.test(line)
+    || /\b(?:fail(?:s|ed|ing)?|broken|missing|regress(?:ion|ed|ing)?|blocked|incomplete|unverified|timed?\s*out|timeout|error(?:s)?|crash(?:ed|es|ing)?|hang(?:s|ing)?|stuck|loop(?:s|ing)?)\b.*\b(?:under|during|after|when|with|on)\b/.test(line);
 }
 
 function isCleanApprovalNote(line) {
@@ -165,6 +175,14 @@ export function createLoopEngine({ config }) {
     onTurnCompleted: (event) => publish({ type: 'turnCompleted', ...event }, { type: 'turnCompleted', ...event }),
     onTurnFailed: (event) => publish({ type: 'turnFailed', ...event }, { type: 'turnFailed', ...event }),
     onTurnEnd: (event) => publish({ type: 'turnEnd', ...event }, { type: 'turnEnd', ...event }),
+    onApprovalPending: (result) => publish(
+      { type: 'approvalPending', result },
+      { type: 'approvalPending', result },
+    ),
+    onApprovalContinued: (event) => publish(
+      { type: 'approvalContinued', ...event },
+      { type: 'approvalContinued', ...event },
+    ),
     onResult: (result) => publish({ type: 'result', result }, { type: 'result', result }),
   };
 
@@ -236,20 +254,18 @@ export function createLoopEngine({ config }) {
     }
 
     const startedRoles = await collectStartedRoles({ startup, managers: [authorManager, reviewerManager] });
-    const stopLateRoleCleanup = runError
-      ? closeLateStartingRoles({
-        startup,
-        closeRoleFn,
-        ignoredStates: startedRoles,
-        retiredRoles,
-      })
-      : () => {};
+    const stopLateRoleCleanup = closeLateStartingRoles({
+      startup,
+      closeRoleFn,
+      ignoredStates: startedRoles,
+      retiredRoles,
+    });
 
     const closeError = await closeRoles(
       closeRoleFn,
       startedRoles.filter((state) => !retiredRoles.has(state)),
     );
-    if (!runError) stopLateRoleCleanup();
+    if (!runError || startup?.rolesSettled?.()) stopLateRoleCleanup();
     if (runError && closeError) {
       throw new AggregateError(
         [runError, ...toErrorList(closeError)],
@@ -306,9 +322,10 @@ async function runRounds({ authorManager, reviewerManager, maxRounds, cwd, confi
       });
 
       ({ approved, feedback } = interpretReviewerReply(reply));
-      if (!approved) continue;
+    if (!approved) continue;
 
     const result = { approved: true, feedback, maxRounds: roundLimit, rounds: lastRound, cwd };
+    if (config.onApproved) renderer.onApprovalPending(result);
     const decision = await config.onApproved?.(result);
     if (!decision?.continue) {
       renderer.onResult(result);
@@ -330,6 +347,7 @@ async function runRounds({ authorManager, reviewerManager, maxRounds, cwd, confi
     approved = false;
     if (round === roundLimit) roundLimit = Math.min(roundLimit + 1, hardRoundLimit);
     feedback = decision.feedback || `The task changed after approval. Continue with the updated task:\n${config.task}`;
+    renderer.onApprovalContinued?.({ round, feedback });
   }
 
   const result = { approved, feedback, maxRounds: roundLimit, rounds: lastRound, cwd };
@@ -428,6 +446,9 @@ function startRoles({ authorSettings, reviewerSettings, cwd, trace, captureTrace
     getStartedRoles() {
       return [author, reviewer].filter(Boolean);
     },
+    rolesSettled() {
+      return authorSettled && reviewerSettled;
+    },
     async settleStartedRoles() {
       if (!authorSettled || !reviewerSettled) {
         await Promise.allSettled([authorPromise, reviewerPromise]);
@@ -519,14 +540,30 @@ async function collectStartedRoles({ startup, managers = [] }) {
 
 function closeLateStartingRoles({ startup, closeRoleFn, ignoredStates = [], retiredRoles = new Set() }) {
   if (!startup?.onRoleSettled) return () => {};
+  if (startup.rolesSettled?.()) return () => {};
   const ignored = new Set(ignoredStates.filter(Boolean));
-  return startup.onRoleSettled(({ state }) => {
-    if (!state || ignored.has(state) || retiredRoles.has(state)) return;
+  let stopped = false;
+  let unsubscribe = () => {};
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    unsubscribe();
+  };
+  unsubscribe = startup.onRoleSettled(({ state }) => {
+    if (!state || ignored.has(state) || retiredRoles.has(state)) {
+      if (startup.rolesSettled?.()) stop();
+      return;
+    }
     ignored.add(state);
     Promise.resolve()
       .then(() => closeRoleFn(state))
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        if (startup.rolesSettled?.()) stop();
+      });
   });
+  if (startup.rolesSettled?.()) stop();
+  return stop;
 }
 async function closeRoles(closeRoleFn, states) {
   const activeStates = states.filter(Boolean);

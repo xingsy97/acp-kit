@@ -8,6 +8,14 @@ While ACP Kit is in `0.x`, **minor versions may include breaking changes** (per 
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-06-08
+
+### Fixed
+- `@acp-kit/core` local filesystem host (`createLocalFileSystemHost`) now fails closed when a symlink's real path cannot be resolved. On platforms where `realpath` throws an opaque error (for example Windows `UNKNOWN`) instead of resolving a symlink that points outside the sandbox, the host rejects the path as a sandbox escape rather than re-throwing the raw filesystem error. In-root symlinks that resolve normally, and `followSymlinksOutsideRoot: true`, are unaffected.
+
+### Changed
+- The repository release workflow is now per-package. `core-vX.Y.Z` publishes only `@acp-kit/core` and `spar-vX.Y.Z` publishes only `@acp-kit/spar`; each package versions and publishes independently. The workflow verifies the tag against the matching package, refuses a spar release whose `@acp-kit/core` dependency baseline is not yet on npm, and is idempotent on re-runs (skipping publish when the same version was already published from the same commit). This replaces the previous coupled `vX.Y.Z` tag that published both packages together and could red-light a single-package change.
+
 ## [0.10.1] - 2026-05-09
 
 ### Changed

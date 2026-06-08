@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-06-08
+
+### Changed
+- Spar now depends on `@acp-kit/core@^0.10.2` to pick up the local filesystem host's fail-closed handling of symlinks whose real path cannot be resolved.
+
+### Added
+- Added optional real-agent smoke tests gated by `SPAR_REAL_AGENT_E2E=1` (`packages/author-reviewer-loop/test/e2e-real-agent-smoke.test.ts`). They drive the real Spar CLI against real ACP agents (configurable via `SPAR_REAL_AGENT_E2E_AGENTS`) and are skipped by default so the fast fake-ACP suite is unaffected. See `CONTRIBUTING.md`.
+
 ## [0.10.1] - 2026-05-09
 
 ### Added

@@ -1,4 +1,4 @@
-import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 
@@ -117,8 +117,20 @@ export function createLocalFileSystemHost(options: LocalFileSystemHostOptions): 
         const real = await realpath(resolved);
         assertUnderRoot(realRoot, real, requested);
       } catch (err) {
+        const code = (err as NodeJS.ErrnoException)?.code;
+        if (code !== 'ENOENT') {
+          // `realpath` failed for a reason other than a missing leaf. Some
+          // platforms (notably Windows) throw an opaque error (e.g. `UNKNOWN`)
+          // instead of resolving a symlink that points outside the sandbox. If
+          // the path is a symlink we cannot resolve, we cannot prove it stays
+          // under `root`, so fail closed — reject it the same way an
+          // out-of-root symlink is rejected — instead of leaking the raw error.
+          if (await isSymbolicLink(resolved)) {
+            throw new Error(`Path escapes sandbox root: ${requested}`);
+          }
+          throw err;
+        }
         // ENOENT on the leaf is expected for fresh writes — walk up.
-        if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err;
         const parent = dirname(resolved);
         if (parent !== resolved) {
           try {
@@ -167,6 +179,14 @@ export function createLocalFileSystemHost(options: LocalFileSystemHostOptions): 
       return {};
     },
   };
+}
+
+async function isSymbolicLink(p: string): Promise<boolean> {
+  try {
+    return (await lstat(p)).isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 function assertUnderRoot(root: string, candidate: string, requested: string): void {

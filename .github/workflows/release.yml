@@ -3,11 +3,12 @@ name: Release
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - 'core-v*.*.*'
+      - 'spar-v*.*.*'
 
 jobs:
   publish:
-    name: Publish @acp-kit/core to npm
+    name: Publish ${{ github.ref_name }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -33,55 +34,121 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Verify tag matches package versions
+      - name: Resolve release target
+        id: target
         shell: bash
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          CORE_VERSION=$(node -p "require('./packages/core/package.json').version")
-          SPAR_VERSION=$(node -p "require('./packages/author-reviewer-loop/package.json').version")
-          if [ "$TAG" != "$CORE_VERSION" ]; then
-            echo "::error::Tag v$TAG does not match packages/core/package.json version $CORE_VERSION"
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          case "$TAG" in
+            core-v*)
+              PKG="@acp-kit/core"
+              DIR="packages/core"
+              VERSION="${TAG#core-v}"
+              CHANGELOG="CHANGELOG.md"
+              ;;
+            spar-v*)
+              PKG="@acp-kit/spar"
+              DIR="packages/author-reviewer-loop"
+              VERSION="${TAG#spar-v}"
+              CHANGELOG="packages/author-reviewer-loop/CHANGELOG.md"
+              ;;
+            *)
+              echo "::error::Unrecognized release tag '$TAG'. Expected 'core-vX.Y.Z' or 'spar-vX.Y.Z'."
+              exit 1
+              ;;
+          esac
+
+          PKG_VERSION="$(node -p "require('./$DIR/package.json').version")"
+          if [ "$VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag '$TAG' does not match $DIR/package.json version '$PKG_VERSION'."
             exit 1
           fi
-          if [ "$TAG" != "$SPAR_VERSION" ]; then
-            echo "::error::Tag v$TAG does not match packages/author-reviewer-loop/package.json version $SPAR_VERSION"
-            exit 1
-          fi
-          echo "Publishing version $CORE_VERSION"
-          if [[ "$CORE_VERSION" == *-* ]]; then
-            echo "DIST_TAG=next" >> "$GITHUB_ENV"
+
+          if [[ "$VERSION" == *-* ]]; then
+            DIST_TAG="next"
+            PRERELEASE="true"
           else
-            echo "DIST_TAG=latest" >> "$GITHUB_ENV"
+            DIST_TAG="latest"
+            PRERELEASE="false"
           fi
 
-      - name: Publish to npm
-        run: npm publish -w @acp-kit/core --access public --provenance --tag "$DIST_TAG"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_ACCESS_TOKEN }}
+          # A spar release must depend on an @acp-kit/core version that is already on npm.
+          if [ "$PKG" = "@acp-kit/spar" ]; then
+            CORE_RANGE="$(node -p "require('./$DIR/package.json').dependencies['@acp-kit/core'] || ''")"
+            CORE_BASE="${CORE_RANGE#^}"
+            CORE_BASE="${CORE_BASE#~}"
+            if [ -z "$CORE_BASE" ]; then
+              echo "::error::@acp-kit/spar is missing its @acp-kit/core dependency."
+              exit 1
+            fi
+            if ! npm view "@acp-kit/core@${CORE_BASE}" version >/tmp/coreview.log 2>&1; then
+              if grep -qiE 'E404|No match found|404' /tmp/coreview.log; then
+                echo "::error::@acp-kit/spar depends on @acp-kit/core@${CORE_RANGE} but @acp-kit/core@${CORE_BASE} is not on npm. Publish core first."
+              else
+                echo "::error::Failed to query npm for @acp-kit/core@${CORE_BASE}."
+                cat /tmp/coreview.log
+              fi
+              exit 1
+            fi
+          fi
 
-      - name: Publish Spar to npm
-        run: npm publish -w @acp-kit/spar --access public --provenance --tag "$DIST_TAG"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_ACCESS_TOKEN }}
+          # Idempotent re-runs: skip publish when this exact version is already on npm,
+          # but only when it was published from this same commit (otherwise fail loudly).
+          ALREADY_PUBLISHED="false"
+          if PUBLISHED_HEAD="$(npm view "${PKG}@${VERSION}" gitHead 2>/tmp/npmview.log)"; then
+            ALREADY_PUBLISHED="true"
+            if [ -n "$PUBLISHED_HEAD" ] && [ "$PUBLISHED_HEAD" != "$GITHUB_SHA" ]; then
+              echo "::error::${PKG}@${VERSION} already exists on npm but was published from ${PUBLISHED_HEAD}, not ${GITHUB_SHA}. Refusing to attach a GitHub Release to mismatched code."
+              exit 1
+            fi
+            echo "::warning::${PKG}@${VERSION} is already published from this commit; skipping npm publish and only (re)creating the GitHub Release."
+          else
+            if ! grep -qiE 'E404|No match found|404' /tmp/npmview.log; then
+              echo "::error::Failed to query npm for ${PKG}@${VERSION}."
+              cat /tmp/npmview.log
+              exit 1
+            fi
+          fi
+
+          {
+            echo "pkg=$PKG"
+            echo "dir=$DIR"
+            echo "version=$VERSION"
+            echo "changelog=$CHANGELOG"
+            echo "dist_tag=$DIST_TAG"
+            echo "prerelease=$PRERELEASE"
+            echo "already_published=$ALREADY_PUBLISHED"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Extract changelog section
         id: changelog
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          NOTES=$(awk -v ver="$VERSION" '
-            $0 ~ "^## \\[" ver "\\]" {flag=1; next}
-            flag && /^## \[/ {exit}
-            flag {print}
-          ' CHANGELOG.md)
-          if [ -z "$NOTES" ]; then
-            NOTES="See CHANGELOG.md."
+          set -euo pipefail
+          VERSION="${{ steps.target.outputs.version }}"
+          FILE="${{ steps.target.outputs.changelog }}"
+          HEADER="## [$VERSION]"
+          NOTES="$(awk -v header="$HEADER" '
+            substr($0, 1, length(header)) == header { flag=1; next }
+            flag && /^## \[/ { exit }
+            flag { print }
+          ' "$FILE")"
+          if [ -z "$(printf "%s" "$NOTES" | tr -d "[:space:]")" ]; then
+            echo "::error::No changelog notes found for '$HEADER' in $FILE. Add the section before tagging."
+            exit 1
           fi
           {
-            echo "notes<<EOF"
+            echo "notes<<RELEASE_NOTES_EOF"
             echo "$NOTES"
-            echo "EOF"
+            echo "RELEASE_NOTES_EOF"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Publish to npm
+        if: steps.target.outputs.already_published == 'false'
+        run: npm publish -w ${{ steps.target.outputs.pkg }} --access public --provenance --tag "${{ steps.target.outputs.dist_tag }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_ACCESS_TOKEN }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -89,4 +156,4 @@ jobs:
           name: ${{ github.ref_name }}
           body: ${{ steps.changelog.outputs.notes }}
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ steps.target.outputs.prerelease == 'true' }}

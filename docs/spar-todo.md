@@ -4,15 +4,11 @@ This is the short-list of practical Spar improvements that should be prioritized
 
 ## Next
 
-1. Fix CI regressions immediately when release or main workflows turn red.
-2. Add `spar doctor` / `spar --doctor` to check agent availability, Node version, cwd writability, Claude `bypassPermissions` availability, Codex real-workspace launch config, and installed `spar --version`.
-3. Detect real disk changes after AUTHOR turns. Prefer `git status` / `git diff --name-only` when `cwd` is a git repository; fall back to filesystem snapshots or mtime/hash checks when it is not.
-4. Standardize the real-workspace adapter registry around explicit hooks: launch profile adaptation, post-session validation, post-session mode setup, and diagnostics summary.
-5. Add optional real-agent smoke tests gated by an environment variable, for example `SPAR_REAL_AGENT_E2E=1`, so fake ACP coverage remains fast while real Claude/Codex integrations can be checked before release.
-6. Emit a compact diagnostic bundle on failures: run config summary, real-workspace policy summary, run trace path, recent tool calls, agent launch diagnostics, and git/filesystem change summary.
-7. Expand the README real-workspace section with Codex and Claude specifics, failure modes, and how to inspect run traces.
+- No outstanding items. The previous list (spar doctor, real-disk change detection, real-workspace adapter registry, failure diagnostic bundle, README real-workspace docs, and the `SPAR_REAL_AGENT_E2E` smoke tests) is implemented.
 
 ## Notes
 
+- Keep CI healthy: fix regressions immediately when the `release` or `main` workflows turn red. The release workflow is per-package (`core-v*` / `spar-v*`), publishes only the matching package, and is idempotent on re-runs, which removes the old failure mode where a single-package change red-lit a coupled release.
+- `SPAR_REAL_AGENT_E2E=1` runs the gated real-agent smoke tests (`packages/author-reviewer-loop/test/e2e-real-agent-smoke.test.ts`); they are skipped by default so the fake-ACP suite stays fast. See `CONTRIBUTING.md`.
 - Reviewer prompts should treat the AUTHOR reply as a report to investigate, not as evidence. The reviewer should double-check actual files and use git only when the workspace is a git repository.
 - Do not add a fresh/no-recovery mode for now.
